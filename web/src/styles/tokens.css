@@ -1,0 +1,259 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   AltiusNXT Marketing AI — design tokens
+   ─────────────────────────────────────────────────────────────────────────
+   The brand palette is sampled from the official logo asset.
+
+   TWO THEMES, ONE PRODUCT.
+   Light is the default and is defined on bare `:root`. Dark is the approved
+   futuristic environment from the reference designs, defined as an override
+   under `[data-theme='dark']`.
+
+   The themes differ ONLY in the values below the theme headings. Type, space,
+   geometry, radius and motion are shared, so layout, hierarchy and animation
+   are provably identical between them — a theme cannot move a thing, it can
+   only recolour it.
+
+   Every colour used anywhere in the interface resolves through one of these
+   variables. A hard-coded colour in a component would be one that cannot
+   follow the theme, so there are none.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Brand, from the logo — identical in both themes ────────────────── */
+  --brand-navy: #1a1240;
+  --brand-grey: #6b6b6b;
+  --brand-lime: #a6ce39;
+  --brand-cyan: #29abe2;
+  --brand-red: #d82e33;
+
+  /* ═════════════════════════════════════════════════════════════════════
+     LIGHT THEME — default
+     A soft light-graphite ground with white surfaces lifting off it, so the
+     depth is carried by elevation rather than by borders alone. Deliberately
+     not a plain white dashboard: on a pure white ground a white panel has
+     nothing to lift from.
+     ═════════════════════════════════════════════════════════════════════ */
+
+  /* ── Ground and surfaces ────────────────────────────────────────────── */
+  --bg-void: #eceff5;
+  --bg-shell: #f5f7fa;
+  --bg-panel: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-inset: #f4f6fa;
+  --bg-hover: #e9edf4;
+
+  /* ── Lines ──────────────────────────────────────────────────────────── */
+  --line: #e3e8ef;
+  --line-strong: #cdd5e0;
+  --line-faint: #eef1f6;
+
+  /* ── Text — every step meets AA on the surfaces it is used on ───────── */
+  --text: #0f172a;
+  --text-soft: #3c4a5e;
+  --text-muted: #5a6b80;
+  --text-dim: #5f6e80;
+
+  /* ── Semantic state, kept apart from engine accents ─────────────────── */
+  --ok: #15803d;
+  --ok-bg: #ecfdf3;
+  --ok-line: rgba(21, 128, 61, 0.24);
+  --warn: #854d0e;
+  --warn-bg: #fdf8e7;
+  --warn-line: rgba(161, 98, 7, 0.26);
+  --danger: #b91c1c;
+  --danger-bg: #fef2f2;
+  --danger-line: rgba(185, 28, 28, 0.24);
+  --danger-text: #b91c1c;
+  --info: #0369a1;
+  --info-bg: #eff6ff;
+  --info-line: rgba(3, 105, 161, 0.24);
+  --neutral-state: #5a6b80;
+  --neutral-state-bg: #f1f4f9;
+  /* Human review / provisional. Its own colour so it is never read as either
+     a success or a failure — it is neither. */
+  --review: #7e22ce;
+  --review-bg: #f8f2ff;
+  --review-line: rgba(126, 34, 206, 0.24);
+
+  /* ── Engine accents ───────────────────────────────────────────────────
+     Same hue per engine in both themes, so an engine's identity is constant.
+     Only lightness changes, because a value legible on near-black is not
+     legible on white. */
+  --e-prospect: #6b21a8;
+  --e-enrichment: #1e40af;
+  --e-intent: #155e75;
+  --e-decisionmaker: #92400e;
+  --e-audit: #166534;
+  --e-report: #065f46;
+  --e-approval: #854d0e;
+  --e-workbench: #9d174d;
+  --e-outreach: #9a3412;
+  --e-engagement: #3730a3;
+  --e-scoring: #164e63;
+  --e-qualification: #7c2d12;
+  --e-crm: #115e59;
+
+  /* ── Theme-dependent surface behaviour ──────────────────────────────── */
+  /* Text placed on top of a filled accent. */
+  --on-accent: #ffffff;
+  /* Behind a modal. */
+  --scrim: rgba(15, 23, 42, 0.44);
+  /* The logo is dark artwork issued for a light ground: on light it needs no
+     plate, on dark it gets one so the brand colours stay exactly as issued. */
+  --logo-plate: transparent;
+  --logo-plate-shadow: none;
+  /* Signature canvases are atmosphere. On white they need more ink to read at
+     all, so every alpha in them is scaled by this. */
+  --sig-ink: 1.5;
+  /* Glow is a dark-environment device; on a light ground it reads as grime. */
+  --glow: 0;
+  --scroll-thumb: #c2ccda;
+  --scroll-thumb-hover: #a5b2c4;
+
+  /* ── Elevation — light leans on shadow, dark leans on luminance ─────── */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 18px 48px rgba(15, 23, 42, 0.16);
+
+  /* The active engine sets these; every accent-aware component reads them,
+     so an engine changes identity by changing two variables. Away from any
+     engine this is the brand cyan, deepened for a light ground — the logo
+     keeps the issued value, this is the reading value. */
+  --accent: #136184;
+  --accent-rgb: 19, 97, 132;
+
+  color-scheme: light;
+
+  /* ═════════════════════════════════════════════════════════════════════
+     SHARED — identical in both themes, which is what keeps them one product.
+     ═════════════════════════════════════════════════════════════════════ */
+
+  /* ── Type ───────────────────────────────────────────────────────────── */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Archivo', 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --fs-display: 30px;
+  --fs-h1: 22px;
+  --fs-h2: 17px;
+  --fs-h3: 14px;
+  --fs-body: 13.5px;
+  --fs-sm: 12.5px;
+  --fs-xs: 11px;
+  --fs-micro: 10px;
+
+  /* ── Space, on a 4px grid ───────────────────────────────────────────── */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+  --s12: 48px;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-pill: 999px;
+
+  /* ── Shell geometry, from the reference layouts (320 / flexible / 320) ─ */
+  --nav-w: 232px;
+  --nav-w-collapsed: 64px;
+  --context-w: 320px;
+  --topbar-h: 56px;
+  --activity-h: 40px;
+
+  /* ── Motion ───────────────────────────────────────────────────────────
+     One scale, used everywhere. Durations are intentional rather than
+     arbitrary: instant for hover, quick for state, calm for entrances, and
+     ambient for the slow signature loops that say "this system is alive". */
+  --t-instant: 120ms;
+  --t-quick: 200ms;
+  --t-calm: 340ms;
+  --t-slow: 620ms;
+  --t-ambient: 3200ms;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DARK THEME — the approved futuristic environment.
+   Every value here is the value the reference designs were built against, so
+   selecting Dark restores that interface exactly.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root[data-theme='dark'] {
+  --bg-void: #06080c;
+  --bg-shell: #0a0d13;
+  --bg-panel: #10151d;
+  --bg-raised: #151b25;
+  --bg-inset: #0c1017;
+  --bg-hover: #1a212c;
+
+  --line: #1c2530;
+  --line-strong: #27323f;
+  --line-faint: #141b24;
+
+  --text: #e9eef5;
+  --text-soft: #b6c1cf;
+  --text-muted: #93a1b2;
+  /* Raised from the original #576372, which fell below AA on the panel
+     ground it labels. The role is unchanged: the quietest text in the set. */
+  --text-dim: #8593a4;
+
+  --ok: #22c55e;
+  --ok-bg: #0e2a1a;
+  --ok-line: rgba(34, 197, 94, 0.26);
+  --warn: #eab308;
+  --warn-bg: #2a2410;
+  --warn-line: rgba(234, 179, 8, 0.28);
+  --danger: #ef4444;
+  --danger-bg: #2b1416;
+  --danger-line: rgba(239, 68, 68, 0.28);
+  --danger-text: #fca5a5;
+  --info: #38bdf8;
+  --info-bg: #0d2532;
+  --info-line: rgba(56, 189, 248, 0.24);
+  --neutral-state: #8593a4;
+  --neutral-state-bg: #171e28;
+  --review: #c084fc;
+  --review-bg: #21172e;
+  --review-line: rgba(192, 132, 252, 0.26);
+
+  --e-prospect: #a855f7;
+  --e-enrichment: #3b82f6;
+  --e-intent: #22d3ee;
+  --e-decisionmaker: #f59e0b;
+  --e-audit: #22c55e;
+  --e-report: #10b981;
+  --e-approval: #eab308;
+  --e-workbench: #ec4899;
+  --e-outreach: #f97316;
+  --e-engagement: #6366f1;
+  --e-scoring: #06b6d4;
+  --e-qualification: #fbbf24;
+  --e-crm: #14b8a6;
+
+  --on-accent: #06121a;
+  --scrim: rgba(3, 5, 8, 0.66);
+  --logo-plate: #ffffff;
+  --logo-plate-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+  --sig-ink: 1;
+  --glow: 1;
+  --scroll-thumb: #27323f;
+  --scroll-thumb-hover: #37455a;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+
+  --accent: var(--brand-cyan);
+  --accent-rgb: 41, 171, 226;
+
+  color-scheme: dark;
+}

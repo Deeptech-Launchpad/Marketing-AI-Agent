@@ -1,0 +1,520 @@
+/* ── The three-column frame ─────────────────────────────────────────────── */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--nav-w) minmax(0, 1fr) var(--context-w);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  grid-template-areas:
+    'nav topbar context'
+    'nav main   context';
+  height: 100vh;
+  background: var(--bg-shell);
+  transition: grid-template-columns var(--t-calm) var(--ease-out);
+}
+
+.shell--nav-collapsed {
+  grid-template-columns: var(--nav-w-collapsed) minmax(0, 1fr) var(--context-w);
+}
+.shell--no-context {
+  grid-template-columns: var(--nav-w) minmax(0, 1fr);
+  grid-template-areas:
+    'nav topbar'
+    'nav main';
+}
+.shell--nav-collapsed.shell--no-context {
+  grid-template-columns: var(--nav-w-collapsed) minmax(0, 1fr);
+}
+
+/* ── Navigation ─────────────────────────────────────────────────────────── */
+
+.nav {
+  grid-area: nav;
+  background: var(--bg-void);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: var(--s4) var(--s3) var(--s3);
+  gap: var(--s1);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.nav__brand {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 var(--s2) var(--s5);
+}
+
+.nav__brand-sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-left: 2px;
+}
+
+/* The supplied logo is dark artwork for a light ground. It sits on a plate
+   rather than being filtered, so the brand colours stay exactly as issued. */
+.logo {
+  display: inline-flex;
+  align-items: center;
+}
+.logo--plate {
+  background: var(--logo-plate);
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+  box-shadow: var(--logo-plate-shadow);
+}
+.logo img {
+  display: block;
+  width: auto;
+}
+
+.nav__section {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: var(--s4) var(--s2) var(--s2);
+}
+
+.nav__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav__item {
+  --item-accent: var(--brand-cyan);
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 8px var(--s3);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: none;
+  position: relative;
+  transition: background var(--t-instant) var(--ease-out), color var(--t-instant) var(--ease-out);
+}
+.nav__item:hover {
+  background: var(--bg-panel);
+  color: var(--text);
+  text-decoration: none;
+}
+.nav__item svg {
+  color: var(--item-accent);
+  opacity: 0.72;
+  flex: none;
+  transition: opacity var(--t-instant) var(--ease-out);
+}
+.nav__item:hover svg {
+  opacity: 1;
+}
+
+/* The active engine states itself with its own accent — a left marker, a
+   tinted ground and a full-strength icon. */
+.nav__item.is-active {
+  background: color-mix(in srgb, var(--item-accent) 12%, transparent);
+  color: var(--text);
+}
+.nav__item.is-active svg {
+  opacity: 1;
+}
+.nav__item.is-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--item-accent);
+  box-shadow: 0 0 8px var(--item-accent);
+}
+
+.nav__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The pipeline position. It is quiet by role, but it is still a number a
+   person reads, so it is dimmed by choosing a dim colour rather than by
+   fading a legible one to 70% of itself. */
+.nav__stage {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.nav__home {
+  margin-bottom: var(--s1);
+}
+
+.nav__collapse {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 8px var(--s3);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  border-radius: var(--r-sm);
+}
+.nav__collapse:hover {
+  background: var(--bg-panel);
+  color: var(--text-soft);
+}
+
+/* ── Top bar ────────────────────────────────────────────────────────────── */
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: 0 var(--s5);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.topbar__where {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.topbar__engine {
+  font-family: var(--font-display);
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.topbar__task {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.topbar__company {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--bg-panel);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  transition: background var(--t-instant) var(--ease-out);
+}
+.topbar__icon:hover {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+
+.topbar__user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-xs);
+}
+.topbar__avatar {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.16);
+  border: 1px solid rgba(var(--accent-rgb), 0.32);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+}
+.topbar__username {
+  color: var(--text-soft);
+}
+.topbar__role {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Workspace ──────────────────────────────────────────────────────────── */
+
+.workspace {
+  grid-area: main;
+  overflow-y: auto;
+  padding: var(--s6);
+  min-width: 0;
+}
+
+/* ── Company context ────────────────────────────────────────────────────── */
+
+.context {
+  grid-area: context;
+  border-left: 1px solid var(--line);
+  background: var(--bg-void);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.context__head {
+  padding: var(--s4);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+
+.context__picker {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  margin-top: var(--s3);
+  padding: var(--s2);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+  text-align: left;
+  transition: border-color var(--t-instant) var(--ease-out);
+}
+.context__picker:hover {
+  border-color: var(--line-strong);
+}
+
+.context__avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--r-sm);
+  background: rgba(var(--accent-rgb), 0.14);
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--fs-xs);
+}
+
+.context__name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context__menu {
+  position: absolute;
+  left: var(--s4);
+  right: var(--s4);
+  top: calc(100% - 6px);
+  z-index: 20;
+  background: var(--bg-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: var(--s1);
+  animation: fade-up var(--t-quick) var(--ease-out);
+}
+
+.context__menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  width: 100%;
+  padding: 7px var(--s3);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--text-soft);
+  text-align: left;
+}
+.context__menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.context__menu-item.is-active {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--text);
+}
+.context__menu-meta {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.context__menu-empty {
+  padding: var(--s3);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.context__blank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s10) var(--s5);
+  color: var(--text-dim);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+.context__body {
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+
+.context__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--line-faint);
+}
+.context__block:last-of-type {
+  border-bottom: none;
+}
+
+.context__dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px var(--s3);
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+.context__dl--tight {
+  margin-top: var(--s2);
+}
+.context__dl dt {
+  color: var(--text-dim);
+}
+.context__dl dd {
+  margin: 0;
+  color: var(--text-soft);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.context__id {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.context__score {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+}
+.context__score-num {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+}
+.context__score-of {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.context__caveat {
+  font-size: var(--fs-micro);
+  color: var(--warn);
+}
+
+.context__skel {
+  height: 22px;
+  width: 70%;
+}
+
+.context__link {
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  padding-top: var(--s2);
+}
+
+/* ── Narrower screens ───────────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  .workspace {
+    padding: var(--s5);
+  }
+}
+
+/* ── Theme switch ───────────────────────────────────────────────────────
+   A preference, not a feature: it sits with the account controls, reads as
+   one small segmented control, and never competes with the workspace. */
+.themeswitch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  background: var(--bg-inset);
+  border-radius: var(--r-pill);
+}
+
+.themeswitch__opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  color: var(--text-muted);
+  transition: color var(--t-instant) var(--ease-out), background var(--t-instant) var(--ease-out);
+}
+
+.themeswitch__opt:hover { color: var(--text); }
+
+/* The selected side is filled as well as coloured, so which theme is active
+   is legible without relying on the colour alone. */
+.themeswitch__opt.is-active {
+  background: var(--bg-panel);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}

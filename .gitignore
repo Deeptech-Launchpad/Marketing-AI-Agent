@@ -1,0 +1,36 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# ── SECRETS ───────────────────────────────────────────────────────────────
+# .env holds the NXT Sales service credential, the JWT signing secret and
+# provider API keys. .env.example documents every variable by NAME with no
+# values, and is the file that belongs in version control.
+.env
+.env.*
+!.env.example
+
+# ── REAL CUSTOMER DATA ────────────────────────────────────────────────────
+# Database dumps carry live company records, contact addresses and email
+# bodies belonging to third parties. They must never enter a git history —
+# a history rewrite does not recall what has already been cloned or indexed.
+# Note the narrow patterns: prisma/migrations/*.sql and sql/*.sql are SOURCE
+# and are deliberately still tracked.
+backup_*.sql
+*.dump
+*.sql.gz
+*.bak
+*.bak.*
+
+# Generated artefacts
+storage/
+*.log
+logs/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

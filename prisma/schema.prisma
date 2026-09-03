@@ -1,0 +1,2328 @@
+// marketing-agent — Phase 1 schema.
+//
+// Lives in the `marketing` Postgres schema of the SAME database as NXT Sales,
+// with its own migration history. There are deliberately NO foreign keys to
+// NXT Sales tables: every CRM reference is an opaque string (crmCompanyId,
+// crmUserId, crmDealId), the same convention CustomFieldValue.recordId already
+// uses over there. That is what keeps this service swappable onto a second CRM
+// later without a data migration, and immune to NXT Sales' own schema drift.
+//
+// Every table carries tenantId from the first migration even though Phase 1
+// runs a single tenant — retrofitting tenancy is the one thing that cannot be
+// done cheaply later.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("MARKETING_DATABASE_URL")
+}
+
+// ── Tenancy & access ────────────────────────────────────────────────────────
+
+model Tenant {
+  id        String   @id
+  slug      String   @unique
+  name      String
+  status    String   @default("active")
+  settings  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members TenantMember[]
+}
+
+// Maps an NXT Sales user into a MARKETING role. Deliberately not derived from
+// NXT Sales' own User.role: a CRM admin is not automatically someone who may
+// approve a campaign, and approval is the platform's primary safety control.
+model TenantMember {
+  id        String   @id
+  tenantId  String
+  crmUserId String?
+  email     String
+  name      String?
+  role      String   @default("viewer") // viewer | operator | approver | admin
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, crmUserId])
+  @@index([crmUserId])
+}
+
+// ── Campaign domain ─────────────────────────────────────────────────────────
+
+model Campaign {
+  id                 String   @id
+  tenantId           String
+  name               String
+  objective          String
+  status             String   @default("draft") // draft | planning | awaiting_approval | approved | archived
+  createdByCrmUserId String
+  constraints        Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  runs       AgentRun[]
+  segments   Segment[]
+  strategies CampaignStrategy[]
+  assets     Asset[]
+  approvals  Approval[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+// `definition` is the exact CrmCompanyQuery that produced this segment, stored
+// verbatim so the audience is reproducible months later — not a prose summary.
+model Segment {
+  id         String   @id
+  tenantId   String
+  campaignId String?
+  name       String
+  definition Json
+  rationale  String?
+  createdAt  DateTime @default(now())
+
+  campaign  Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  snapshots AudienceSnapshot[]
+
+  @@index([tenantId, campaignId])
+}
+
+// Derived from real won/lost deal data, never invented. `evidence` holds the
+// aggregate counts it was derived from so the profile can be argued with.
+model IcpProfile {
+  id              String   @id
+  tenantId        String
+  name            String
+  definition      Json
+  evidence        Json
+  confidence      String   @default("medium") // low | medium | high
+  sourceDealCount Int      @default(0)
+  derivedAt       DateTime @default(now())
+
+  @@index([tenantId, derivedAt])
+}
+
+// Immutable point-in-time materialisation. An audience is a SNAPSHOT, never a
+// live query — otherwise "who did we target" becomes unanswerable the moment
+// a company's industry is edited in the CRM.
+model AudienceSnapshot {
+  id              String   @id
+  tenantId        String
+  segmentId       String
+  queryUsed       Json
+  totalMatched    Int      @default(0)
+  totalSuppressed Int      @default(0)
+  totalIncluded   Int      @default(0)
+  truncated       Boolean  @default(false)
+  resolvedAt      DateTime @default(now())
+
+  segment Segment          @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  members AudienceMember[]
+
+  @@index([tenantId, segmentId])
+}
+
+// Firmographics are denormalised on purpose: the snapshot must stay
+// explainable after the CRM record changes or is recycle-binned.
+model AudienceMember {
+  id             String  @id
+  tenantId       String
+  snapshotId     String
+  crmCompanyId   String
+  companyName    String
+  domain         String?
+  industry       String?
+  country        String?
+  cms            String?
+  ownerCrmUserId String?
+  includeReason  String?
+  score          Float   @default(0)
+
+  snapshot AudienceSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId, crmCompanyId])
+  @@index([tenantId, crmCompanyId])
+}
+
+// NXT Sales has no suppression concept at all. This is the only thing standing
+// between a resolved audience and contacting someone who asked not to be.
+model SuppressionEntry {
+  id                 String    @id
+  tenantId           String
+  scope              String    @default("global") // global | campaign
+  matchType          String // company | domain | email
+  matchValue         String
+  reason             String
+  source             String    @default("manual") // manual | import | unsubscribe | policy
+  campaignId         String?
+  expiresAt          DateTime?
+  createdByCrmUserId String?
+  createdAt          DateTime  @default(now())
+
+  @@unique([tenantId, scope, matchType, matchValue])
+  @@index([tenantId, matchType])
+}
+
+// ── Agent execution ─────────────────────────────────────────────────────────
+
+model AgentRun {
+  id                   String    @id
+  tenantId             String
+  campaignId           String?
+  requestedByCrmUserId String
+  objective            String
+  mode                 String    @default("dry_run") // dry_run only in Phase 1
+  status               String    @default("queued") // queued | running | awaiting_approval | completed | failed | cancelled
+  currentStepType      String?
+  // Set by an approval decision of "changes_requested"; consumed and cleared
+  // by the regenerating step so reviewer feedback actually reaches the model.
+  feedback             String?
+  budgetTokens         Int
+  budgetUsd            Decimal   @db.Decimal(12, 4)
+  tokensUsed           Int       @default(0)
+  costUsd              Decimal   @default(0) @db.Decimal(12, 6)
+  stepCount            Int       @default(0)
+  error                Json?
+  startedAt            DateTime?
+  finishedAt           DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  campaign  Campaign?   @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  steps     AgentStep[]
+  toolCalls ToolCall[]
+  llmCalls  LlmCall[]
+  approvals Approval[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+// Persisted BEFORE execution and again after. This pair of writes is the whole
+// reason a run survives a process restart — the property NXT Sales' in-memory
+// setInterval jobs structurally cannot have.
+model AgentStep {
+  id         String    @id
+  tenantId   String
+  runId      String
+  seq        Int
+  type       String
+  status     String    @default("running") // running | completed | failed | awaiting_approval
+  input      Json?
+  output     Json?
+  tokensUsed Int       @default(0)
+  costUsd    Decimal   @default(0) @db.Decimal(12, 6)
+  retryCount Int       @default(0)
+  error      Json?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([runId, type])
+}
+
+model ToolCall {
+  id              String   @id
+  tenantId        String
+  runId           String
+  stepId          String?
+  toolName        String
+  sideEffectClass String // read | write_internal | write_external — Phase 1 records only `read`
+  args            Json?
+  resultSummary   Json?
+  status          String   @default("ok") // ok | error | blocked
+  durationMs      Int      @default(0)
+  error           Json?
+  createdAt       DateTime @default(now())
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@index([tenantId, toolName])
+}
+
+// One row per LLM request. Token counts come from the provider's own usage
+// metadata and are NEVER estimated — the same discipline NXT Sales' AiUsage
+// table established. hasUsageData=false means the provider answered but
+// returned no counts: the request still counts, the tokens stay zero.
+model LlmCall {
+  id             String   @id
+  tenantId       String
+  runId          String?
+  stepId         String?
+  feature        String
+  provider       String   @default("gemini")
+  modelRequested String
+  model          String
+  fellBack       Boolean  @default(false)
+  promptTokens   Int      @default(0)
+  outputTokens   Int      @default(0)
+  totalTokens    Int      @default(0)
+  hasUsageData   Boolean  @default(true)
+  costUsd        Decimal  @default(0) @db.Decimal(12, 6)
+  priced         Boolean  @default(false)
+  latencyMs      Int      @default(0)
+  promptKey      String?
+  promptVersion  Int?
+  createdAt      DateTime @default(now())
+
+  run AgentRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([runId])
+}
+
+// Versioned prompts in the database rather than in code — a direct evolution
+// of NXT Sales' PromptTemplate, including its isSystem protection. The
+// resolved (key, version) is recorded on every LlmCall and AssetVersion so any
+// output can be traced back to the exact prompt that produced it.
+model AgentPrompt {
+  id                String   @id
+  tenantId          String?
+  key               String
+  version           Int      @default(1)
+  label             String
+  systemInstruction String
+  userTemplate      String
+  temperature       Float    @default(0.4)
+  enabled           Boolean  @default(true)
+  isSystem          Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tenantId, key, version])
+  @@index([key, enabled])
+}
+
+// ── Content & approval ──────────────────────────────────────────────────────
+
+model CampaignStrategy {
+  id               String   @id
+  tenantId         String
+  campaignId       String
+  runId            String
+  version          Int      @default(1)
+  channelMix       Json
+  messagingPillars Json
+  sequence         Json
+  kpis             Json
+  rationale        String
+  citations        Json?
+  createdAt        DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, version])
+}
+
+model Asset {
+  id               String   @id
+  tenantId         String
+  campaignId       String
+  runId            String
+  channel          String // email | linkedin | meta | generic
+  assetType        String // post | ad_copy | email_body | subject_line | landing_copy
+  name             String
+  currentVersionId String?
+  createdAt        DateTime @default(now())
+
+  campaign Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  versions AssetVersion[]
+
+  @@index([campaignId, channel])
+}
+
+// Immutable. Regeneration always appends a version; nothing is ever edited in
+// place, so an approved asset can always be shown exactly as it was approved.
+model AssetVersion {
+  id                String   @id
+  tenantId          String
+  assetId           String
+  version           Int
+  variantLabel      String   @default("A")
+  content           Json
+  renderedText      String
+  model             String?
+  promptKey         String?
+  promptVersion     Int?
+  citations         Json?
+  validationResults Json?
+  createdAt         DateTime @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, version, variantLabel])
+}
+
+// payloadHash is the approve-what-you-saw enforcement: a decision must echo the
+// hash of the payload the reviewer was shown, or it is rejected with 409.
+model Approval {
+  id                 String    @id
+  tenantId           String
+  runId              String
+  stepId             String
+  campaignId         String
+  kind               String // strategy | content
+  status             String    @default("pending") // pending | approved | rejected | changes_requested | expired
+  payloadHash        String
+  payloadSnapshot    Json
+  requestedAt        DateTime  @default(now())
+  decidedByCrmUserId String?
+  decidedAt          DateTime?
+  comment            String?
+  expiresAt          DateTime
+
+  run      AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([runId])
+}
+
+// ── Knowledge (RAG) ─────────────────────────────────────────────────────────
+
+model KnowledgeDocument {
+  id                  String   @id
+  tenantId            String
+  corpusType          String // product_service | company_info | brand_guidelines | past_campaign | case_study | marketing_content | persona
+  title               String
+  sourceType          String   @default("upload") // upload | url | inline
+  sourceUri           String?
+  mimeType            String   @default("text/plain")
+  checksum            String
+  sizeChars           Int      @default(0)
+  status              String   @default("pending") // pending | processing | ready | failed
+  chunkCount          Int      @default(0)
+  error               String?
+  uploadedByCrmUserId String?
+  metadata            Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  chunks KnowledgeChunk[]
+
+  @@unique([tenantId, checksum])
+  @@index([tenantId, corpusType, status])
+}
+
+// `embedding` and `tsv` are Postgres-native types Prisma cannot read or write,
+// so every query touching them is raw SQL in knowledge/vectorStore.ts. The
+// HNSW and GIN indexes are created by sql/002_indexes.sql.
+model KnowledgeChunk {
+  id             String                      @id
+  tenantId       String
+  documentId     String
+  seq            Int
+  content        String
+  tokenCount     Int                         @default(0)
+  sectionPath    String?
+  embeddingModel String?
+  embedding      Unsupported("vector(768)")?
+  tsv            Unsupported("tsvector")?
+  createdAt      DateTime                    @default(now())
+
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, seq])
+  @@index([tenantId])
+}
+
+// Cache for fetched pages and search results. Everything in here is UNTRUSTED
+// third-party text and is delimited as such in every prompt that sees it.
+model ResearchArtifact {
+  id            String   @id
+  tenantId      String
+  runId         String?
+  kind          String // page | search_result
+  requestUrl    String?
+  finalUrl      String?
+  query         String?
+  contentHash   String
+  extractedText String
+  signals       Json?
+  ok            Boolean  @default(true)
+  failureReason String?
+  fetchedAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([tenantId, kind, expiresAt])
+  @@index([contentHash])
+}
+
+// ── Audit ───────────────────────────────────────────────────────────────────
+
+// Append-only. NXT Sales records nothing about who read which customer records;
+// for an autonomous system touching that data this is a baseline requirement,
+// not a feature.
+model AuditEvent {
+  id             String   @id
+  tenantId       String
+  actorType      String // user | agent | system
+  actorCrmUserId String?
+  runId          String?
+  action         String
+  resourceType   String
+  resourceId     String?
+  dataClass      String   @default("internal") // internal | customer_pii
+  summary        String?
+  metadata       Json?
+  requestId      String?
+  ip             String?
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, action])
+}
+
+// ── Stage 1: prospect discovery ─────────────────────────────────────────────
+
+// One prospecting request. Deliberately thin: it records what was asked, how
+// the concept was resolved, and which Segment/AudienceSnapshot answered it —
+// the prospects themselves live in the existing AudienceMember rows rather than
+// being copied into a second table.
+//
+// `statedNeedHypothesis` lives inside `parsed`. It is never applied as a filter
+// and is never attached to a company: at this stage nobody has looked at any
+// prospect, so asserting a problem about one would be inventing evidence.
+model ProspectSearch {
+  id                   String    @id
+  tenantId             String
+  objective            String
+  status               String    @default("queued") // queued | running | completed | failed
+  requestedByCrmUserId String
+  parsed               Json?
+  conceptMapping       Json?
+  queryUsed            Json?
+  segmentId            String?
+  snapshotId           String?
+  totalMatched         Int       @default(0)
+  totalSuppressed      Int       @default(0)
+  totalReturned        Int       @default(0)
+  truncated            Boolean   @default(false)
+  mappingStatus        String?
+  // True when the concept did not map cleanly and the list rests on an
+  // interpretation a human has not confirmed.
+  requiresApproval     Boolean   @default(false)
+  provenance           Json?
+  error                Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  finishedAt           DateTime?
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+// ── Stage 2: company enrichment ─────────────────────────────────────────────
+
+// One enrichment attempt for one company. Deliberately NOT a copy of the CRM
+// Company record: it holds only what enrichment produced, and points back at
+// NXT Sales by crmCompanyId for everything else.
+//
+// Re-running enrichment inserts a NEW row rather than updating the old one, so
+// a later attempt can never overwrite evidence an earlier one captured. Callers
+// read the most recent row per company.
+//
+// Every technology in `technologies` carries the literal markup that proved it,
+// so a false positive is visible without re-fetching the page.
+model CompanyEnrichment {
+  id                   String    @id
+  tenantId             String
+  crmCompanyId         String
+  companyName          String?
+  prospectSearchId     String?
+  requestedByCrmUserId String
+  // queued | running | enriched | no_website | unreachable | failed
+  status               String    @default("queued")
+  sourceUrl            String?
+  signals              Json?
+  technologies         Json?
+  technologyCount      Int       @default(0)
+  provenance           Json?
+  failureReason        String?
+  error                Json?
+  fetchedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  finishedAt           DateTime?
+
+  @@index([tenantId, crmCompanyId, createdAt])
+  @@index([tenantId, status])
+  @@index([prospectSearchId])
+}
+
+// ── Stage 3: intent detection ───────────────────────────────────────────────
+
+// One collection attempt for one company, across all providers.
+//
+// providerResults keeps a per-provider record (ok, count, reason, duration,
+// cost) so a run that produced few signals can be told apart from a run where a
+// provider was unavailable — those look identical from the signal count alone.
+model IntentDetectionRun {
+  id                   String    @id
+  tenantId             String
+  crmCompanyId         String
+  companyName          String?
+  prospectSearchId     String?
+  requestedByCrmUserId String
+  status               String    @default("queued") // queued | running | completed | failed
+  signalCount          Int       @default(0)
+  duplicatesCollapsed  Int       @default(0)
+  providerResults      Json?
+  // External spend attributable to this run, for cost audit.
+  costUsd              Decimal   @default(0) @db.Decimal(12, 6)
+  retryCount           Int       @default(0)
+  failureReason        String?
+  error                Json?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  signals IntentSignal[]
+
+  @@index([tenantId, crmCompanyId, createdAt])
+  @@index([tenantId, status])
+  @@index([prospectSearchId])
+}
+
+// One piece of evidence that a company MAY have a current need.
+//
+// Deliberately NOT scored. There is no composite intent number here: each
+// signal carries its own confidence (evidence quality), freshness (event age)
+// and polarity, and a later stage decides what they add up to. Collapsing them
+// now would discard exactly what makes a signal auditable.
+//
+// eventFingerprint identifies the underlying EVENT rather than the report of
+// it, so the same hire seen on a careers page and a job board is one signal
+// with two pieces of evidence rather than two signals.
+model IntentSignal {
+  id                    String    @id
+  tenantId              String
+  intentRunId           String
+  crmCompanyId          String
+  eventFingerprint      String
+  signalType            String
+  signalCategory        String // crm | hiring | technology | website | business | news | catalog
+  summary               String
+  // WHY this may indicate a need. Never asserts that it does.
+  interpretation        String
+  // The literal thing observed: a job title, a meta tag, a CRM row.
+  evidence              String
+  sourceUrl             String?
+  sourceType            String // crm_record | company_website | job_board | news_article | third_party
+  provider              String
+  // When the SOURCE says the event happened; null when it does not say.
+  observedAt            DateTime?
+  ageDays               Int?
+  freshness             String    @default("unknown") // fresh | aging | stale | unknown
+  confidence            String    @default("low") // high | medium | low
+  confidenceReasons     Json?
+  polarity              String    @default("neutral") // positive | negative | neutral
+  status                String    @default("weak") // active | weak | expired
+  // Evidence from other sources describing the SAME event.
+  corroboratingEvidence Json?
+  corroborationCount    Int       @default(0)
+  metadata              Json?
+  detectedAt            DateTime  @default(now())
+
+  run IntentDetectionRun @relation(fields: [intentRunId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, crmCompanyId, detectedAt])
+  @@index([tenantId, signalCategory])
+  @@index([intentRunId])
+  @@index([eventFingerprint])
+}
+
+// ── STAGE 4: DECISION-MAKER DISCOVERY ──────────────────────────────────────
+
+// One attempt to find who at a company owns product/catalog decisions.
+//
+// providerResults is the honest part of this table: it records, per provider,
+// whether the source ran and why not when it did not. Without it a run that
+// found nobody because four subscriptions are unpaid would be indistinguishable
+// from a run that found nobody because the company has no such person.
+model DecisionMakerRun {
+  id                   String    @id
+  tenantId             String
+  crmCompanyId         String
+  companyName          String?
+  companyDomain        String?
+  prospectSearchId     String?
+  requestedByCrmUserId String
+  status               String    @default("queued") // queued | running | completed | failed
+  // Candidates that survived verification and made the shortlist.
+  candidateCount       Int       @default(0)
+  // People seen but not shortlisted, with the reason recorded on each.
+  excludedCount        Int       @default(0)
+  // Sightings collapsed into an existing candidate by identity.
+  duplicatesCollapsed  Int       @default(0)
+  // Per-provider status and reason. See ProviderStatus in src/decisionmakers/types.ts.
+  providerResults      Json?
+  // Stated when the run found nobody, so the outcome reads as a finding
+  // rather than as an omission.
+  noResultsReason      String?
+  costUsd              Decimal   @default(0) @db.Decimal(12, 6)
+  retryCount           Int       @default(0)
+  failureReason        String?
+  error                Json?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  candidates DecisionMakerCandidate[]
+
+  @@index([tenantId, crmCompanyId, createdAt])
+  @@index([tenantId, status])
+  @@index([prospectSearchId])
+}
+
+// A person who may own the decision, with the evidence that says so.
+//
+// Every field here was STATED by a source. Nothing is inferred: a null title
+// means no source gave a title, and it stays null rather than being filled from
+// a name, an email pattern, or a plausible assumption.
+//
+// email and phone are nullable and, by default, never written — see
+// DM_STORE_CONTACT_DATA. Stage 4 answers "who", not "how to reach them".
+model DecisionMakerCandidate {
+  id           String @id
+  tenantId     String
+  dmRunId      String
+  crmCompanyId String
+  // Stable identity for the same human across providers and across runs:
+  // a provider person ID, a profile URL, or a company-scoped name hash.
+  identityKey  String
+
+  fullName        String
+  // Exactly as the source wrote it, kept so the normalisation can be checked.
+  rawTitle        String?
+  normalizedTitle String?
+  // Which role group made this person relevant, and at what priority. Null
+  // means the title matched no relevant function — such a person is recorded
+  // as excluded, never shortlisted.
+  roleGroup       String?
+  rolePriority    Int?
+  seniority       String? // c_level | vp | director | head | manager | lead | individual
+
+  // Employer as the SOURCE stated it, before comparison with the CRM name.
+  statedCompany       String?
+  // verified | probable | unverified | rejected
+  companyMatch        String  @default("unverified")
+  companyMatchReasons Json?
+
+  // Public profile URL only when a source published it verbatim. Never
+  // constructed from a name.
+  profileUrl String?
+  location   String?
+  // Written only when a provider stated them AND DM_STORE_CONTACT_DATA is on.
+  // Never pattern-guessed from a domain.
+  email      String?
+  phone      String?
+
+  confidence             String @default("low") // high | medium | low
+  confidenceReasons      Json?
+  // Reachability, kept separate from confidence so the two are never confused.
+  // contactable | withheld_by_policy | profile_only | none
+  contactability         String @default("none")
+  // Distinct providers that independently reported this person.
+  corroboratingProviders Json?
+  corroborationCount     Int    @default(1)
+
+  // Deterministic rank and the arithmetic behind it, so an ordering can be
+  // explained to the person who has to act on it.
+  rankScore   Int   @default(0)
+  rankReasons Json?
+  rank        Int?
+
+  // Every sighting, each with the literal text that supports it.
+  evidence Json?
+
+  // shortlisted | excluded
+  outcome         String  @default("shortlisted")
+  exclusionReason String?
+
+  discoveredAt DateTime @default(now())
+
+  run DecisionMakerRun @relation(fields: [dmRunId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, crmCompanyId, discoveredAt])
+  @@index([dmRunId, outcome, rank])
+  @@index([tenantId, identityKey])
+}
+
+// ── STAGE 5: WEBSITE AUDIT ─────────────────────────────────────────────────
+
+// One crawl of one company's website.
+//
+// Immutable: re-auditing a company inserts a NEW run rather than updating this
+// one, so an earlier crawl's evidence can never be overwritten by a later one.
+// That matters because websites change, and "the page said X in August" is the
+// whole value of an audit record.
+//
+// `limitsHit` is the honest counterpart to the page counts: a run that
+// inspected 25 pages because it ran out of budget reads very differently from
+// one that inspected 25 because that is the whole site.
+model WebsiteAuditRun {
+  id                   String  @id
+  tenantId             String
+  crmCompanyId         String
+  companyName          String?
+  // The URL the crawl started from, after Stage 2 enrichment resolved it.
+  startUrl             String?
+  rootHost             String?
+  prospectSearchId     String?
+  requestedByCrmUserId String
+  // queued | running | completed | partial | failed | cancelled
+  status               String  @default("queued")
+
+  // Crawl statistics. Counts of what was SEEN, never a judgement about it.
+  pagesFetched        Int @default(0)
+  pagesSkipped        Int @default(0)
+  productPages        Int @default(0)
+  categoryPages       Int @default(0)
+  otherPages          Int @default(0)
+  duplicatePages      Int @default(0)
+  canonicalDuplicates Int @default(0)
+  soft404Pages        Int @default(0)
+  httpErrors          Int @default(0)
+  unreachablePages    Int @default(0)
+  structuredDataPages Int @default(0)
+  totalBytes          Int @default(0)
+
+  // Which crawl limits bound, by name.
+  limitsHit     Json?
+  // The limit values this run actually used, so a later run with different
+  // configuration is comparable rather than silently different.
+  limitsApplied Json?
+
+  retryCount    Int       @default(0)
+  failureReason String?
+  error         Json?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  pages     AuditedPage[]
+  findings  CatalogFinding[]
+  report    AuditReport?
+  workbench WorkbenchDemo?
+  events    EngagementEvent[]
+  campaigns OutreachCampaign[]
+
+  @@index([tenantId, crmCompanyId, createdAt])
+  @@index([tenantId, status])
+  @@index([prospectSearchId])
+}
+
+// One URL the crawler visited, whatever happened to it.
+//
+// Failed fetches are stored too. A 404 on a linked datasheet and a site that
+// times out are both evidence about the catalogue, and deleting them would
+// leave Stage 6 unable to tell "we looked and it was broken" from "we never
+// looked".
+model AuditedPage {
+  id           String @id
+  tenantId     String
+  auditRunId   String
+  crmCompanyId String
+
+  requestedUrl String
+  finalUrl     String?
+  httpStatus   Int?
+  contentType  String?
+  // fetched | http_error | unreachable | timeout | blocked | non_html |
+  // too_large | duplicate | soft_404
+  outcome      String
+  // product | category | listing | search | specification | company | other | unknown
+  pageType     String  @default("unknown")
+  // The signals that produced the page-type call, so it can be checked.
+  typeSignals  Json?
+
+  depth          Int      @default(0)
+  bytes          Int      @default(0)
+  wordCount      Int      @default(0)
+  contentHash    String?
+  canonicalUrl   String?
+  // Set when this URL duplicates one already recorded in this run.
+  duplicateOfUrl String?
+  // Every URL visited on the way here, so redirect history is preserved.
+  redirectChain  Json?
+  truncated      Boolean  @default(false)
+  failureReason  String?
+  durationMs     Int      @default(0)
+  fetchedAt      DateTime
+
+  run          WebsiteAuditRun   @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+  observations PageObservation[]
+
+  @@index([auditRunId, pageType])
+  @@index([tenantId, crmCompanyId, fetchedAt])
+  @@index([auditRunId, outcome])
+  @@index([contentHash])
+}
+
+// One observed (or explicitly unobserved) field, with the evidence for it.
+//
+// A row per field is what makes "every extracted field must preserve evidence"
+// structural rather than a convention: there is nowhere to record a value
+// except next to its source path and source fragment.
+//
+// `status` carries the distinction the whole stage rests on:
+//   observed             the page stated this, and `value` is what it said
+//   not_observed         the field was looked for and was not on the page
+//   could_not_determine  something field-shaped was present but unattributable
+//
+// There is deliberately no severity, score or problem column. Whether a
+// not_observed dimension matters is Stage 6's question, not this table's.
+model PageObservation {
+  id         String @id
+  tenantId   String
+  auditRunId String
+  pageId     String
+
+  // e.g. "product.dimensions", "category.productCount", "page.canonical"
+  field  String
+  status String  @default("not_observed")
+  // Exactly as the page stated it. Never normalised, never inferred.
+  value  String?
+
+  // json_ld | microdata | meta_tag | http_header | dom_heuristic |
+  // url_pattern | link_analysis
+  method     String?
+  // Where in the document: a JSON-LD path, a selector, a URL pattern.
+  sourcePath String?
+  // The literal source fragment, so a misreading is visible without a refetch.
+  fragment   String?
+
+  observedAt DateTime @default(now())
+
+  page AuditedPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([auditRunId, field, status])
+  @@index([pageId, field])
+  @@index([tenantId, field])
+}
+
+// ── TASK #979: catalog analysis, sales collateral and PDF report ───────────
+
+// One evidence-backed product-data finding.
+//
+// This is the only table in the website-audit chain that says something is
+// wrong. Everything upstream records what was observed; a row here names a gap
+// and carries the observation records that establish it.
+//
+// `sampleSize` is not optional and `metric` always names it, because the whole
+// difference between a defensible finding and a sales claim is whether the
+// denominator travels with the number.
+model CatalogFinding {
+  id           String @id
+  tenantId     String
+  auditRunId   String
+  crmCompanyId String
+
+  code     String
+  title    String
+  category String
+
+  // high | medium | low, derived from field tier and share of the sample.
+  priority        String @default("low")
+  // The arithmetic behind the priority, so it can be argued with.
+  priorityReasons Json?
+
+  affectedCount Int    @default(0)
+  observedCount Int    @default(0)
+  sampleSize    Int    @default(0)
+  sampleUnit    String @default("pages")
+  // Always phrased "N of M inspected <unit>". Never a percentage.
+  metric        String
+
+  finding        String
+  impact         String
+  recommendation String
+
+  // Observation references, source URLs, paths and literal fragments.
+  evidence Json?
+
+  createdAt DateTime @default(now())
+
+  run WebsiteAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+
+  @@index([auditRunId, priority])
+  @@index([tenantId, crmCompanyId, createdAt])
+  @@index([tenantId, code])
+}
+
+// The account-specific collateral package and its rendered PDF.
+//
+// One row per audit run, so re-auditing a company produces a new report beside
+// the old one and the history of what a site looked like on a given date is
+// preserved.
+//
+// `status` is deliberately fixed at ready_for_approval: Task #979 ends by
+// producing the artifact. Task #980 owns the human approval workflow, and
+// nothing in this codebase advances this field.
+model AuditReport {
+  id           String @id
+  tenantId     String
+  auditRunId   String @unique
+  crmCompanyId String
+
+  companyName String?
+  websiteUrl  String?
+  auditDate   DateTime
+
+  pagesInspected         Int @default(0)
+  productPagesInspected  Int @default(0)
+  categoryPagesInspected Int @default(0)
+  findingCount           Int @default(0)
+  highPriorityCount      Int @default(0)
+
+  // The full collateral package as generated.
+  collateral Json?
+
+  // The rendered PDF, stored with its digest so a served copy can be shown to
+  // be the one that was generated.
+  pdfBytes     Bytes?
+  pdfSha256    String?
+  pdfPageCount Int?
+  pdfBytesSize Int?
+
+  // The approval state machine's state. Task #979 leaves it at
+  // ready_for_approval; Task #980 moves it through in_review, changes_requested,
+  // approved and rejected. Reusing this column rather than adding a second
+  // status field keeps one answer to "where is this report".
+  status      String   @default("ready_for_approval")
+  generatedAt DateTime @default(now())
+
+  // ── Task #980: human approval ───────────────────────────────────────────
+  //
+  // The columns above (collateral, pdfBytes, pdfSha256) remain the ORIGINAL
+  // generated artifact and are never rewritten, so revision 1 is always
+  // recoverable even if the revision table were tampered with.
+  currentRevision Int @default(1)
+  // Optimistic concurrency. Every state change and every new revision bumps it,
+  // and a reviewer's write must name the version they were looking at.
+  lockVersion     Int @default(1)
+
+  reviewerCrmUserId  String?
+  reviewerEmail      String?
+  reviewedAt         DateTime?
+  // Why the reviewer decided what they decided.
+  decisionComment    String?
+  // The validation result recorded at the moment of approval, so the decision
+  // carries its own evidence rather than relying on a later re-check.
+  approvalValidation Json?
+  approvedRevision   Int?
+
+  revisions      AuditReportRevision[]
+  approvalEvents AuditApprovalEvent[]
+
+  run WebsiteAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, crmCompanyId, generatedAt])
+  @@index([tenantId, status])
+}
+
+// ── TASK #980: revisions and approval history ──────────────────────────────
+
+// One version of a report's presentation.
+//
+// Revision 1 is the generated original. Every later revision is a human edit of
+// the one before it, and none of them is ever updated in place: a change makes
+// a new row. That is what makes "the original generated report must remain
+// recoverable" a property of the schema rather than a promise in a comment.
+//
+// Only PROSE differs between revisions. Metrics, counts, evidence references and
+// the scope note are carried through unchanged and are checked for drift before
+// a revision can be approved.
+model AuditReportRevision {
+  id             String @id
+  tenantId       String
+  auditReportId  String
+  auditRunId     String
+  revisionNumber Int
+
+  // The collateral document as of this revision.
+  content Json
+
+  // This revision's own rendered PDF. Previous revisions keep theirs.
+  pdfBytes     Bytes?
+  pdfSha256    String?
+  pdfPageCount Int?
+  pdfBytesSize Int?
+
+  // Who made it and why. Revision 1 is created by the agent and carries no
+  // reviewer.
+  createdByCrmUserId   String?
+  createdByEmail       String?
+  changeReason         String?
+  // The revision this one was edited from.
+  sourceRevisionNumber Int?
+
+  // The validation result computed when the revision was written.
+  validation   Json?
+  validationOk Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  report AuditReport @relation(fields: [auditReportId], references: [id], onDelete: Cascade)
+
+  @@unique([auditReportId, revisionNumber])
+  @@index([tenantId, auditRunId, revisionNumber])
+}
+
+// The immutable approval trail.
+//
+// Append-only by intent: there is no update path in the codebase and no field
+// to overwrite. Every transition, including the ones that were refused for
+// failing validation, lands here with the reviewer who attempted it.
+model AuditApprovalEvent {
+  id            String @id
+  tenantId      String
+  auditReportId String
+  auditRunId    String
+
+  revisionNumber Int
+  previousStatus String
+  newStatus      String
+  // start | approve | request_changes | reject | reopen | revise
+  action         String
+
+  reviewerCrmUserId String
+  reviewerEmail     String?
+  reviewerName      String?
+
+  comment    String?
+  // The validation result that licensed (or blocked) the transition.
+  validation Json?
+
+  createdAt DateTime @default(now())
+
+  report AuditReport @relation(fields: [auditReportId], references: [id], onDelete: Cascade)
+
+  @@index([auditReportId, createdAt])
+  @@index([tenantId, auditRunId, createdAt])
+}
+
+// ── TASK #981: AI WORKBENCH ────────────────────────────────────────────────
+
+// One customer-facing demonstration, built from an approved audit.
+//
+// The Workbench does not duplicate the audit: it references the run, the
+// report and the chosen page by id, and stores only what it needs to RENDER —
+// the compared fields, the sampled theme, and the value points. No prospect
+// HTML is stored anywhere, and the rendered page is generated per request so
+// revoking a link revokes access to the content.
+model WorkbenchDemo {
+  id            String @id
+  tenantId      String
+  auditRunId    String @unique
+  auditReportId String
+  crmCompanyId  String
+
+  companyName String?
+  websiteUrl  String?
+
+  // The product page being demonstrated, referenced not copied.
+  productPageId   String?
+  productPageUrl  String?
+  productName     String?
+  // Why this page was chosen, so the choice can be explained.
+  selectionReason String?
+
+  // ready | no_product_page | failed
+  status       String  @default("ready")
+  statusReason String?
+
+  // Colours, fonts and layout family sampled from the live site, or the
+  // neutral default when sampling failed. Validated tokens only, never markup.
+  theme Json?
+
+  // Restructured schema.org Product data built from observed fields only.
+  structuredData Json?
+  // Two to four business-language reasons the improvements matter.
+  valuePoints    Json?
+
+  // Sample-scoped counts. Never a percentage.
+  observedFieldCount Int @default(0)
+  totalFieldCount    Int @default(0)
+  improvedFieldCount Int @default(0)
+
+  // Which report state licensed this build, and whether the development-only
+  // bypass was used. Recorded so a customer-facing artifact can always be
+  // traced back to an approval decision.
+  sourceReportStatus  String?
+  builtFromUnapproved Boolean @default(false)
+
+  // Set only when the optional Gemini rewording actually ran.
+  geminiUsed    Boolean @default(false)
+  geminiCostUsd Decimal @default(0) @db.Decimal(12, 6)
+
+  generatedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Task #982 fix: this relation was missing, so deleting an audit run left
+  // the demo behind — 41 orphaned demos and 15 live PUBLIC links pointing at
+  // audits that no longer existed. A customer-facing link must not outlive the
+  // evidence it was built from.
+  run WebsiteAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+
+  fields   WorkbenchField[]
+  links    WorkbenchLink[]
+  visitors WorkbenchVisitor[]
+  events   EngagementEvent[]
+
+  @@index([tenantId, crmCompanyId, generatedAt])
+  @@index([tenantId, status])
+}
+
+// One BEFORE/AFTER row, with the evidence behind it.
+//
+// The provenance columns are what make the demo defensible: a prospect can ask
+// where any value came from, and the answer is an observation id, a URL, a
+// selector and the literal fragment from their own page.
+model WorkbenchField {
+  id       String @id
+  tenantId String
+  demoId   String
+
+  field    String
+  label    String
+  position Int    @default(0)
+
+  beforeValue String?
+  afterValue  String?
+  // added | restructured | reworded | unchanged | still_absent
+  delta       String  @default("unchanged")
+  headline    Boolean @default(false)
+
+  // restructured | derived | reworded | unchanged | not_present
+  transformKind       String
+  // The PageObservation this came from. Null only for a genuine gap.
+  sourceObservationId String?
+  sourceField         String?
+  sourceUrl           String?
+  sourcePath          String?
+  sourceFragment      String?
+  transformRule       String
+
+  demo WorkbenchDemo @relation(fields: [demoId], references: [id], onDelete: Cascade)
+
+  @@index([demoId, position])
+  @@index([tenantId, field])
+}
+
+// A shareable, QR-able link to a Workbench.
+//
+// Only the token HASH is stored, exactly as a password would be: a database
+// read must not yield a working customer link. The plaintext token is returned
+// once, at creation, and never again.
+model WorkbenchLink {
+  id       String @id
+  tenantId String
+  demoId   String
+
+  tokenHash String  @unique
+  // Last few characters, so a link can be identified in a list without storing
+  // anything that could be used to open it.
+  tokenHint String?
+
+  label              String?
+  expiresAt          DateTime
+  revokedAt          DateTime?
+  revokedByCrmUserId String?
+  maxViews           Int?
+
+  viewCount     Int       @default(0)
+  firstViewedAt DateTime?
+  lastViewedAt  DateTime?
+
+  createdByCrmUserId String
+  createdAt          DateTime @default(now())
+
+  demo     WorkbenchDemo      @relation(fields: [demoId], references: [id], onDelete: Cascade)
+  visitors WorkbenchVisitor[]
+
+  @@index([demoId, createdAt])
+  @@index([tenantId, expiresAt])
+}
+
+// Someone who registered to open a Workbench.
+//
+// Collected for access, and deliberately inert: Task #981 does not write any of
+// this to NXT Sales, does not score it, and does not route it anywhere. It is a
+// stored registration and nothing else.
+//
+// The session cookie is stored hashed, for the same reason the link token is.
+model WorkbenchVisitor {
+  id       String  @id
+  tenantId String
+  demoId   String
+  linkId   String?
+
+  fullName    String
+  companyName String
+  workEmail   String
+  jobTitle    String?
+  phone       String?
+
+  sessionHash String  @unique
+  // Coarse request context, for abuse investigation only.
+  userAgent   String?
+  ipHash      String?
+
+  registeredAt DateTime  @default(now())
+  lastSeenAt   DateTime?
+  viewCount    Int       @default(1)
+
+  demo WorkbenchDemo  @relation(fields: [demoId], references: [id], onDelete: Cascade)
+  link WorkbenchLink? @relation(fields: [linkId], references: [id], onDelete: SetNull)
+
+  @@index([demoId, registeredAt])
+  @@index([tenantId, registeredAt])
+}
+
+// ── TASK #982: MULTICHANNEL OUTREACH ───────────────────────────────────────
+
+// One outreach campaign against one prospect, built from an approved audit.
+//
+// The campaign holds the context every message is personalised from — the audit
+// run, the approved report, the decision maker, the Workbench — by reference.
+// Nothing from the CRM is copied here; crmCompanyId stays an opaque string, as
+// it has since Task #977.
+model OutreachCampaign {
+  id       String @id
+  tenantId String
+
+  crmCompanyId  String
+  companyName   String?
+  companyDomain String?
+
+  // The approved artifacts this campaign is allowed to draw on.
+  auditRunId      String
+  auditReportId   String
+  // The decision-maker candidate the person-channels target, when one exists.
+  decisionMakerId String?
+  // The Workbench demo whose link may be included, when one exists.
+  workbenchDemoId String?
+
+  // draft | active | paused | completed | cancelled
+  status       String  @default("draft")
+  statusReason String?
+
+  // Whether this campaign may execute externally at all. Default false: the
+  // engine composes and schedules, and a human releases.
+  autoSendEnabled Boolean @default(false)
+  // A rehearsal produces every artifact but performs no external action.
+  dryRun          Boolean @default(true)
+
+  // When day offsets are measured from.
+  startsAt DateTime @default(now())
+
+  requestedByCrmUserId String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Found while building Task #983: this relation was missing, exactly as
+  // WorkbenchDemo.auditRunId was before Task #982 — so deleting an audit run
+  // left 6 campaigns and 30 actions behind, each citing evidence that no longer
+  // existed. An engagement timeline built from those actions would quote an
+  // audit nobody could open. Cascade, because a campaign has no basis without
+  // the approved audit it was planned from.
+  //
+  // EngagementEvent references an action with SetNull, so the history of what a
+  // prospect did survives this cascade with its evidence text intact.
+  run WebsiteAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+
+  steps   OutreachSequenceStep[]
+  actions OutreachAction[]
+
+  @@index([tenantId, crmCompanyId, createdAt])
+  @@index([tenantId, status])
+  @@index([auditRunId])
+}
+
+// The cadence, stored as rows rather than expressed as control flow.
+//
+// Changing timing, dropping a channel or inserting a step is a data change. The
+// engine reads this table; it has no hard-coded idea of what step three is.
+model OutreachSequenceStep {
+  id         String @id
+  tenantId   String
+  campaignId String
+
+  stepNumber Int
+  channel    String
+  dayOffset  Int
+  purpose    String
+
+  // Statuses the preceding step must have reached. A follow-up must not
+  // reference a first message that never went.
+  requiresPreviousStatus Json?
+  requiresChannelEnabled Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  actions  OutreachAction[]
+
+  @@unique([campaignId, stepNumber])
+  @@index([tenantId, channel])
+}
+
+// One intended contact: a target, a channel, a message, a provider, a status.
+//
+// This table is the answer to "why was this message sent to this person". It
+// carries the evidence references the copy was built from, the provider that
+// would deliver it, the validation result that licensed it, and the schedule it
+// is bound to. An action that was blocked records WHICH gate blocked it, so a
+// campaign that sent nothing can always be read correctly.
+model OutreachAction {
+  id       String @id
+  tenantId String
+
+  campaignId String
+  stepId     String?
+
+  crmCompanyId String
+  companyName  String?
+
+  channel    String
+  stepNumber Int
+
+  // Who it is aimed at. A name and title come from a verified decision-maker
+  // candidate; a destination is only ever a value a source actually stated.
+  contactName     String?
+  contactTitle    String?
+  decisionMakerId String?
+  destination     String?
+  destinationKind String?
+
+  // draft | ready_to_send | scheduled | sending | sent | manual_required |
+  // blocked_suppressed | blocked_provider_unavailable |
+  // blocked_validation_failed | blocked_no_target | failed | cancelled | skipped
+  status       String  @default("draft")
+  statusReason String?
+
+  // Stable identity for one intended action, so a retry or a double submit
+  // converges on this row rather than creating a second send.
+  idempotencyKey String @unique
+
+  providerName      String?
+  providerStatus    String?
+  providerMessageId String?
+  // Sanitised. Never carries a credential.
+  providerResponse  Json?
+
+  failureKind String?
+  retryCount  Int     @default(0)
+
+  // The validation result recorded at the moment the action was marked ready.
+  validation   Json?
+  validationOk Boolean @default(false)
+
+  // Suppression decision recorded at execution time, not only at planning time.
+  suppressionReason String?
+  suppressionDetail String?
+
+  scheduledAt DateTime
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  campaign OutreachCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  step     OutreachSequenceStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
+  message  OutreachMessage?
+  runs     OutreachProviderRun[]
+  events   EngagementEvent[]
+
+  @@index([tenantId, status, scheduledAt])
+  @@index([campaignId, stepNumber])
+  @@index([tenantId, crmCompanyId, sentAt])
+}
+
+// The composed message, kept apart from the action's workflow state.
+//
+// Separated so a status change does not rewrite the copy, and so the exact text
+// a prospect was shown stays recoverable next to the template version that
+// produced it.
+model OutreachMessage {
+  id       String @id
+  tenantId String
+  actionId String @unique
+
+  templateKey     String
+  templateVersion String
+
+  subject String?
+  body    String
+  // The rendered blocks, so a reviewer can diff a hook without re-reading the
+  // whole message.
+  blocks  Json?
+
+  ctaUrl       String?
+  workbenchUrl String?
+
+  // What each claim in the copy rests on: findings, observations, the Workbench.
+  evidence Json?
+
+  characterCount Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  action OutreachAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, templateKey, templateVersion])
+}
+
+// One attempt to execute one action through one provider.
+//
+// Append-only: a retry adds a row rather than overwriting the last one, so the
+// history of what a provider said is preserved. Rate limiting and transient
+// failures are visible as a sequence rather than a single final state.
+model OutreachProviderRun {
+  id       String @id
+  tenantId String
+  actionId String
+
+  attempt        Int
+  providerName   String
+  // available | draft_only | not_configured | unauthorized |
+  // unsupported_action | rate_limited | provider_unavailable |
+  // disabled_by_policy
+  providerStatus String
+  delivered      Boolean @default(false)
+  manualRequired Boolean @default(false)
+
+  reason      String?
+  failureKind String?
+  // Sanitised provider response. No credentials, no tokens.
+  response    Json?
+
+  costUsd    Decimal  @default(0) @db.Decimal(12, 6)
+  durationMs Int      @default(0)
+  dryRun     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  action OutreachAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@index([actionId, attempt])
+  @@index([tenantId, providerStatus])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK #983 — ENGAGEMENT TRACKING
+//
+// One row per OBSERVED ACT. The question this table answers is "what did the
+// prospect actually do?", so every column is a fact or a reference to one.
+//
+// There is deliberately NO score column, no interest level, no temperature, no
+// qualification flag and no routing field. Those are later stages' work, and a
+// column here would make it tempting for this stage to fill it in. The freshness
+// label is metadata about age, stored beside the raw age in hours so a later
+// stage can reclassify without trusting these thresholds.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model EngagementEvent {
+  id       String @id
+  tenantId String
+
+  // Resolved SERVER-SIDE. A public client never supplies this: it presents an
+  // opaque token, and the server resolves the company from the token's demo.
+  crmCompanyId String
+  companyName  String?
+
+  // From the closed whitelist in src/engagement/types.ts. An unknown string is
+  // rejected at the boundary rather than stored as an unrecognised type.
+  eventType String
+  channel   String
+
+  // HOW the observation reached us: workbench_app | tracked_link |
+  // provider_webhook | outreach_engine | manual_confirmation.
+  source         String
+  sourceProvider String?
+
+  // When the act happened, and when we learned about it. Two columns because
+  // they genuinely differ: a webhook can arrive minutes after the open, and a
+  // timeline that conflates them misreports the order of what a prospect did.
+  occurredAt DateTime
+  receivedAt DateTime @default(now())
+
+  // Freshness at the moment of recording. A label, never a weight.
+  freshnessLabel String  @default("unknown")
+  ageHours       Int     @default(0)
+  // Set when an untrusted source claimed a timestamp we had to correct.
+  timestampNote  String?
+
+  // Opaque, hashed. Never a raw cookie, IP or device identifier.
+  sessionRef String?
+
+  // The provider's own id for this event, when there is one. It is the
+  // authority on whether two deliveries are one act.
+  providerEventId String?
+
+  // References rather than copies. All optional: an email bounce belongs to no
+  // demo, and a Workbench view belongs to no outreach action.
+  workbenchDemoId  String?
+  outreachActionId String?
+  auditRunId       String?
+
+  // Stable identity for one act. The unique constraint is what makes ingestion
+  // idempotent under retries, redelivery and double submits.
+  dedupeKey String @unique
+
+  // recorded | duplicate | rejected. Duplicates and rejections are NOT stored
+  // here — they are counted on the ingestion run — so in practice every row is
+  // "recorded". The column exists so a future soft-reject has somewhere to go.
+  processingStatus String @default("recorded")
+
+  // WHAT was observed, WHERE, and HOW. Small by design: references and plain
+  // words, never a raw provider payload or a browser fingerprint.
+  evidence Json
+
+  // Whitelisted scalars only, capped in number and length.
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  // SetNull, not Cascade. That a prospect opened a demo in March is still true
+  // after the demo is rebuilt or removed, and the evidence JSON keeps the
+  // reference either way. Cascading would let housekeeping quietly delete
+  // history the account timeline depends on.
+  contributions IntentScoreContribution[]
+
+  demo   WorkbenchDemo?   @relation(fields: [workbenchDemoId], references: [id], onDelete: SetNull)
+  action OutreachAction?  @relation(fields: [outreachActionId], references: [id], onDelete: SetNull)
+  run    WebsiteAuditRun? @relation(fields: [auditRunId], references: [id], onDelete: SetNull)
+
+  // The timeline query: one company, newest first.
+  @@index([tenantId, crmCompanyId, occurredAt])
+  @@index([tenantId, crmCompanyId, channel, occurredAt])
+  @@index([tenantId, eventType, occurredAt])
+  @@index([workbenchDemoId, occurredAt])
+  @@index([outreachActionId, occurredAt])
+  @@index([sessionRef])
+}
+
+// One ingestion attempt at a boundary — a public capture, a provider webhook,
+// an internal lifecycle emit.
+//
+// Append-only, and it records REJECTIONS as well as acceptances. That is the
+// point: a webhook with a bad signature and a token that does not resolve leave
+// a trace here rather than vanishing, which is what makes "someone tried to
+// write events into this account" an answerable question.
+model EngagementIngestionRun {
+  id       String  @id
+  tenantId String?
+
+  source         String
+  sourceProvider String?
+  // The surface that received it, for locating the boundary in the logs.
+  endpoint       String?
+
+  // Whether the caller's identity was actually proven. An unverified provider
+  // webhook is rejected, not accepted-and-flagged.
+  verified           Boolean @default(false)
+  verificationMethod String?
+
+  received  Int @default(0)
+  accepted  Int @default(0)
+  duplicate Int @default(0)
+  rejected  Int @default(0)
+
+  // Why, when nothing was accepted. Never carries a credential or a signature.
+  rejectionReason String?
+  // Counts by reason, so repeated probing is visible without storing payloads.
+  rejectionDetail Json?
+
+  crmCompanyId String?
+  durationMs   Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([source, verified, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK #984 — INTENT SCORING
+//
+// A rule-based score over the engagement acts Task #983 observed. Not a
+// prediction, not a machine-learning model, not a conversion probability —
+// arithmetic over a published, versioned table of weights.
+//
+// The structure enforces the two properties the score depends on:
+//   every point traces to an engagement event (non-nullable FK below), and
+//   every calculation records the policy version that produced it, so an old
+//   score stays reproducible after the weights change.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One version of the scoring policy.
+//
+// Immutable once written: changing weights means adding a version, never
+// editing one. That is what keeps historical scores explainable — a score from
+// last month can still name the exact numbers that produced it.
+model IntentScoringPolicy {
+  id       String  @id
+  tenantId String?
+
+  // Stable identifier, e.g. "v1-provisional". Recorded on every score.
+  version String @unique
+
+  // provisional | business_approved
+  //
+  // NOT decoration. Everything currently in the system is "provisional": the
+  // weights have not been signed off by anyone, and the API repeats this on
+  // every response so a number cannot travel without the caveat.
+  status String @default("provisional")
+
+  description String
+  minScore    Int    @default(0)
+  maxScore    Int    @default(100)
+
+  // The rules, decay bands, level bands and actor filter, as data.
+  rules         Json
+  decayBands    Json
+  levelBands    Json
+  scoringActors Json
+  notes         Json
+
+  activeFrom DateTime  @default(now())
+  activeTo   DateTime?
+
+  createdByCrmUserId String?
+  createdAt          DateTime @default(now())
+
+  snapshots IntentScoreSnapshot[]
+  scores    IntentScore[]
+
+  @@index([tenantId, activeFrom])
+  @@index([status])
+}
+
+// The CURRENT score for one company. One row per company per tenant.
+//
+// A pointer at the latest snapshot rather than a second copy of the truth: the
+// breakdown lives on the snapshot, so the current score and its history are
+// explained by exactly the same rows.
+model IntentScore {
+  id       String @id
+  tenantId String
+
+  crmCompanyId String
+  companyName  String?
+
+  // Sum of adjusted contributions BEFORE bounding. Kept so normalisation is
+  // visible rather than hidden — if raw was 140 and the score says 100, both
+  // numbers are on the record.
+  rawScore        Int
+  normalizedScore Int
+  minScore        Int     @default(0)
+  maxScore        Int     @default(100)
+  clamped         Boolean @default(false)
+
+  // LOW | MEDIUM | HIGH. Deliberately not "hot" — that would imply a routing
+  // decision, which this task does not make.
+  level String
+
+  policyVersion      String
+  policyStatus       String
+  calculationVersion String
+
+  // The instant the score describes, not the instant the row was written.
+  evaluatedAt DateTime
+
+  // Contactability, deliberately SEPARATE from the score. A bounced address is
+  // not a statement of disinterest, so it never moves the number.
+  contactabilityStatus  String @default("unknown")
+  contactabilityReasons Json?
+
+  eventsConsidered Int @default(0)
+  eventsScored     Int @default(0)
+  eventsExcluded   Int @default(0)
+
+  resultHash String
+
+  latestSnapshotId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  policy         IntentScoringPolicy  @relation(fields: [policyVersion], references: [version])
+  latestSnapshot IntentScoreSnapshot? @relation("CurrentSnapshot", fields: [latestSnapshotId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, crmCompanyId])
+  @@index([tenantId, level, normalizedScore])
+  @@index([tenantId, evaluatedAt])
+}
+
+// One calculation, kept forever.
+//
+// Append-only. A recalculation adds a row; it never rewrites one. Old rows keep
+// the policy version that produced them, so "why was the score 48 on the 29th"
+// stays answerable after the weights change.
+model IntentScoreSnapshot {
+  id       String @id
+  tenantId String
+
+  crmCompanyId String
+
+  rawScore        Int
+  normalizedScore Int
+  clamped         Boolean @default(false)
+  level           String
+
+  policyVersion      String
+  policyStatus       String
+  calculationVersion String
+
+  evaluatedAt DateTime
+
+  contactabilityStatus  String @default("unknown")
+  contactabilityReasons Json?
+
+  eventsConsidered Int @default(0)
+  eventsScored     Int @default(0)
+  eventsExcluded   Int @default(0)
+
+  // What changed since the previous snapshot, in points. Null for the first.
+  deltaFromPrevious Int?
+
+  resultHash String
+
+  // initial | recalculation | policy_change | event_ingested
+  trigger              String  @default("recalculation")
+  requestedByCrmUserId String?
+
+  createdAt DateTime @default(now())
+
+  policy        IntentScoringPolicy       @relation(fields: [policyVersion], references: [version])
+  contributions IntentScoreContribution[]
+  currentFor    IntentScore?              @relation("CurrentSnapshot")
+
+  @@index([tenantId, crmCompanyId, evaluatedAt])
+  @@index([tenantId, crmCompanyId, createdAt])
+  @@index([policyVersion])
+}
+
+// One line of the breakdown: one engagement event, one rule, one contribution.
+//
+// `engagementEventId` is NON-NULLABLE and carries a foreign key. That is the
+// structural guarantee behind "no point exists without an event": a
+// contribution without a resolvable event cannot be written at all, and one
+// whose event is deleted is removed with it rather than left as an orphaned
+// number nobody can explain.
+model IntentScoreContribution {
+  id         String @id
+  tenantId   String
+  snapshotId String
+
+  engagementEventId String
+  eventType         String
+  channel           String
+  occurredAt        DateTime
+
+  ruleId    String
+  // interest | contactability
+  dimension String @default("interest")
+
+  basePoints          Int
+  freshnessMultiplier Decimal @db.Decimal(4, 3)
+  freshnessLabel      String
+  ageDays             Int
+  // Points after freshness and any cap. This is what was actually counted.
+  adjustedPoints      Int
+
+  // True when a cap, an ineligible actor or full decay reduced this to nothing.
+  // Excluded contributions are STORED rather than dropped, so a breakdown shows
+  // why a score is lower than someone expected instead of silently omitting it.
+  excluded Boolean @default(false)
+  reason   String
+
+  policyVersion String
+
+  createdAt DateTime @default(now())
+
+  snapshot IntentScoreSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  event    EngagementEvent     @relation(fields: [engagementEventId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId, occurredAt])
+  @@index([engagementEventId])
+  @@index([tenantId, eventType])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK #985 — SALES QUALIFIED LEAD
+//
+// Where an intent score becomes a sales action. The score is CONSUMED here,
+// never recalculated: this stage compares it to a business threshold, resolves
+// who is responsible, records an alert and creates a follow-up task.
+//
+// Three concepts are kept structurally separate, because "qualified, alert not
+// delivered, task created" is a real state that one collapsed status could not
+// express:
+//   status      — did the score cross the threshold
+//   alertStatus — was a person actually told
+//   taskStatus  — does a task exist
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One version of the qualification policy. Immutable once written.
+model SalesQualificationPolicy {
+  id       String  @id
+  tenantId String?
+
+  version String @unique
+
+  // provisional | business_approved
+  //
+  // Everything here is "provisional": no threshold, SLA or de-qualification
+  // rule has been signed off. The API repeats this on every response.
+  status String @default("provisional")
+
+  description String
+
+  // A score at or above this qualifies.
+  threshold     Int
+  // Hysteresis. Zero means the simple rule; a band would be a business
+  // decision about how much flapping is tolerable.
+  deQualifyBand Int @default(0)
+  // Minutes from qualification to the follow-up due time.
+  slaMinutes    Int
+
+  createAlert                 Boolean @default(true)
+  createFollowUpTask          Boolean @default(true)
+  cancelTaskOnDeQualification Boolean @default(false)
+
+  notes Json
+
+  activeFrom DateTime  @default(now())
+  activeTo   DateTime?
+
+  createdByCrmUserId String?
+  createdAt          DateTime @default(now())
+
+  qualifications SalesQualification[]
+  history        SalesQualificationHistory[]
+
+  @@index([tenantId, activeFrom])
+  @@index([status])
+}
+
+// The CURRENT qualification for one company. One row per company per tenant.
+model SalesQualification {
+  id       String @id
+  tenantId String
+
+  crmCompanyId String
+  companyName  String?
+
+  // not_qualified | qualified | qualified_unassigned | de_qualified
+  status String
+
+  // ── The snapshot that makes this decision reproducible ──────────────────
+  //
+  // Stored, not looked up later. A qualification must stay explainable after
+  // the score moves and after the policies change, so the numbers that made
+  // the decision are frozen onto the row that recorded it.
+  scoreAtQualification      Int
+  thresholdAtQualification  Int
+  // How far above or below the threshold. Negative when below.
+  differenceAtQualification Int
+  // Task #984 provenance, so the exact calculation can be found again.
+  intentScoreId             String?
+  intentScoreSnapshotId     String?
+  scorePolicyVersion        String
+  scoreCalculationVersion   String
+  scoreEvaluatedAt          DateTime
+
+  qualificationPolicyVersion String
+  qualificationEngineVersion String
+
+  // Plain-language explanation of the decision.
+  reason String
+
+  // ── Owner, kept separate from qualification ─────────────────────────────
+  ownerCrmUserId String?
+  ownerName      String?
+  ownerEmail     String?
+  // crm_account_owner | configured_fallback | sales_queue | none
+  ownerSource    String  @default("none")
+  ownerReason    String?
+
+  // ── Alert and task, each with their own honest status ───────────────────
+  // pending | recorded_in_app | sent | blocked_provider_unavailable | failed | skipped_no_owner
+  alertStatus String @default("pending")
+  // pending | created | created_in_crm | blocked_provider_unavailable | failed | skipped_no_owner
+  taskStatus  String @default("pending")
+
+  // When the score first crossed the threshold in the CURRENT qualified spell.
+  qualifiedAt   DateTime?
+  deQualifiedAt DateTime?
+  // Follow-up due time, from the policy SLA.
+  dueAt         DateTime?
+
+  // How many times this company has been evaluated. Not a score.
+  evaluationCount Int      @default(0)
+  lastEvaluatedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  policy  SalesQualificationPolicy    @relation(fields: [qualificationPolicyVersion], references: [version])
+  history SalesQualificationHistory[]
+  alerts  SalesAlert[]
+  tasks   SalesFollowUpTask[]
+  crmSync CrmSyncRecord?
+
+  @@unique([tenantId, crmCompanyId])
+  @@index([tenantId, status, qualifiedAt])
+  @@index([tenantId, lastEvaluatedAt])
+}
+
+// Every transition, kept forever.
+//
+// Append-only: a qualification that later de-qualifies adds a row, and the
+// earlier one stays exactly as it was. A sales decision that was taken must
+// remain visible even after the number that prompted it has moved.
+model SalesQualificationHistory {
+  id       String @id
+  tenantId String
+
+  qualificationId String
+  crmCompanyId    String
+
+  previousStatus String?
+  newStatus      String
+
+  previousScore Int?
+  newScore      Int
+  threshold     Int
+  difference    Int
+
+  // qualified | de_qualified | re_qualified | re_evaluated | actions_retried
+  transition String
+  reason     String
+
+  qualificationPolicyVersion String
+  scorePolicyVersion         String?
+  intentScoreSnapshotId      String?
+
+  // Who or what caused this. A user id for a manual evaluation, null for the worker.
+  actorType      String  @default("system")
+  actorCrmUserId String?
+
+  // What the handoff produced at this transition, so a failure is on the record.
+  alertStatus String?
+  taskStatus  String?
+  alertId     String?
+  taskId      String?
+
+  occurredAt DateTime @default(now())
+
+  qualification SalesQualification       @relation(fields: [qualificationId], references: [id], onDelete: Cascade)
+  policy        SalesQualificationPolicy @relation(fields: [qualificationPolicyVersion], references: [version])
+
+  @@index([tenantId, crmCompanyId, occurredAt])
+  @@index([qualificationId, occurredAt])
+}
+
+// One alert about one qualification.
+//
+// Idempotent by construction: unique on (qualification, action, owner), so a
+// redelivered worker job converges on the existing row instead of notifying
+// somebody twice about the same lead.
+model SalesAlert {
+  id       String @id
+  tenantId String
+
+  qualificationId String
+  crmCompanyId    String
+
+  // The stable identity of one intended alert.
+  idempotencyKey String @unique
+
+  // in_app | slack | email
+  providerName   String
+  destination    String
+  // available | not_configured | unauthorized | unavailable | disabled_by_policy
+  providerStatus String
+  // recorded_in_app | sent | blocked_provider_unavailable | failed | skipped_no_owner
+  status         String
+
+  // TRUE only when a provider confirmed a person was actually reached. An
+  // internal record is not a delivery.
+  delivered Boolean @default(false)
+
+  ownerCrmUserId String?
+  ownerName      String?
+
+  subject String
+  // Sanitised. No credential, no provider payload, no prospect contact detail.
+  body    String
+
+  scoreAtAlert Int
+  threshold    Int
+
+  failureKind String?
+  reason      String?
+  // Providers that were skipped, and why. Never a silent substitution.
+  skipped     Json?
+
+  attempt   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  qualification SalesQualification @relation(fields: [qualificationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, createdAt])
+  @@index([qualificationId, createdAt])
+}
+
+// One follow-up task for a salesperson.
+//
+// A TASK, never a message. Nothing in this model reaches a prospect.
+model SalesFollowUpTask {
+  id       String @id
+  tenantId String
+
+  qualificationId String
+  crmCompanyId    String
+  companyName     String?
+
+  idempotencyKey String @unique
+
+  // internal | nxt_sales
+  providerName   String
+  destination    String
+  providerStatus String
+  // created | created_in_crm | blocked_provider_unavailable | failed | skipped_no_owner
+  status         String
+
+  // The provider's own id, when a task was created somewhere else.
+  externalId String?
+
+  ownerCrmUserId String?
+  ownerName      String?
+
+  title             String
+  body              String
+  recommendedAction String
+
+  scoreAtCreation Int
+  threshold       Int
+
+  // Provisional SLA, recorded with the version that set it.
+  slaMinutes       Int
+  slaPolicyVersion String
+  dueAt            DateTime
+
+  // open | done | cancelled. Only a person closes a task.
+  completionStatus     String    @default("open")
+  completedAt          DateTime?
+  completedByCrmUserId String?
+  cancelledReason      String?
+
+  failureKind String?
+  reason      String?
+  skipped     Json?
+
+  attempt   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  qualification SalesQualification @relation(fields: [qualificationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, completionStatus, dueAt])
+  @@index([tenantId, ownerCrmUserId, dueAt])
+  @@index([qualificationId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK #986 — CRM / NXT SALES HANDOFF
+//
+// The last stage of the pipeline. It assembles everything the CRM would need
+// about a qualified lead and delivers it through an approved provider.
+//
+// No approved write provider exists today: CrmPort declares no write method
+// and the NXT Sales HTTP client hard-codes GET. So a package is prepared,
+// validated, versioned and held in the outbox — and the state says
+// `blocked_provider_unavailable` rather than anything that reads like success.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The CURRENT handoff for one qualification. One row per qualification.
+model CrmSyncRecord {
+  id       String @id
+  tenantId String
+
+  qualificationId String  @unique
+  crmCompanyId    String
+  companyName     String?
+
+  // pending | validating | ready | syncing | synced | partial |
+  // blocked_provider_unavailable | blocked_validation | blocked_not_qualified |
+  // blocked_missing_owner | failed | retrying
+  //
+  // Deliberately not a boolean. "Company written, task unsupported" is a real
+  // outcome, and one flag could not express it.
+  state String @default("pending")
+
+  // The stable correlation key a CRM would store to recognise this lead again.
+  // Scoped by tenant, so two tenants sharing a company id cannot collide.
+  externalKey String @unique
+
+  providerName   String
+  providerStatus String
+  // Snapshot of what the provider could do at the time of the attempt.
+  capabilities   Json?
+
+  mappingVersion String
+  payloadVersion String
+
+  // Per-resource results. A CRM record may land while a task does not.
+  // company | lead | activity | task | note -> created | updated | unchanged |
+  // not_supported | skipped_by_policy | failed | pending
+  resourceResults Json?
+  // Ids the CRM returned, when it returned any.
+  externalIds     Json?
+
+  // Validation outcome from the last attempt, so a refusal is explainable.
+  validationOk     Boolean @default(false)
+  validationIssues Json?
+
+  ownerCrmUserId String?
+  ownerStatus    String  @default("unassigned")
+
+  attemptCount  Int       @default(0)
+  lastAttemptAt DateTime?
+  lastErrorCode String?
+  lastError     String?
+  // Only transient failures are retried; a schema error never is.
+  retryable     Boolean   @default(false)
+  nextRetryAt   DateTime?
+
+  // Provenance of what was handed over, so a package stays explainable.
+  intentScoreId         String?
+  intentScoreSnapshotId String?
+  auditRunId            String?
+  auditReportId         String?
+  workbenchDemoId       String?
+  outreachCampaignId    String?
+  followUpTaskId        String?
+  decisionMakerId       String?
+
+  syncedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  qualification SalesQualification @relation(fields: [qualificationId], references: [id], onDelete: Cascade)
+  attempts      CrmSyncAttempt[]
+  outbox        CrmSyncOutbox[]
+
+  @@index([tenantId, state, updatedAt])
+  @@index([tenantId, crmCompanyId])
+  @@index([state, nextRetryAt])
+}
+
+// Every attempt, kept forever.
+//
+// Append-only. A later attempt adds a row; it never rewrites an earlier one.
+// What was handed over, when, and what came back has to stay answerable after
+// the mapping version and the CRM schema have both moved on.
+model CrmSyncAttempt {
+  id       String @id
+  tenantId String
+
+  syncRecordId    String
+  qualificationId String
+  crmCompanyId    String
+
+  attempt Int
+
+  previousState String?
+  newState      String
+
+  providerName   String
+  providerStatus String
+  mappingVersion String
+  payloadVersion String
+
+  // What each resource did on THIS attempt.
+  resourceResults Json?
+  externalIds     Json?
+
+  errorCode String?
+  error     String?
+  retryable Boolean @default(false)
+
+  validationOk     Boolean @default(false)
+  validationIssues Json?
+
+  durationMs Int @default(0)
+
+  // A user id when a person asked for this, null when the worker did.
+  actorType      String  @default("system")
+  actorCrmUserId String?
+
+  occurredAt DateTime @default(now())
+
+  record CrmSyncRecord @relation(fields: [syncRecordId], references: [id], onDelete: Cascade)
+
+  @@index([syncRecordId, attempt])
+  @@index([tenantId, occurredAt])
+}
+
+// A prepared package that no approved provider could deliver.
+//
+// THE SAFE PENDING INTEGRATION POINT. When a write adapter is approved this is
+// what gets drained: every entry was validated and mapped at the moment the
+// lead qualified, so nothing has to be rebuilt from state that has since moved.
+model CrmSyncOutbox {
+  id       String @id
+  tenantId String
+
+  syncRecordId    String
+  qualificationId String
+  crmCompanyId    String
+
+  externalKey String
+
+  mappingVersion String
+  payloadVersion String
+
+  // The normalised package. Minimised at build time: business-useful fields
+  // and references only — no credential, no raw provider payload, no PDF
+  // bytes, no internal debug state.
+  payload Json
+
+  // pending | delivered | abandoned | superseded
+  state String @default("pending")
+
+  // Why it is sitting here.
+  reason          String
+  blockedBy       String?
+  deliveredAt     DateTime?
+  deliveredBy     String?
+  abandonedReason String?
+
+  attemptCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  record CrmSyncRecord @relation(fields: [syncRecordId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, state, createdAt])
+  @@index([syncRecordId, createdAt])
+  @@index([externalKey])
+}

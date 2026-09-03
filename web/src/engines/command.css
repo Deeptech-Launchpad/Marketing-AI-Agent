@@ -1,0 +1,259 @@
+.cc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s8);
+  max-width: 1320px;
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────────── */
+
+.cc__hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s6);
+}
+
+.cc__title {
+  margin-top: var(--s3);
+  font-size: clamp(28px, 3.4vw, 42px);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+.cc__sub {
+  margin-top: var(--s4);
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+  max-width: 62ch;
+  line-height: 1.6;
+}
+
+/* ── The pipeline ───────────────────────────────────────────────────────── */
+
+.cc__pipeline {
+  position: relative;
+  padding: var(--s8) 0 var(--s6);
+}
+
+/* The connective rail, sitting behind the nodes at their vertical centre. */
+.cc__rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--s8) + 30px);
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--line-strong) 6%,
+    var(--line-strong) 94%,
+    transparent
+  );
+}
+
+.cc__nodes {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+.cc__node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  text-align: center;
+}
+
+/* The hexagon: the engine's identity mark on the pipeline. */
+.cc__hex {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  flex: none;
+  color: var(--e);
+  background: var(--bg-panel);
+  clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0% 50%);
+  transition: transform var(--t-quick) var(--ease-spring), filter var(--t-quick) var(--ease-out);
+}
+
+/* The border is a second clipped layer, because clip-path removes borders. */
+.cc__hex::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--e) 42%, transparent);
+  clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0% 50%);
+  z-index: 0;
+}
+
+.cc__hexinner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: calc(100% - 3px);
+  height: calc(100% - 3px);
+  background: var(--bg-panel);
+  clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0% 50%);
+}
+
+.cc__hex:hover {
+  transform: translateY(-3px);
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--e) 55%, transparent));
+}
+
+/* A stage that has produced a result glows; one that has not stays quiet.
+   The dot and the label below carry the same information in words. */
+.cc__hex--complete {
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--e) 45%, transparent));
+}
+.cc__hex--complete .cc__hexinner {
+  background: color-mix(in srgb, var(--e) 12%, var(--bg-panel));
+}
+.cc__hex--review .cc__hexinner {
+  background: color-mix(in srgb, var(--review) 10%, var(--bg-panel));
+}
+.cc__hex--blocked .cc__hexinner {
+  background: color-mix(in srgb, var(--warn) 10%, var(--bg-panel));
+}
+.cc__hex--error .cc__hexinner {
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-panel));
+}
+.cc__hex--idle {
+  color: var(--text-dim);
+}
+.cc__hex--idle::before {
+  background: var(--line);
+}
+
+/* Only a running stage pulses. */
+.cc__ping {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 1px solid var(--e);
+  animation: status-ring 1.9s var(--ease-out) infinite;
+  pointer-events: none;
+}
+
+.cc__stagenum {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.cc__name {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-soft);
+  line-height: 1.25;
+}
+
+.cc__state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  justify-content: center;
+}
+
+.cc__statelabel {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+
+/* ── Panels ─────────────────────────────────────────────────────────────── */
+
+.cc__panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--s5);
+}
+
+.cc__panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.cc__panel-empty {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.cc__dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s3) var(--s5);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.cc__dl dt {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.cc__dl dd {
+  margin: 0;
+  color: var(--text-soft);
+}
+.cc__dl strong {
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+.cc__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.cc__legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.cc__foot {
+  margin-top: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+/* ── Narrower ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 1280px) {
+  .cc__nodes {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: var(--s5) var(--s2);
+  }
+  .cc__rail {
+    display: none;
+  }
+  .cc__panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .cc__nodes {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

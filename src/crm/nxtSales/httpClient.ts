@@ -1,0 +1,224 @@
+import jwt from 'jsonwebtoken'
+import pLimit from 'p-limit'
+import { env } from '../../config/env.js'
+import { assertServiceIdentity } from '../../crmsync/writeGate.js'
+import { UpstreamError } from '../../platform/errors.js'
+import { logger } from '../../platform/logger.js'
+
+// HTTP transport for NXT Sales.
+//
+// SERVICE ACCOUNT — no NXT Sales code change is required for this to work.
+// NXT Sales' authMiddleware verifies a bearer JWT signed with JWT_SECRET and
+// carrying {id, email, name, role}; this client mints exactly that for a
+// dedicated User row whose id is NXT_SALES_SERVICE_USER_ID. The token is
+// short-lived and re-minted rather than stored.
+//
+// KNOWN LIMITATION, deliberately accepted for Phase 1: NXT Sales enforces no
+// role checks anywhere, so this token has the same reach any logged-in user
+// has. Phase 1 contains this by having no write methods at all on CrmPort.
+// Narrowing the credential itself is Phase 0 RBAC work in NXT Sales and is
+// tracked as a follow-up, not silently assumed to be in place.
+
+const TOKEN_TTL_SECONDS = 600
+const RETRYABLE_STATUS = new Set([502, 503, 504])
+
+let cached: { token: string; expiresAt: number } | null = null
+
+function serviceToken(): string {
+  const now = Date.now()
+  if (cached && cached.expiresAt > now + 30_000) return cached.token
+  const token = jwt.sign(
+    {
+      id: env.NXT_SALES_SERVICE_USER_ID,
+      email: env.NXT_SALES_SERVICE_USER_EMAIL,
+      name: 'Marketing Agent (service)',
+      role: 'member',
+    },
+    env.JWT_SECRET,
+    { expiresIn: TOKEN_TTL_SECONDS },
+  )
+  cached = { token, expiresAt: now + TOKEN_TTL_SECONDS * 1000 }
+  return token
+}
+
+// NXT Sales has no rate limiting of its own, so throttling is this client's
+// responsibility. An agent run issues dozens of calls; unbounded concurrency
+// against a single-process CRM that people are actively using is not acceptable.
+const limit = pLimit(env.NXT_SALES_MAX_CONCURRENCY)
+
+export interface QueryParams {
+  [k: string]: string | number | boolean | string[] | undefined
+}
+
+/**
+ * Builds the query string with the encodings NXT Sales actually expects.
+ * Array values are emitted as REPEATED `key[]=` params — the encoding axios
+ * produces and the one companies.js relies on for `industries`. Comma-joining
+ * them would shred any value containing a comma.
+ */
+export function buildQuery(params: QueryParams): string {
+  const sp = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue
+    if (Array.isArray(value)) {
+      for (const v of value) {
+        if (v !== undefined && v !== null && v !== '') sp.append(`${key}[]`, String(v))
+      }
+    } else {
+      sp.append(key, String(value))
+    }
+  }
+  const s = sp.toString()
+  return s ? `?${s}` : ''
+}
+
+async function once<T>(path: string, params: QueryParams): Promise<T> {
+  const url = `${env.NXT_SALES_BASE_URL}${path}${buildQuery(params)}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), env.NXT_SALES_TIMEOUT_MS)
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${serviceToken()}`,
+        Accept: 'application/json',
+      },
+    })
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      // 4xx is a contract problem — retrying it just burns the CRM's capacity.
+      throw new UpstreamError(`NXT Sales ${res.status} on ${path}`, {
+        retryable: RETRYABLE_STATUS.has(res.status),
+        details: { status: res.status, body: body.slice(0, 400) },
+      })
+    }
+    return (await res.json()) as T
+  } catch (err) {
+    if (err instanceof UpstreamError) throw err
+    if ((err as Error).name === 'AbortError') {
+      throw new UpstreamError(`NXT Sales timed out on ${path}`, { retryable: true })
+    }
+    throw new UpstreamError(`NXT Sales unreachable on ${path}`, {
+      retryable: true,
+      details: { message: (err as Error).message },
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** GET with bounded concurrency and one retry for genuinely transient failures. */
+export async function crmGet<T>(path: string, params: QueryParams = {}): Promise<T> {
+  return limit(async () => {
+    try {
+      return await once<T>(path, params)
+    } catch (err) {
+      if (err instanceof UpstreamError && err.retryable) {
+        logger.warn({ path }, 'NXT Sales call failed, retrying once')
+        await new Promise((r) => setTimeout(r, 750))
+        return once<T>(path, params)
+      }
+      throw err
+    }
+  })
+}
+
+/**
+ * The ONE write this client can perform.
+ *
+ * A separate function rather than a `method` parameter on `once()`, so the
+ * read path keeps its hard-coded GET and cannot be turned into a write by
+ * passing an argument. Everything about this function is deliberately narrow:
+ *
+ *   GATED    Refuses unless CRM_WRITE_ENABLED. The check is here as well as in
+ *            the write gate because this is the last code that touches the
+ *            wire, and a guard that only exists further up is a guard a future
+ *            caller can route around.
+ *
+ *   NO RETRY A failed PUT is NOT retried. A GET is idempotent so retrying it
+ *            costs nothing; a write that may or may not have landed must be
+ *            reported and decided on, not repeated hopefully.
+ *
+ *   PUT ONLY There is no POST, PATCH or DELETE. Creating and deleting records
+ *            are outside the approved scope, so they have no implementation to
+ *            be enabled by mistake.
+ */
+export async function crmPut<T>(path: string, body: unknown): Promise<T> {
+  if (!env.CRM_WRITE_ENABLED) {
+    throw new UpstreamError('Refusing to write to NXT Sales: CRM_WRITE_ENABLED is off.', {
+      retryable: false,
+      details: { path },
+    })
+  }
+
+  // Checked here as well as in the write gate. This is the last code before the
+  // wire, and a guard only at the top protects only the callers that go through
+  // the top. Signing a live write with the wrong id cannot be undone: NXT Sales
+  // checks the signature alone, so the CRM would record the change against
+  // whoever that id names.
+  try {
+    assertServiceIdentity()
+  } catch (err) {
+    throw new UpstreamError((err as Error).message, { retryable: false, details: { path } })
+  }
+
+  return limit(async () => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), env.NXT_SALES_TIMEOUT_MS)
+    try {
+      const res = await fetch(`${env.NXT_SALES_BASE_URL}${path}`, {
+        method: 'PUT',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${serviceToken()}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        // A 400 here is almost always an unlisted dropdown option. Say so,
+        // because "NXT Sales 400" alone sends someone reading logs nowhere.
+        const hint =
+          res.status === 400
+            ? ' The most likely cause is a value the target field does not accept — check the dropdown options.'
+            : ''
+        throw new UpstreamError(`NXT Sales ${res.status} on PUT ${path}.${hint}`, {
+          // Never retryable. See the note above.
+          retryable: false,
+          details: { status: res.status, body: text.slice(0, 400) },
+        })
+      }
+      return (await res.json()) as T
+    } catch (err) {
+      if (err instanceof UpstreamError) throw err
+      if ((err as Error).name === 'AbortError') {
+        throw new UpstreamError(`NXT Sales timed out on PUT ${path}. The write may or may not have landed.`, {
+          retryable: false,
+        })
+      }
+      throw new UpstreamError(`NXT Sales unreachable on PUT ${path}`, {
+        retryable: false,
+        details: { message: (err as Error).message },
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+}
+
+/** Same as crmGet but resolves to null on 404 instead of throwing. */
+export async function crmGetOrNull<T>(path: string, params: QueryParams = {}): Promise<T | null> {
+  try {
+    return await crmGet<T>(path, params)
+  } catch (err) {
+    const status = (err as UpstreamError)?.details as { status?: number } | undefined
+    if (status?.status === 404) return null
+    throw err
+  }
+}

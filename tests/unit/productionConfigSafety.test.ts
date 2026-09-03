@@ -1,0 +1,112 @@
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+
+// HARDENING — the production configuration guards.
+//
+// Two development bypasses exist, each disabling a rule that stops an
+// unreviewed document reaching a customer:
+//
+//   WORKBENCH_ALLOW_UNAPPROVED  — a Workbench from an unapproved report
+//   REPORT_ALLOW_UNAPPROVED     — a customer PDF from an unapproved report,
+//                                 and without the configured legal disclaimer
+//
+// Both are refused at process start under NODE_ENV=production. That guard was
+// written but never tested, which is a poor state for a control whose whole
+// job is to fire on a day nobody is watching.
+//
+// These tests SPAWN A REAL PROCESS. Importing the config module in-process
+// would run `process.exit(1)` inside the test runner, and a guard asserted by
+// reading the source is not a guard that has been shown to work.
+
+const ROOT = fileURLToPath(new URL('../..', import.meta.url))
+
+/** Loads the config in a child process and reports how it ended. */
+function loadConfig(env: Record<string, string>): { code: number; output: string } {
+  try {
+    const out = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', "await import('./src/config/env.ts'); console.log('CONFIG_LOADED')"],
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          // A complete-enough environment that only the flag under test decides
+          // the outcome.
+          MARKETING_DATABASE_URL: process.env.MARKETING_DATABASE_URL ?? 'postgresql://u:p@127.0.0.1:5434/x',
+          JWT_SECRET: 'test-secret-value-at-least-16-chars',
+          NODE_OPTIONS: '--import tsx',
+          ...env,
+        },
+      },
+    )
+    return { code: 0, output: out }
+  } catch (err) {
+    const e = err as { status?: number; stdout?: string; stderr?: string }
+    return { code: e.status ?? -1, output: `${e.stdout ?? ''}${e.stderr ?? ''}` }
+  }
+}
+
+describe('development bypasses are refused in production', () => {
+  it('refuses WORKBENCH_ALLOW_UNAPPROVED in production', () => {
+    const r = loadConfig({ NODE_ENV: 'production', WORKBENCH_ALLOW_UNAPPROVED: 'true' })
+    expect(r.code).toBe(1)
+    expect(r.output).toMatch(/WORKBENCH_ALLOW_UNAPPROVED is a development-only flag/)
+    expect(r.output).not.toContain('CONFIG_LOADED')
+  })
+
+  it('refuses REPORT_ALLOW_UNAPPROVED in production', () => {
+    // The workbench flag is explicitly disabled here: it is currently TRUE in
+    // the project's .env, its guard runs first, and it would exit before this
+    // one was ever reached — which would make this test pass for the wrong
+    // reason.
+    const r = loadConfig({
+      NODE_ENV: 'production',
+      WORKBENCH_ALLOW_UNAPPROVED: 'false',
+      REPORT_ALLOW_UNAPPROVED: 'true',
+    })
+    expect(r.code).toBe(1)
+    expect(r.output).toMatch(/REPORT_ALLOW_UNAPPROVED is a development-only flag/)
+    expect(r.output).not.toContain('CONFIG_LOADED')
+  })
+
+  it('explains what the flag would have allowed', () => {
+    const r = loadConfig({ NODE_ENV: 'production', WORKBENCH_ALLOW_UNAPPROVED: 'true' })
+    expect(r.output).toMatch(/approved in Task #980/)
+  })
+
+  it('starts in production when both flags are off', () => {
+    const r = loadConfig({ NODE_ENV: 'production', WORKBENCH_ALLOW_UNAPPROVED: 'false', REPORT_ALLOW_UNAPPROVED: 'false' })
+    expect(r.output).toContain('CONFIG_LOADED')
+    expect(r.code).toBe(0)
+  })
+
+  it('keeps the development capability outside production', () => {
+    // The point is not to remove the bypass — it is deliberately useful
+    // locally. It must simply be impossible to ship.
+    const r = loadConfig({ NODE_ENV: 'development', WORKBENCH_ALLOW_UNAPPROVED: 'true', REPORT_ALLOW_UNAPPROVED: 'true' })
+    expect(r.output).toContain('CONFIG_LOADED')
+    expect(r.code).toBe(0)
+  })
+})
+
+describe('the configuration does not depend on accidental shell overrides', () => {
+  it('reads its database from configuration, not from an inherited variable', () => {
+    // A stray DATABASE_URL in the shell belongs to NXT Sales. The marketing
+    // agent must not silently adopt it.
+    const r = loadConfig({
+      NODE_ENV: 'development',
+      DATABASE_URL: 'postgresql://someone:else@127.0.0.1:9999/not_ours',
+    })
+    expect(r.output).toContain('CONFIG_LOADED')
+  })
+
+  it('fails loudly when its own required variable is absent', () => {
+    const r = loadConfig({ NODE_ENV: 'development', MARKETING_DATABASE_URL: '' })
+    expect(r.code).toBe(1)
+    expect(r.output).not.toContain('CONFIG_LOADED')
+  })
+})

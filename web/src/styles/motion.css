@@ -1,0 +1,304 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   The motion system.
+   ─────────────────────────────────────────────────────────────────────────
+   One vocabulary of movement, shared by twelve engines. Timings come from the
+   token scale, never from a number typed at the call site, so the whole
+   application moves at one tempo.
+
+   The rule every animation here obeys: motion carries no information on its
+   own. A running job is a spinner AND the word "Running"; a blocked sync is a
+   still amber dot AND the word "Blocked". Turning the motion off costs a
+   viewer nothing but the atmosphere.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Entrances ──────────────────────────────────────────────────────────── */
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The page transition between engines: a short crossfade with a slight lift.
+   Fast enough that navigation never feels gated on it. */
+.route-enter {
+  animation: fade-up var(--t-calm) var(--ease-out) both;
+}
+
+/* NodeReveal — items arriving one after another rather than all at once.
+   Each element sets --i to its index. */
+.node-reveal {
+  animation: fade-up var(--t-calm) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+/* ── AgentPulse — the platform's own heartbeat ──────────────────────────── */
+
+@keyframes agent-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.045);
+  }
+}
+
+@keyframes agent-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes agent-burst {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  35% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.85);
+  }
+}
+
+@keyframes agent-attention {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  30% {
+    opacity: 1;
+  }
+  60% {
+    opacity: 0.6;
+  }
+}
+
+/* ── StatusPulse ────────────────────────────────────────────────────────── */
+
+@keyframes status-ring {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+@keyframes status-confirm {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ── ScanLine — the audit signature ─────────────────────────────────────── */
+
+@keyframes scan-sweep {
+  0% {
+    transform: translateY(-8%);
+    opacity: 0;
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(108%);
+    opacity: 0;
+  }
+}
+
+/* ── SignalPulse — the intent signature ─────────────────────────────────── */
+
+@keyframes signal-travel {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes signal-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+/* ── DataFlow / SyncFlow — travelling payload ───────────────────────────── */
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -240;
+  }
+}
+
+@keyframes flow-particle {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  10%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/* ── ScoreFill — the scoring signature ──────────────────────────────────── */
+
+@keyframes score-sweep {
+  from {
+    stroke-dashoffset: var(--circumference);
+  }
+  to {
+    stroke-dashoffset: var(--target-offset);
+  }
+}
+
+@keyframes count-glow {
+  0%,
+  100% {
+    text-shadow: 0 0 22px rgba(var(--accent-rgb), 0.32);
+  }
+  50% {
+    text-shadow: 0 0 34px rgba(var(--accent-rgb), 0.5);
+  }
+}
+
+/* ── ThresholdCross — the qualification signature ───────────────────────── */
+
+@keyframes threshold-cross {
+  0% {
+    opacity: 0;
+    transform: translateX(-14px) scale(0.94);
+  }
+  60% {
+    opacity: 1;
+    transform: translateX(2px) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes threshold-halo {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 0.75;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+/* ── BeforeAfterReveal — the workbench signature ────────────────────────── */
+
+@keyframes wipe-in {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes field-lift {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Skeletons ──────────────────────────────────────────────────────────── */
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-raised) 0%,
+    var(--bg-hover) 45%,
+    var(--bg-raised) 90%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s linear infinite;
+  border-radius: var(--r-sm);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Under reduced motion every loop above resolves to its resting frame. The
+   global stylesheet collapses durations; these rules make sure nothing is
+   left invisible by an entrance that never ran.
+   ───────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .node-reveal,
+  .route-enter {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .skeleton {
+    animation: none !important;
+    background: var(--bg-raised);
+  }
+}

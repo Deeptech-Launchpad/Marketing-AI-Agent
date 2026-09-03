@@ -1,0 +1,64 @@
+/* Signature-motion containers. The canvases fill their parent and never
+   capture pointer events — they sit behind the real content. */
+
+.sig {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.sig canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sig--radar {
+  aspect-ratio: 1;
+  max-height: 100%;
+}
+
+.sig--wave,
+.sig--timeline,
+.sig--sync,
+.sig--sequence {
+  min-height: 64px;
+}
+
+/* Enrichment's layered plates: an isometric stack that assembles itself. */
+.sig-layers {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 132px;
+  perspective: 620px;
+}
+
+.sig-layers__plate {
+  position: absolute;
+  width: 132px;
+  height: 62px;
+  border: 1px solid;
+  border-radius: 6px;
+  transform: rotateX(58deg) rotateZ(-42deg) translateZ(calc(var(--i) * 26px));
+  animation: layer-settle var(--t-slow) var(--ease-out) both;
+  animation-delay: calc(var(--i) * 130ms);
+}
+
+@keyframes layer-settle {
+  from {
+    opacity: 0;
+    transform: rotateX(58deg) rotateZ(-42deg) translateZ(calc(var(--i) * 26px + 34px));
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sig-layers__plate {
+    animation: none;
+    opacity: 1;
+  }
+}

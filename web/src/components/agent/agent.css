@@ -1,0 +1,173 @@
+/* The Agent Identity — five states, one mark.
+   Each state changes colour and ring behaviour; the shape never changes, so
+   the mark stays recognisable as the platform's own. */
+
+.agent {
+  --agent-hi: var(--accent);
+  --agent-lo: color-mix(in srgb, var(--accent) 55%, var(--info));
+  --agent-glow: rgba(var(--accent-rgb), 0.4);
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  position: relative;
+  line-height: 0;
+}
+
+.agent svg {
+  overflow: visible;
+}
+
+/* ── Shared geometry ────────────────────────────────────────────────────── */
+
+.agent__halo {
+  fill: var(--agent-glow);
+  opacity: 0.16;
+  filter: blur(6px);
+  transform-origin: 60px 60px;
+}
+
+.agent__track {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 4;
+  opacity: 0.55;
+}
+
+.agent__ring {
+  fill: none;
+  stroke: var(--agent-hi);
+  stroke-width: 4;
+  stroke-linecap: round;
+  opacity: 0;
+  transform-origin: 60px 60px;
+  filter: drop-shadow(0 0 4px var(--agent-glow));
+}
+
+.agent__chevron {
+  transform-origin: 60px 60px;
+  filter: drop-shadow(0 0 5px var(--agent-glow));
+}
+
+.agent__orbit {
+  transform-origin: 60px 60px;
+  opacity: 0;
+}
+
+.agent__particle {
+  fill: var(--agent-hi);
+  filter: drop-shadow(0 0 5px var(--agent-glow));
+}
+
+.agent__burst {
+  fill: none;
+  stroke: var(--agent-hi);
+  stroke-width: 3;
+  opacity: 0;
+  transform-origin: 60px 60px;
+}
+
+/* ── IDLE — almost still. A slow breath and nothing more. ───────────────── */
+
+.agent--idle .agent__halo {
+  animation: agent-breathe calc(var(--t-ambient) * 1.6) var(--ease-in-out) infinite;
+}
+.agent--idle .agent__chevron {
+  opacity: 0.92;
+}
+
+/* ── THINKING — a small orbit and a softer pulse. ───────────────────────── */
+
+.agent--thinking .agent__halo {
+  animation: agent-breathe calc(var(--t-ambient) * 0.7) var(--ease-in-out) infinite;
+  opacity: 0.24;
+}
+.agent--thinking .agent__orbit {
+  opacity: 1;
+  animation: agent-orbit calc(var(--t-ambient) * 1.1) linear infinite;
+}
+.agent--thinking .agent__ring {
+  opacity: 0.4;
+}
+
+/* ── RUNNING — controlled energy: a travelling arc and a faster orbit. ──── */
+
+.agent--running .agent__halo {
+  opacity: 0.3;
+  animation: agent-breathe calc(var(--t-ambient) * 0.45) var(--ease-in-out) infinite;
+}
+.agent--running .agent__ring {
+  opacity: 1;
+  animation: agent-orbit calc(var(--t-ambient) * 0.55) linear infinite;
+}
+.agent--running .agent__orbit {
+  opacity: 1;
+  animation: agent-orbit calc(var(--t-ambient) * 0.75) linear infinite;
+}
+
+/* ── SUCCESS — one expansion, then settle. ──────────────────────────────── */
+
+.agent--success {
+  --agent-hi: var(--ok);
+  --agent-lo: var(--ok);
+  --agent-glow: var(--ok-line);
+}
+.agent--success .agent__ring {
+  opacity: 1;
+  stroke-dasharray: none !important;
+}
+.agent--success .agent__burst {
+  animation: agent-burst var(--t-slow) var(--ease-out) 1;
+}
+.agent--success .agent__halo {
+  animation: agent-breathe calc(var(--t-ambient) * 1.6) var(--ease-in-out) infinite;
+  opacity: 0.26;
+}
+
+/* ── ERROR — a short, restrained attention pulse. Never continuous. ─────── */
+
+.agent--error {
+  --agent-hi: var(--danger);
+  --agent-lo: var(--danger-text);
+  --agent-glow: var(--danger-line);
+}
+.agent--error .agent__ring {
+  opacity: 1;
+  stroke-dasharray: none !important;
+}
+.agent--error .agent__halo {
+  opacity: 0.3;
+  /* Three pulses and it stops — an error that throbs forever is noise. */
+  animation: agent-attention var(--t-ambient) var(--ease-in-out) 3;
+}
+
+/* ── Reduced motion — the mark holds a clear resting frame. ─────────────── */
+
+.agent--still .agent__halo,
+.agent--still .agent__ring,
+.agent--still .agent__orbit,
+.agent--still .agent__burst,
+.agent--still .agent__chevron {
+  animation: none !important;
+}
+.agent--still .agent__ring {
+  opacity: 1;
+}
+.agent--still.agent--thinking .agent__orbit,
+.agent--still.agent--running .agent__orbit {
+  opacity: 1;
+}
+
+/* ── The mark with its state in words ───────────────────────────────────── */
+
+.agent-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.agent-status__label {
+  font-size: var(--fs-sm);
+  color: var(--text-soft);
+}

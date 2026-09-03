@@ -1,0 +1,81 @@
+.signin {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--s6);
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 0%, rgba(var(--accent-rgb), 0.08), transparent 70%),
+    var(--bg-void);
+}
+
+.signin__panel {
+  width: 100%;
+  max-width: 380px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  padding: var(--s8);
+  box-shadow: var(--shadow-lg);
+  animation: fade-up var(--t-slow) var(--ease-out);
+}
+
+.signin__brand { margin-bottom: var(--s6); }
+
+.signin__intro { display: flex; align-items: center; gap: var(--s4); margin-bottom: var(--s6); }
+.signin__title { font-size: var(--fs-h1); font-weight: 700; }
+.signin__sub { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 2px; }
+
+.signin__form { display: flex; flex-direction: column; gap: var(--s2); }
+
+.signin__label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: var(--s3);
+}
+
+.signin__input {
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 9px var(--s3);
+  font-size: var(--fs-body);
+  transition: border-color var(--t-instant) var(--ease-out);
+}
+.signin__input:focus { border-color: var(--accent); outline: none; }
+
+.signin__error {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-line);
+  color: var(--danger-text);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.signin__form .btn { margin-top: var(--s5); justify-content: center; }
+
+.signin__foot {
+  margin-top: var(--s6);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line-faint);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+.boot {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s4);
+  background: var(--bg-void);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
