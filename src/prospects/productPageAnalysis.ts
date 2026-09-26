@@ -18,6 +18,8 @@ import { linkPriority } from '../websiteaudit/pageClassifier.js'
 import { assessPdpPage, productLinksOn } from '../websiteaudit/pdpTarget.js'
 import { registrableDomain } from '../enrichment/siteIdentity.js'
 import { readProductWithModel, type ProductReader, type VerifiedRead } from './productReader.js'
+import { readBreadcrumb, readProductPageDetails, readableHtml, type ProductPageDetails } from './productPageDetails.js'
+import { addressPageLink, locationsOnPage, placeCompany, shortLocation, stateInObjective, type CompanyLocation } from './companyLocation.js'
 import { hostOf, normalizeUrlForDedup, resolveLink, sameSite } from '../websiteaudit/urls.js'
 
 // PROSPECT DISCOVERY — ONE COMPANY, ONE GENUINE PRODUCT, ONE ANSWER.
@@ -106,6 +108,11 @@ export interface ProductPageAnalysis {
     attributes: ProductAttribute[]
     /** Feature statements the page lists, verbatim. */
     featureBullets?: string[]
+    /**
+     * The page as a buyer sees it — pictures, price and how it is sold,
+     * buying options, downloads. Absent on rows analysed before 2026-09-26.
+     */
+    page?: ProductPageDetails
     /** How the page was read: by rule only, or also by a verified read of its text. */
     readBy?: string
     /** How the product's information is built. */
@@ -134,6 +141,8 @@ export interface ProductPageAnalysis {
   whyNeeded: string | null
   /** What the Marketing Agent should do next. */
   nextStep: string | null
+  /** Where the company is, as its own website (or the listing that named it) states. Absent when no page stated it. */
+  companyLocation?: CompanyLocation | null
 }
 
 /** A result with nothing analysed, for every way the analysis can stop short. */
@@ -217,6 +226,17 @@ export async function analyseCompanyWebsite(input: {
   read?: ProductReader | null
   tenantId?: string
 }): Promise<ProductPageAnalysis> {
+  // Where the company is, as its own pages state it — kept on every result
+  // that got as far as the website, analysed or not.
+  const found: { location: CompanyLocation | null } = { location: null }
+  const result = await analyseWebsite(input, found)
+  return found.location ? { ...result, companyLocation: found.location } : result
+}
+
+async function analyseWebsite(
+  input: Parameters<typeof analyseCompanyWebsite>[0],
+  found: { location: CompanyLocation | null },
+): Promise<ProductPageAnalysis> {
   const fetchPage: Fetcher = input.fetch ?? ((url, opts) => fetchPageRaw(url, opts))
   const reader = input.read === undefined ? readProductWithModel : input.read
   const pagesChecked: ProductPageAnalysis['pagesChecked'] = []
@@ -276,6 +296,33 @@ export async function analyseCompanyWebsite(input: {
   let homeHtml = home.html
   let homeUrl = home.finalUrl ?? input.websiteUrl
   pagesChecked.push({ url: homeUrl, outcome: 'homepage opened' })
+
+  // ── Where the company is ──────────────────────────────────────────────
+  // The homepage's own address, or — when it states none — its contact or
+  // locations page: one extra request, outside the product budget.
+  let locations = locationsOnPage(homeHtml, homeUrl)
+  let locationText = htmlToText(homeHtml)
+  if (locations.length === 0) {
+    const contact = addressPageLink(homeHtml, homeUrl)
+    if (contact) {
+      const page = await fetchPage(contact).catch(() => null)
+      if (page?.ok && page.html && !blockedBy(page)) {
+        locations = locationsOnPage(page.html, page.finalUrl ?? contact)
+        locationText += `\n${htmlToText(page.html)}`
+        pagesChecked.push({ url: page.finalUrl ?? contact, outcome: locations.length ? 'contact page opened — address read' : 'contact page opened — no address stated' })
+      }
+    }
+  }
+  const area = stateInObjective(input.objective)
+  const placed = placeCompany(locations, area, locationText)
+  found.location = placed.location
+  if (placed.outsideArea && placed.location && area) {
+    return notAnalysed(
+      'not_relevant',
+      `The company's own website places it in ${shortLocation(placed.location)} — outside ${area.name}, the area the search asked for — so its products were not checked.`,
+      { websiteUrl: homeUrl, pagesChecked },
+    )
+  }
 
   // A global homepage that only offers a choice of country ("msasafety.com/
   // global") holds no catalogue; the company's products live on its regional
@@ -376,6 +423,8 @@ export async function analyseCompanyWebsite(input: {
       const genuine = genuineProduct(fetched.html, pageUrl, check.productName)
       if (genuine.ok) {
         pagesChecked.push({ url: pageUrl, outcome: `individual product — "${check.productName}" (${genuine.evidence})` })
+        // A footer address on the product page, when the homepage stated none.
+        found.location ??= placeCompany(locationsOnPage(fetched.html, pageUrl), area, locationText).location
         const modelRead = reader ? await reader({ pageText: productText(fetched.html), url: pageUrl, tenantId: input.tenantId }) : null
         return analyseProductPage({
           html: fetched.html,
@@ -632,6 +681,10 @@ export function genuineProduct(
   const other = NON_PRODUCT_TYPES.find((t) => nodes.some(({ node }) => hasType(node, t)))
   if (other && products.length === 0) return { ok: false, reason: `the page declares itself a ${other}, not a product` }
   if (products.length > 3) return { ok: false, reason: `the page declares ${products.length} products — it is a listing` }
+  // The same declaration in microdata: a catalogue's "View Items" page marks
+  // each of its rows as its own Product, where a product page marks one.
+  const microdataProducts = html.match(/itemtype\s*=\s*["']https?:\/\/schema\.org\/(?:Product|IndividualProduct|ProductModel)["']/gi)?.length ?? 0
+  if (microdataProducts > 3) return { ok: false, reason: `the page declares ${microdataProducts} products — it is a listing` }
 
   const text = htmlToText(html)
   if (/\bfrequently asked questions\b/i.test(text.slice(0, 400))) return { ok: false, reason: 'it is an FAQ page' }
@@ -715,7 +768,10 @@ export function analyseProductPage(input: {
   /** What a careful read of the page's own text found, already checked against that text. */
   modelRead?: VerifiedRead | null
 }): ProductPageAnalysis {
-  const { html, url } = input
+  const { url } = input
+  // What a person actually sees: no commented-out blocks, no hidden
+  // placeholder text glued onto values.
+  const html = readableHtml(input.html)
   const modelRead = input.modelRead ?? null
   const observations = [...extractPageObservations(html, url), ...extractProductObservations(html, url)]
   const observed = (field: string): string | null => {
@@ -732,7 +788,9 @@ export function analyseProductPage(input: {
     .map((t) => t.trim())
     .filter(Boolean)
   const words = Number(observed('page.wordCount')) || wordCount(html)
-  const specPairs = extractSpecPairs(html, 80).filter((p) => !/cookie|consent|duration|provider|expiry/i.test(`${p.key} ${p.value}`))
+  const specPairs = extractSpecPairs(html, 80).filter(
+    (p) => !/cookie|consent|duration|provider|expiry/i.test(`${p.key} ${p.value}`) && !SITE_FURNITURE_KEY.test(p.key.replace(/\s*[:：]\s*$/, '').trim()),
+  )
   // Specs a custom layout keeps outside tables, found by the careful read and
   // verified against the page, count exactly like a table row.
   const readPairs = (modelRead?.attributes ?? []).map((a) => ({ key: a.name, value: a.value }))
@@ -742,14 +800,28 @@ export function analyseProductPage(input: {
 
   // The record's title falls back to the URL path when no name field was
   // extracted; the heading-and-title name the PDP check read is better than that.
-  const rawName = record.fields.find((f) => f.field === 'product.name')?.before ?? input.productName ?? record.title
+  //
+  // A name that is not the page's JSON-LD declaration is only trusted when it
+  // agrees with the heading: microdata "name" is also used by breadcrumbs, and
+  // one page's product came out as "All Categories".
+  const nameField = record.fields.find((f) => f.field === 'product.name')
+  const h1 = extractHeadings(html).find((h) => h.level === 1)?.text ?? null
+  const declaredName = nameField?.before ?? null
+  const rawName =
+    declaredName && (nameField?.method === 'json_ld' || !h1 || sharesWords(declaredName, h1))
+      ? declaredName
+      : h1 ?? input.productName ?? declaredName ?? record.title
   const productName = clip(plainText(rawName), 140)
 
   // The extractor reads a description from declared fields; many sites put
   // theirs in their own layout, and saying "no description" about a page that
   // has one would be a false finding. So the product's own copy after its
-  // heading is read too, and the page's meta description last.
-  const description = descriptionOf(record) ?? modelRead?.description ?? descriptionFromPage(html)
+  // heading is read too, and the page's meta description last. A catalogue's
+  // SEO line ("Browse Item # … in the catalog including Item #, Item Name, …")
+  // lists field names, not the product, and is not a description.
+  const description = [descriptionOf(record), modelRead?.description ?? null, descriptionFromPage(html)].find(
+    (d): d is string => Boolean(d) && !isBoilerplateDescription(d!),
+  ) ?? null
   const sentences = description ? description.split(/[.!?](\s|$)/).filter((s) => s && s.trim().length > 20).length : 0
 
   const facts = readFacts(record, allPairs, attributes, structuredData, observed('page.breadcrumbs'), {
@@ -779,10 +851,25 @@ export function analyseProductPage(input: {
       imageUrl: record.imageUrl,
       brand: fieldValue(record, 'product.brand'),
       sku: fieldValue(record, 'product.sku') ?? facts.codeValue,
-      category: observed('page.breadcrumbs') ?? fieldValue(record, 'product.category'),
+      category: observed('page.breadcrumbs') ?? fieldValue(record, 'product.category') ?? readBreadcrumb(html),
       price: fieldValue(record, 'product.price'),
       attributes,
       featureBullets,
+      page: readProductPageDetails({
+        html,
+        url,
+        declared: {
+          imageUrl: record.imageUrl,
+          price: fieldValue(record, 'product.price') ?? observed('product.price'),
+          currency: observed('product.currency'),
+          availability: observed('product.availability'),
+          sku: fieldValue(record, 'product.sku') ?? facts.codeValue,
+          mpn: fieldValue(record, 'product.mpn'),
+          gtin: fieldValue(record, 'product.gtin'),
+          brand: fieldValue(record, 'product.brand'),
+        },
+        specPairs: allPairs,
+      }),
       readBy: modelRead ? 'rules and a verified text read' : 'rules',
       structure: {
         structuredData,
@@ -1098,6 +1185,24 @@ function attributesOf(
   return out
 }
 
+/** Site-wide contact and registration rows that sit in footers, not product specifications. */
+const SITE_FURNITURE_KEY = /^(tel|telephone|phone|fax|e-?mail|address|cage(?: code)?|duns|hours|opening hours|toll[- ]free|call us|customer service)$/i
+
+/** Two names describe the same thing when they share at least two real words. */
+function sharesWords(a: string, b: string): boolean {
+  const words = (s: string) => new Set(plainText(s).toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])
+  const bw = words(b)
+  return [...words(a)].filter((w) => bw.has(w)).length >= 2
+}
+
+/** A catalogue's SEO line — "Browse …", or a list of field names — rather than words about the product. */
+export function isBoilerplateDescription(text: string): boolean {
+  const t = plainText(text)
+  if (/^(browse|shop|buy|view|explore|discover)\b[\s\S]{0,250}\b(catalog|catalogue|range|selection|collection)\b/i.test(t)) return true
+  if (/\bincluding\s+([^,.]{1,25},\s*){4,}/i.test(t)) return true
+  return false
+}
+
 function descriptionOf(record: EnrichedRecord): string | null {
   const raw = record.fields.find((f) => f.field === 'product.description')?.before
   const text = raw ? plainText(raw) : ''
@@ -1201,9 +1306,31 @@ function productLinksBelow(html: string, pageUrl: string, max = 80): string[] {
     if (k === here || out.some((u) => key(u) === k) || nonProductPath(abs)) return
     out.push(abs)
   }
+  // A listing that declares its products names each one's own page: those
+  // links first, ahead of the listing's email / print / sort links.
+  declaredProductLinks(html).forEach(push)
   extractProductTileLinks(html, 40).forEach(push)
   for (const l of extractLinks(html, 600)) {
     if (/\/(products?|item|sku|pd|pdp|p)\/[^/?#]+/i.test(l.href) || modelToken(resolveLink(l.href, pageUrl) ?? '')) push(l.href)
+  }
+  return out
+}
+
+/**
+ * The page of each product a listing declares: the first link inside each
+ * microdata Product block, and the url of each JSON-LD Product. In the
+ * listing's own order.
+ */
+export function declaredProductLinks(html: string, max = 20): string[] {
+  const out: string[] = []
+  const starts = [...html.matchAll(/itemtype\s*=\s*["']https?:\/\/schema\.org\/(?:Product|IndividualProduct|ProductModel)["']/gi)].map((m) => m.index!)
+  starts.forEach((start, i) => {
+    const block = html.slice(start, Math.min(starts[i + 1] ?? html.length, start + 6000))
+    const own = block.match(/itemprop\s*=\s*["']url["'][^>]*\s(?:href|content)\s*=\s*["']([^"']+)["']/i)?.[1] ?? extractLinks(block, 5)[0]?.href
+    if (own && out.length < max) out.push(own)
+  })
+  for (const { node } of jsonLdNodes(extractJsonLd(html))) {
+    if (hasType(node, 'Product', 'IndividualProduct', 'ProductModel') && typeof node.url === 'string' && out.length < max) out.push(node.url)
   }
   return out
 }

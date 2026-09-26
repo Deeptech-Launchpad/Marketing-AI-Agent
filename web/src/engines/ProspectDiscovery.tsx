@@ -5,11 +5,12 @@ import { useAsync, useEngineAction, usePolling } from '../lib/hooks'
 import { useEngine, EnginePage, EngineSplit, type EngineCompletion } from '../components/shell/EnginePage'
 import { useAuth } from '../lib/auth'
 import { useCompany, type CompanyRef } from '../lib/companyContext'
-import { ArrowRight, Building2, ChevronDown, ExternalLink, Globe, History, PackageSearch, Search, Trash2 } from 'lucide-react'
+import { ArrowRight, Building2, ChevronDown, ExternalLink, Globe, History, MapPin, Search, Trash2 } from 'lucide-react'
 import { Panel, Metric, MetricRow, Chip, Button, Field, StatusBadge, toUiStatus, Unset } from '../components/ui/primitives'
 import { EmptyState, ErrorState, LoadingState } from '../components/ui/states'
 import { RadarSweep } from '../components/motion/Signatures'
 import type { CompanyDiscoverySearch, DiscoveredCompany, ServiceNeed } from '../lib/types'
+import { ProductPageView } from './ProductPageView'
 import './prospect.css'
 
 // Prospect Discovery (#977).
@@ -501,22 +502,12 @@ function ProspectCard({ company, onSelect }: { company: DiscoveredCompany; onSel
         <span className={`found__need found__need--${company.serviceNeed}`}>
           {NEED_LABEL[company.serviceNeed === 'needed' ? 'needed' : 'possible']}
         </span>
+        <LocationLine company={company} />
       </header>
 
       {company.websiteSummary && <p className="found__about">{company.websiteSummary}</p>}
 
-      <div className="found__product">
-        <PackageSearch size={13} aria-hidden="true" />
-        <div className="found__productbody">
-          <span className="found__label">The one product analysed</span>
-          <a className="found__productname" href={product.url} target="_blank" rel="noopener noreferrer">
-            {product.name}
-          </a>
-          <span className="found__producturl" title={product.url}>
-            {product.url}
-          </span>
-        </div>
-      </div>
+      <ProductPageView product={product} />
 
       {a.whyNeeded && (
         <div className="found__block">
@@ -575,25 +566,9 @@ function ProspectCard({ company, onSelect }: { company: DiscoveredCompany; onSel
       )}
 
       <details className="found__details">
-        <summary>Product details</summary>
-        {product.featureBullets && product.featureBullets.length > 0 && (
-          <div className="found__block">
-            <span className="found__label">Feature points, as published</span>
-            <ul className="found__facts">
-              {product.featureBullets.map((b) => (
-                <li key={b}>{b}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {product.description && (
-          <div className="found__block">
-            <span className="found__label">Product description, as published</span>
-            <p className="found__text">{product.description}</p>
-          </div>
-        )}
+        <summary>How the product was read</summary>
         <div className="found__block">
-          <span className="found__label">Attributes and values</span>
+          <span className="found__label">Attributes and where each was read</span>
           {product.attributes.length === 0 ? (
             <p className="found__text">The page publishes no attributes a buyer could filter on.</p>
           ) : (
@@ -810,6 +785,23 @@ function day(at: string): string {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
+/**
+ * Where the company is — "Akron, OH" — as its own website or the listing that
+ * named it states; the full address and where it was read are one hover away.
+ * Nothing is shown when no page stated an address.
+ */
+function LocationLine({ company }: { company: DiscoveredCompany }) {
+  const l = company.productAnalysis?.companyLocation
+  if (!l) return null
+  const short = [l.city, l.region].filter(Boolean).join(', ') || l.text
+  return (
+    <span className="found__location" title={`${l.text} — from the ${l.source}`}>
+      <MapPin size={11} aria-hidden="true" />
+      {short}
+    </span>
+  )
+}
+
 /** One line per company, for the groups that are not opportunities. */
 function CompactGroup({
   title,
@@ -841,12 +833,15 @@ function CompactGroup({
       <ul className="found__unread">
         {shown.map((c) => {
           const link = linkOf(c)
+          // A company whose product WAS read shows that product page too.
+          const product = c.productAnalysis?.status === 'analysed' ? c.productAnalysis.product : null
           return (
-            <li key={c.id} className="found__unreadrow">
+            <li key={c.id} className={`found__unreadrow${product ? ' found__unreadrow--product' : ''}`}>
               <span className="found__unreadmain">
                 <span className="found__unreadname" title={c.discoverySourceUrl}>
                   {displayName(c)}
                 </span>
+                <LocationLine company={c} />
                 <span className="found__unreadwhy">{reasonOf(c)}</span>
               </span>
               {isSearchRedirect(link) ? (
@@ -860,6 +855,12 @@ function CompactGroup({
                 <Button variant="ghost" onClick={() => onSelect(c)}>
                   Select
                 </Button>
+              )}
+              {product && (
+                <details className="found__pdpdetails">
+                  <summary>Product page details</summary>
+                  <ProductPageView product={product} />
+                </details>
               )}
             </li>
           )

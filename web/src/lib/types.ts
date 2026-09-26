@@ -78,6 +78,30 @@ export interface DiscoveredCompany {
 export type ServiceNeed = 'needed' | 'possible' | 'not_needed' | 'not_assessed'
 
 /** Mirrors src/prospects/productPageAnalysis.ts. */
+/** Where a company is, as its own website or the listing that named it states. Mirrors src/prospects/companyLocation.ts. */
+export interface CompanyLocation {
+  text: string
+  city: string | null
+  region: string | null
+  postalCode: string | null
+  country: string | null
+  source: string
+  sourceUrl: string
+}
+
+/** What a buyer sees on the product page, read verbatim. Mirrors src/prospects/productPageDetails.ts. */
+export interface ProductPageDetails {
+  title: string | null
+  images: string[]
+  identifiers: Array<{ label: string; value: string }>
+  price: { amount: string; currency: string | null; label: string | null; source: 'structured data' | 'page text' } | null
+  priceNote: string | null
+  availability: string | null
+  ordering: Array<{ label: string; value: string }>
+  buyingOptions: string[]
+  downloads: Array<{ label: string; url: string; fileType: string | null }>
+}
+
 export interface ProductPageAnalysis {
   status:
     | 'analysed'
@@ -107,6 +131,8 @@ export interface ProductPageAnalysis {
     attributes: Array<{ name: string; value: string; source: string }>
     featureBullets?: string[]
     readBy?: string
+    /** The page as a buyer sees it. Absent on products analysed before 2026-09-26. */
+    page?: ProductPageDetails
     structure: {
       structuredData: string[]
       fieldsPublished: number
@@ -133,9 +159,11 @@ export interface ProductPageAnalysis {
   serviceNeed: ServiceNeed
   whyNeeded: string | null
   nextStep: string | null
+  /** Absent on searches before 2026-09-26, and when no page stated an address. */
+  companyLocation?: CompanyLocation | null
 }
 
-// ── Enrichment (#977) ───────────────────────────────────────────────────
+// ── Enrichment (#977)───────────────────────────────────────────────────
 export interface EnrichmentRow {
   id: string
   crmCompanyId: string

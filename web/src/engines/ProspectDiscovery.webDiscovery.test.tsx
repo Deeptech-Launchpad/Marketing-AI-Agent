@@ -86,6 +86,22 @@ const company = (over: Record<string, unknown>) => ({
 
 const ACME_PRODUCT = 'https://acmesafety.test/products/titan-hard-hat-x200'
 
+// The product page as the buyer sees it, as src/prospects/productPageDetails.ts reads it.
+const ACME_PAGE = {
+  title: 'Titan Hard Hat X200',
+  images: ['https://acmesafety.test/img/x200.png'],
+  identifiers: [{ label: 'SKU', value: 'X200-WHT' }],
+  price: { amount: '24.99', currency: 'USD', label: 'List Price', source: 'structured data' },
+  priceNote: null,
+  availability: 'In Stock',
+  ordering: [
+    { label: 'Minimum order quantity', value: '10' },
+    { label: 'Lot Size', value: '10' },
+  ],
+  buyingOptions: ['Add To Cart', 'Request Quote'],
+  downloads: [{ label: 'X200 Data Sheet', url: 'https://acmesafety.test/docs/x200.pdf', fileType: 'PDF' }],
+}
+
 const COMPANIES = [
   // Deliberately out of order: the screen, not the API, groups by need.
   company({
@@ -153,11 +169,20 @@ const COMPANIES = [
     serviceNeed: 'needed',
     productAnalysis: analysis({
       websiteUrl: 'https://acmesafety.test/',
+      companyLocation: {
+        text: '1000 E Market St, Akron, OH 44305',
+        city: 'Akron',
+        region: 'OH',
+        postalCode: '44305',
+        country: 'US',
+        source: 'company website (structured data)',
+        sourceUrl: 'https://acmesafety.test/',
+      },
       pagesChecked: [
         { url: 'https://acmesafety.test/', outcome: 'homepage opened' },
         { url: ACME_PRODUCT, outcome: 'product page — "Titan Hard Hat X200"' },
       ],
-      product: productOf('Titan Hard Hat X200', ACME_PRODUCT),
+      product: { ...productOf('Titan Hard Hat X200', ACME_PRODUCT), page: ACME_PAGE },
       gaps: [
         { key: 'description', severity: 'major', title: 'No product description', detail: 'The page does not describe the product.' },
         { key: 'attributes', severity: 'major', title: 'Attributes and values missing', detail: 'Only 2 attribute(s) are published.' },
@@ -327,9 +352,52 @@ describe('only real opportunities get a full card', () => {
     const needed = await card('Acme Safety Co')
 
     expect(within(needed).getByText('Acme Safety Co')).toBeInTheDocument()
-    expect(within(needed).getByText('The one product analysed')).toBeInTheDocument()
+    expect(within(needed).getByText('Product page')).toBeInTheDocument()
     expect(within(needed).getByRole('link', { name: 'Titan Hard Hat X200' })).toHaveAttribute('href', ACME_PRODUCT)
     expect(within(needed).getByText(ACME_PRODUCT)).toBeInTheDocument()
+  })
+
+  it('shows the product page as the buyer sees it: picture, price, how it is sold, buying options, downloads, specifications', async () => {
+    render(<ProspectDiscovery />)
+    const needed = await card('Acme Safety Co')
+
+    expect(within(needed).getByRole('img', { name: 'Product image: Titan Hard Hat X200' })).toHaveAttribute('src', 'https://acmesafety.test/img/x200.png')
+    expect(within(needed).getByText('List Price')).toBeInTheDocument()
+    expect(within(needed).getByText('$24.99')).toBeInTheDocument()
+    expect(within(needed).getByText('In Stock')).toBeInTheDocument()
+    expect(within(needed).getByText('Minimum order quantity')).toBeInTheDocument()
+    expect(within(needed).getByText(/Add To Cart/)).toBeInTheDocument()
+    expect(within(needed).getByText(/Request Quote/)).toBeInTheDocument()
+    expect(within(needed).getByRole('link', { name: /X200 Data Sheet/ })).toHaveAttribute('href', 'https://acmesafety.test/docs/x200.pdf')
+    expect(within(needed).getByText('Specifications')).toBeInTheDocument()
+    expect(within(needed).getAllByRole('rowheader', { name: 'Shell material' }).length).toBeGreaterThan(0)
+  })
+
+  it('shows where each company is, as its own website states, with the full address on hover', async () => {
+    render(<ProspectDiscovery />)
+    const needed = await card('Acme Safety Co')
+
+    const where = within(needed).getByText('Akron, OH')
+    expect(where.closest('.found__location')).toHaveAttribute('title', '1000 E Market St, Akron, OH 44305 — from the company website (structured data)')
+    // A company whose pages stated no address shows none — nothing is guessed.
+    const possible = await region('Possible opportunity')
+    expect(possible.querySelector('.found__location')).toBeNull()
+  })
+
+  it('says plainly when a product analysed earlier has no page details yet, instead of showing blanks', async () => {
+    render(<ProspectDiscovery />)
+    const possible = await region('Possible opportunity')
+
+    expect(within(possible).getAllByText('Not captured for this search').length).toBeGreaterThan(0)
+    expect(within(possible).getByText(/Run the search again to read them from the page/)).toBeInTheDocument()
+  })
+
+  it('offers the product page for a company with no clear need too', async () => {
+    render(<ProspectDiscovery />)
+    const none = await region('No clear need')
+
+    expect(within(none).getByText('Product page details')).toBeInTheDocument()
+    expect(within(none).getByRole('link', { name: 'Pro Respirator' })).toHaveAttribute('href', 'https://gamma.test/p/respirator')
   })
 
   it('shows the issues identified, why our service is relevant, and what the Marketing Agent should do next', async () => {
@@ -359,10 +427,10 @@ describe('only real opportunities get a full card', () => {
     render(<ProspectDiscovery />)
     const needed = await card('Acme Safety Co')
 
-    expect(within(needed).getByText('Product details')).toBeInTheDocument()
+    expect(within(needed).getByText('How the product was read')).toBeInTheDocument()
     expect(within(needed).getByText('A vented hard hat for construction sites.')).toBeInTheDocument()
-    expect(within(needed).getByRole('rowheader', { name: 'Shell material' })).toBeInTheDocument()
-    expect(within(needed).getByText('HDPE')).toBeInTheDocument()
+    expect(within(needed).getAllByRole('rowheader', { name: 'Shell material' }).length).toBeGreaterThan(0)
+    expect(within(needed).getAllByText('HDPE').length).toBeGreaterThan(0)
     expect(within(needed).getByText(/5 of 16 product-information fields published/)).toBeInTheDocument()
   })
 

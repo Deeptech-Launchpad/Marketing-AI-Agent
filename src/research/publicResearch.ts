@@ -133,7 +133,7 @@ export function looksLikeLoginWall(text: string): boolean {
  * There is no branch on which company it is, because there is nothing to
  * branch on: the same three sentences are built for every company on earth.
  */
-export type ResearchTopic = 'people' | 'business_activity' | 'hiring' | 'product_specifications' | 'external_signals'
+export type ResearchTopic = 'people' | 'business_activity' | 'hiring' | 'product_specifications' | 'external_signals' | 'community_questions'
 
 function queriesFor(topic: ResearchTopic, companyName: string, domain: string | null): string[] {
   const where = domain ? `${companyName} (${domain})` : companyName
@@ -206,6 +206,27 @@ function queriesFor(topic: ResearchTopic, companyName: string, domain: string | 
           `such as a new website, e-commerce platform or ERP. Only report pages you actually retrieved.`,
         `Find public LinkedIn posts, company updates or social media posts by or about ${where}. ` +
           `Only report pages you actually retrieved.`,
+      ]
+    case 'community_questions':
+      // The communities of "Community Engagement & Trust-Building System"
+      // (section 2) that can be read without signing in — forums and Reddit;
+      // LinkedIn and Facebook groups are manual-only by that document's own
+      // rule (section 4). Asked about THIS company and the topics of its six
+      // phrase clusters (section 3.1). Pages only, never conclusions.
+      return [
+        `Find forum threads, Reddit posts and community questions posted by people at ${where}, or about ` +
+          `${where}'s website, online catalogue or product data — on Reddit (r/ecommerce, r/TechSEO, r/SEO, ` +
+          `r/bigseo, r/shopify, r/manufacturing, r/supplychain, r/Machinists, r/AskEngineers), Google Search ` +
+          `Central Help Community, Shopify, BigCommerce, WooCommerce and Adobe Commerce (Magento) community forums, ` +
+          `Moz Community, WebmasterWorld, Eng-Tips, CR4, Practical Machinist, element14 Community and Modern ` +
+          `Distribution Management (MDM). Only report pages you actually retrieved.`,
+        `Find public questions or discussions that mention ${where} together with product data, product ` +
+          `information, structured data or schema markup, JSON-LD, Google Merchant Center feed errors, missing ` +
+          `product attributes or GTINs, PIM, catalogue data clean-up, or products not showing up in ChatGPT, Google ` +
+          `AI Overviews, Perplexity or Gemini. Only report pages you actually retrieved.`,
+        `Find public forum or community posts in which ${where} is compared with Grainger, McMaster-Carr or Amazon ` +
+          `Business on search visibility, or in which buyers say they cannot find its products or part numbers ` +
+          `online. Only report pages you actually retrieved.`,
       ]
     case 'business_activity':
       return [

@@ -5,10 +5,11 @@ import { audit } from '../platform/audit.js'
 import { prisma, newId } from '../platform/db.js'
 import { logger } from '../platform/logger.js'
 import type { PublicSource } from '../research/publicResearch.js'
-import { normalizeCompanyName } from '../decisionmakers/companyMatch.js'
+import { normalizeCompanyName, significantTokens } from '../decisionmakers/companyMatch.js'
 import { identifyCompanies, looksLikeCompanySite, readCandidatePage } from './companyIdentification.js'
 import { discoveredWebsiteDomain } from './discoveredCompanyAdapter.js'
 import { analyseCompanyWebsite, notAnalysed, type ProductPageAnalysis } from './productPageAnalysis.js'
+import { STATE_CITIES, stateInObjective, type CompanyLocation } from './companyLocation.js'
 
 // STAGE 1b — OPEN-WEB COMPANY DISCOVERY (2026-09-24 restructure; product-page
 // evidence added 2026-09-25).
@@ -45,18 +46,23 @@ import { analyseCompanyWebsite, notAnalysed, type ProductPageAnalysis } from './
 // each with the reason. Dropped candidates would make "found vs. actually
 // checked" dishonest.
 
-/** Company websites checked per search when the salesperson names no number. */
-const MAX_CANDIDATES_DEFAULT = 25
-export const MAX_CANDIDATES_HARD_CAP = 50
+/**
+ * Company websites checked per search when the salesperson names no number.
+ * Raised from 25 (2026-09-26): a map search for "electrical distributors in
+ * Ohio" lists dozens of businesses, and 25 stopped a search at a quarter of
+ * its time budget with most of its results never opened.
+ */
+const MAX_CANDIDATES_DEFAULT = 60
+export const MAX_CANDIDATES_HARD_CAP = 100
 /** References each search phrasing may return. */
 const REFERENCES_PER_QUERY = 20
 /** References read in total, across every phrasing, to identify companies. */
-const MAX_READS = 100
+const MAX_READS = 200
 /**
  * Company websites checked at the same time. Each is a different company's
  * server, and each company's own pages are still read one at a time.
  */
-const CONCURRENCY = 4
+const CONCURRENCY = 6
 /**
  * Wall-clock budget for one search. The queue gives a job fifteen minutes;
  * stopping new work at twelve leaves the companies in progress room to finish.
@@ -101,7 +107,34 @@ export function queriesFor(objective: string): string[] {
     `Find small and mid-sized companies matching: "${objective}" — regional manufacturers and distributors with ` +
       `their own websites and online product catalogues, not only the largest brands. Only report pages you ` +
       `actually retrieved.`,
+    // The way a map search finds businesses: local listings, each with an
+    // address, and the branches a distributor lists on its own site.
+    `Find local business listings for: "${objective}" — the businesses a map search would show, each with its ` +
+      `street address and city and a link to its own website. Cover every city and town in the area named, not ` +
+      `only the largest. Only report pages you actually retrieved.`,
+    `Find the "locations", "branches" or "find a store" pages of distributors and suppliers matching: ` +
+      `"${objective}", each listing its sites with their addresses. Only report pages you actually retrieved.`,
+    `Find companies matching: "${objective}" in the member directories of trade associations, chambers of ` +
+      `commerce and regional manufacturers' or buyers' guides, with links to each company's own website. Only ` +
+      `report pages you actually retrieved.`,
+    ...cityQueries(objective),
   ]
+}
+
+/**
+ * One search per major city of a US state the objective names — how a map
+ * search covers a whole state rather than only its best-known businesses.
+ * No state named, no city searches.
+ */
+export function cityQueries(objective: string): string[] {
+  const state = stateInObjective(objective)
+  if (!state) return []
+  return (STATE_CITIES[state.code] ?? []).map(
+    (city) =>
+      `Find businesses matching: "${objective}" that are located in or near ${city}, ${state.name} — each with its ` +
+      `own website and its address. Include local and independent businesses, not only national chains. Only ` +
+      `report pages you actually retrieved.`,
+  )
 }
 
 export async function startCompanyWebDiscovery(input: {
@@ -218,9 +251,14 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
         websiteSummary?: string
         fitAssessment?: { verdict: string; reasons: string[] }
         analysis: ProductPageAnalysis
+        /** The location the listing page printed, used only when the company's own website stated none. */
+        listingLocation?: CompanyLocation | null
       },
-    ) =>
-      prisma.discoveredCompany.upsert({
+    ) => {
+      if (!fields.analysis.companyLocation && fields.listingLocation) {
+        fields = { ...fields, analysis: { ...fields.analysis, companyLocation: fields.listingLocation } }
+      }
+      return prisma.discoveredCompany.upsert({
         where: { tenantId_searchId_discoverySourceUrl: { tenantId: search.tenantId, searchId, discoverySourceUrl: ref.url } },
         create: {
           id: newId(),
@@ -242,6 +280,7 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
         },
         update: {},
       })
+    }
 
     // One row per company name when no website could be confirmed, so the
     // same company named on ten pages is listed once, not ten times.
@@ -256,7 +295,7 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
      */
     const checkCompany = async (
       rowRef: PublicSource,
-      c: { companyName: string; site: string; summary?: string; fit?: { verdict: string; reasons: string[] } },
+      c: { companyName: string; site: string; summary?: string; fit?: { verdict: string; reasons: string[] }; location?: CompanyLocation | null },
     ): Promise<void> => {
       const websiteUrl = `https://${c.site}/`
       inFlight++
@@ -271,6 +310,7 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
           websiteSummary: c.summary || undefined,
           fitAssessment: c.fit,
           analysis,
+          listingLocation: c.location,
         })
         log.info(
           { site: c.site, status: analysis.status, serviceNeed: analysis.serviceNeed, product: analysis.product?.url ?? analysis.reviewUrl },
@@ -306,6 +346,9 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
           return
         }
         const host = page.host ?? ref.url
+        // A directory, social network, job board or search redirect that could
+        // not be read is not a company that could not be read: nothing to list.
+        if (!looksLikeCompanySite(page.host)) return
         if (unreadableHosts.has(host)) return
         unreadableHosts.add(host)
         await record(ref, {
@@ -346,6 +389,7 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
             websiteUrl: page.finalUrl,
             websiteSummary: a.summary || undefined,
             fitAssessment: fit,
+            listingLocation: a.location,
             analysis: notAnalysed(
               'no_website',
               `The search found this company on ${hostLabel(page.finalUrl)}, and that page does not state a website of the company's own — so there was no product page to read.`,
@@ -378,7 +422,7 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
           continue
         }
 
-        await checkCompany(rowRef, { companyName: a.companyName, site, summary: a.summary, fit })
+        await checkCompany(rowRef, { companyName: a.companyName, site, summary: a.summary, fit, location: a.location })
       }
     }
 
@@ -401,6 +445,12 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
+
+    // One company, one row: a company one directory listed without a website
+    // and another source found WITH its website is the same prospect. The
+    // bare listing row goes; the row whose website was checked stays.
+    const merged = await dropDuplicateListings(search.tenantId, searchId).catch(() => 0)
+    if (merged) log.info({ merged }, 'listing-only rows merged into the same company found with its website')
 
     const needing = await prisma.discoveredCompany
       .count({ where: { tenantId: search.tenantId, searchId, serviceNeed: { in: ['needed', 'possible'] } } })
@@ -441,6 +491,30 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
       })
       .catch(() => undefined)
   }
+}
+
+/** A company's name as a comparison key: its distinctive words, order-free. */
+export function companyKey(name: string): string {
+  const tokens = significantTokens(name)
+  return (tokens.length ? tokens : normalizeCompanyName(name).split(' ')).filter(Boolean).sort().join(' ')
+}
+
+/**
+ * Removes this search's "no website" rows whose company the search also found
+ * with a website. Only listing-only rows are ever removed. Returns how many.
+ */
+export async function dropDuplicateListings(tenantId: string, searchId: string): Promise<number> {
+  const rows = await prisma.discoveredCompany.findMany({
+    where: { tenantId, searchId },
+    select: { id: true, companyName: true, domain: true, productAnalysis: true },
+  })
+  const withSite = new Set(rows.filter((r) => r.domain).map((r) => companyKey(r.companyName)))
+  const dupes = rows.filter(
+    (r) => !r.domain && (r.productAnalysis as { status?: string } | null)?.status === 'no_website' && withSite.has(companyKey(r.companyName)),
+  )
+  if (!dupes.length) return 0
+  await prisma.discoveredCompany.deleteMany({ where: { tenantId, searchId, id: { in: dupes.map((d) => d.id) } } })
+  return dupes.length
 }
 
 /**

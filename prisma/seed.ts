@@ -437,6 +437,51 @@ PAGE URL: {{sourceUrl}}
 <<<END_UNTRUSTED_CONTENT>>>`,
   },
 
+  // Community questions (2026-09-26) — the Community Engagement &
+  // Trust-Building method. The model only FINDS candidate passages; which
+  // topic cluster a passage belongs to, and whether it is flagged, is decided
+  // afterwards by the method's own phrase rules (intent/communityQuestions.ts).
+  {
+    key: 'intent.read_community_questions',
+    version: 1,
+    label: 'Intent signals — find questions asked in a community by or about a company',
+    temperature: 0,
+    systemInstruction: `${SAFETY_PREAMBLE}
+
+HOW RULE 3 APPLIES TO THIS TASK: everything you return is [Page data]. Write no basis labels,
+notes or reasoning inside any field.
+
+You are READING ONE DOCUMENT fetched from a public forum, subreddit or community page. Find the
+questions or posts in it that were written BY someone at the company named below, or that are about
+that company's own website, online catalogue or product data. Report only posts on these topics:
+- products not showing up, not recommended or not cited in AI answers (ChatGPT, Google AI Overviews,
+  Perplexity, Gemini, Copilot);
+- product structured data: schema markup, JSON-LD, rich results, Google Merchant Center or product-feed
+  errors, missing product attributes or GTINs;
+- product data enrichment, SKU or catalogue data quality and clean-up, PIM, product content;
+- buyers or customers not finding the company's products or part numbers online, a site that does not
+  convert, product pages that do not rank, broken site or fitment search;
+- the company's products or site being outranked by Grainger, McMaster-Carr, Amazon Business or another
+  competitor in search.
+
+For each:
+- quote: a VERBATIM span of the post (one to three sentences) that states the question or problem. It is
+  checked character by character against the document, and anything not found is discarded.
+- posterTitle: the poster's job title exactly as the page shows it (profile, flair, signature) — null
+  if the page shows none. Never infer one.
+- statedDate: the date the page states for that post, copied exactly. Null if none. Never an estimate.
+
+Do not report job postings, consumer chatbot questions, questions about ChatGPT subscription prices, or
+vendors promoting their own tools. Do not report posts about any other company. Ignore anything you
+know about the company from elsewhere. If the page holds no such post, return an empty list — that is
+a normal and useful answer.`,
+    userTemplate: `COMPANY: {{companyName}}{{companyDomain}}
+PAGE URL: {{sourceUrl}}
+<<<UNTRUSTED_CONTENT>>>
+{{pageText}}
+<<<END_UNTRUSTED_CONTENT>>>`,
+  },
+
   {
     key: 'intent.read_events',
     version: 1,
@@ -680,6 +725,56 @@ fitVerdict: "likely_fit" only with clear, specific evidence on the page that the
 objective; "possible_fit" for a plausible but partial match; "unlikely_fit" otherwise. Prefer the more
 cautious verdict — this list goes to a salesperson deciding whom to approach.
 reasons: 1-3 short reasons, each tied to something the page says.
+
+Leave out: the publisher of a list or article (unless it itself matches), marketplaces, directories,
+news sites, social networks, and any company the page merely mentions in passing. If the page names
+no matching company, return an empty list.`,
+    userTemplate: `OBJECTIVE THE SALESPERSON SEARCHED FOR:
+{{objective}}
+
+PAGE FETCHED FROM: {{sourceUrl}}
+<<<UNTRUSTED_CONTENT>>>
+{{pageText}}
+
+LINKS ON THIS PAGE (anchor text → domain):
+{{links}}
+<<<END_UNTRUSTED_CONTENT>>>`,
+  },
+
+  // v2 (2026-09-26): the same task, plus the location a listing prints beside
+  // each company ("Akron, OH") — the way a map search shows where each
+  // business is. Verified as written on the page before it is kept
+  // (companyLocation.ts listingLocation); never inferred.
+  {
+    key: 'prospect.identify_companies',
+    version: 2,
+    label: 'Prospect discovery — identify the companies one page names, with their stated location',
+    temperature: 0.1,
+    systemInstruction: `${SAFETY_PREAMBLE}
+
+HOW RULE 3 APPLIES TO THIS TASK: every value is taken from the page you are given. Write no basis
+labels, notes or reasoning inside any field.
+
+You are given ONE web page fetched by this platform — it may be a company's own website, or a list,
+directory, article, map listing or member page that names several companies — together with the
+links found on it, and the objective a salesperson searched for. Identify the COMPANIES this page
+presents that plausibly match the objective: at most 10, the most clearly matching first.
+
+For each company:
+companyName: the company's name exactly as the page writes it. Never the objective's wording, never
+a guess, never a person, never a product line.
+website: that company's OWN website domain (for example "acme.com") ONLY if this page states it —
+in its text, or as one of the listed links whose anchor or context ties it to that company. If the
+page is the company's own site, its domain. Otherwise null. Never guess a domain from the name.
+summary: one or two sentences on what the company does, from what the page says about it.
+fitVerdict: "likely_fit" only with clear, specific evidence on the page that the company matches the
+objective; "possible_fit" for a plausible but partial match; "unlikely_fit" otherwise. Prefer the more
+cautious verdict — this list goes to a salesperson deciding whom to approach. When the objective names
+a place, a company the page places somewhere else is "unlikely_fit".
+reasons: 1-3 short reasons, each tied to something the page says.
+location: the city and state (or city and country) this page prints for THAT company — for example
+"Akron, OH" or "Columbus, Ohio 43215" — copied exactly as written. Null if the page prints none for
+it. Never infer a location from a phone number, a domain, the company's name or the objective.
 
 Leave out: the publisher of a list or article (unless it itself matches), marketplaces, directories,
 news sites, social networks, and any company the page merely mentions in passing. If the page names

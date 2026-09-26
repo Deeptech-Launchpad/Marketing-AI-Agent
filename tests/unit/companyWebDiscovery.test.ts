@@ -42,7 +42,7 @@ vi.mock('../../src/platform/db.js', () => ({
   newId: () => `id_${idCounter++}`,
 }))
 
-const { runCompanyWebDiscovery, queryFor, queriesFor } = await import('../../src/prospects/companyWebDiscovery.js')
+const { runCompanyWebDiscovery, queryFor, queriesFor, cityQueries } = await import('../../src/prospects/companyWebDiscovery.js')
 
 const SEARCH = {
   id: 'search_1',
@@ -149,10 +149,29 @@ describe('the queries composed from the objective', () => {
 
   it('ask for makers, sellers, lists and smaller firms separately, to reach more companies', () => {
     const qs = queriesFor('Safety products')
-    expect(qs).toHaveLength(5)
+    expect(qs).toHaveLength(8)
     expect(qs.some((q) => /lists, directories/i.test(q))).toBe(true)
     expect(qs.some((q) => /small and mid-sized/i.test(q))).toBe(true)
+    // Like a map search: local listings with addresses, and branch pages.
+    expect(qs.some((q) => /local business listings/i.test(q))).toBe(true)
+    expect(qs.some((q) => /"locations", "branches"/i.test(q))).toBe(true)
     expect(qs.every((q) => q.includes('Safety products'))).toBe(true)
+  })
+
+  it('covers a named US state city by city, and adds no city searches when no state is named', () => {
+    const qs = queriesFor('electrical products distributors in ohio usa')
+    expect(qs).toHaveLength(8 + 6)
+    expect(qs.filter((q) => /located in or near .+, Ohio/.test(q)).map((q) => q.match(/near ([^,]+), Ohio/)![1])).toEqual([
+      'Columbus',
+      'Cleveland',
+      'Cincinnati',
+      'Toledo',
+      'Akron',
+      'Dayton',
+    ])
+    // "in" is a word, not Indiana; "West Virginia" is not Virginia.
+    expect(cityQueries('suppliers in the usa')).toEqual([])
+    expect(cityQueries('distributors in West Virginia')[0]).toMatch(/Charleston, West Virginia/)
   })
 })
 
@@ -320,7 +339,7 @@ describe('more companies', () => {
 
     await runCompanyWebDiscovery('search_1')
 
-    expect(searchWeb).toHaveBeenCalledTimes(5)
+    expect(searchWeb).toHaveBeenCalledTimes(8)
     expect(rows()).toHaveLength(1)
     const done = db.companyDiscoverySearch.update.mock.calls.at(-1)![0]
     expect(done.data.status).toBe('completed')

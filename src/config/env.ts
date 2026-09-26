@@ -207,6 +207,15 @@ const schema = z.object({
    * cannot weaken any existing guarantee. See research/publicResearch.ts.
    */
   PUBLIC_RESEARCH_ENABLED: bool.default('false'),
+  /**
+   * Reddit's official API, for reading the Reddit threads Intent Signals'
+   * community-questions source finds (2026-09-26). Reddit refuses anonymous
+   * reads, so without these the threads are skipped and the run says so.
+   * Create a "script" app at reddit.com/prefs/apps; application-only access,
+   * read-only, public posts only.
+   */
+  REDDIT_CLIENT_ID: z.string().optional(),
+  REDDIT_CLIENT_SECRET: z.string().optional(),
   /** How many discovered URLs one company's research may consider. */
   PUBLIC_RESEARCH_MAX_SOURCES: z.coerce.number().int().positive().max(10).default(6),
   /** How many of those may actually be fetched. Bounds third-party traffic. */

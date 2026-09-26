@@ -7,6 +7,7 @@ import { looksLikeLoginWall, type PublicSource } from '../research/publicResearc
 import { extractLinks } from '../websiteaudit/htmlStructure.js'
 import { resolveLink } from '../websiteaudit/urls.js'
 import { squash } from './productReader.js'
+import { listingLocation, type CompanyLocation } from './companyLocation.js'
 
 // WHICH COMPANIES DOES THIS PAGE NAME?
 //
@@ -23,9 +24,15 @@ import { squash } from './productReader.js'
 const MIN_TEXT = 200
 const MAX_COMPANIES_PER_PAGE = 10
 
-/** Hosts that are never a company's own website. */
+/**
+ * Hosts that are never a company's own website. Extended 2026-09-26 with the
+ * job boards, map apps, data vendors and content hosts a wider, map-style
+ * search began to surface ("monster.com", "waze.com", "craft.co" were being
+ * listed as companies); and no government, university or military host is a
+ * prospect.
+ */
 const NOT_A_COMPANY_SITE =
-  /(^|\.)(wikipedia\.org|wikimedia\.org|facebook\.com|linkedin\.com|twitter\.com|x\.com|youtube\.com|instagram\.com|pinterest\.com|tiktok\.com|amazon\.[a-z.]+|ebay\.[a-z.]+|alibaba\.com|walmart\.com|thomasnet\.com|yelp\.com|bbb\.org|bloomberg\.com|crunchbase\.com|zoominfo\.com|dnb\.com|google\.[a-z.]+|apple\.com|reddit\.com|medium\.com|forbes\.com|reuters\.com|prnewswire\.com|businesswire\.com|globenewswire\.com|glassdoor\.com|indeed\.com|mapquest\.com|manta\.com|opencorporates\.com)$/i
+  /(^|\.)(wikipedia\.org|wikimedia\.org|facebook\.com|linkedin\.com|twitter\.com|x\.com|youtube\.com|instagram\.com|pinterest\.com|tiktok\.com|amazon\.[a-z.]+|ebay\.[a-z.]+|alibaba\.com|walmart\.com|thomasnet\.com|yelp\.com|bbb\.org|bloomberg\.com|crunchbase\.com|zoominfo\.com|dnb\.com|google\.[a-z.]+|apple\.com|reddit\.com|medium\.com|forbes\.com|reuters\.com|prnewswire\.com|businesswire\.com|globenewswire\.com|glassdoor\.com|indeed\.com|mapquest\.com|manta\.com|opencorporates\.com|monster\.com|ziprecruiter\.com|careerbuilder\.com|simplyhired\.com|waze\.com|craft\.co|pitchbook\.com|owler\.com|rocketreach\.co|apollo\.io|signalhire\.com|bizapedia\.com|buzzfile\.com|yellowpages\.com|superpages\.com|chamberofcommerce\.com|globalspec\.com|archiexpo\.com|hubspotusercontent[a-z0-9-]*\.net|[a-z0-9-]+\.(gov|edu|mil)|gov|edu|mil)$/i
 
 export interface CandidatePage {
   finalUrl: string
@@ -82,6 +89,7 @@ const Identified = z.object({
         summary: z.string().default(''),
         fitVerdict: z.enum(['likely_fit', 'possible_fit', 'unlikely_fit']),
         reasons: z.array(z.string()).max(6).default([]),
+        location: z.string().nullable().optional(),
       }),
     )
     .max(20)
@@ -95,6 +103,8 @@ export interface IdentifiedCompany {
   summary: string
   fitVerdict: 'likely_fit' | 'possible_fit' | 'unlikely_fit'
   reasons: string[]
+  /** The city and state this page prints for the company, verified as written on it. Null when it prints none. */
+  location: CompanyLocation | null
 }
 
 /**
@@ -128,6 +138,7 @@ export function verifyIdentified(raw: z.infer<typeof Identified>, page: Candidat
       summary: (c.summary ?? '').trim().slice(0, 600),
       fitVerdict: c.fitVerdict,
       reasons: (c.reasons ?? []).map((r) => r.trim()).filter(Boolean).slice(0, 3),
+      location: listingLocation(c.location, page.text, page.finalUrl),
     })
     if (out.length >= MAX_COMPANIES_PER_PAGE) break
   }

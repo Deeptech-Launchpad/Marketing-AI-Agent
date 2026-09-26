@@ -11,6 +11,7 @@ import { CrmSignalProvider } from './providers/crmProvider.js'
 import { ApifyJobsProvider } from './providers/jobsProvider.js'
 import { outreachAngleFor } from './outreachAngles.js'
 import { ExternalSourcesProvider } from './providers/externalSourcesProvider.js'
+import { CommunityQuestionsProvider } from './providers/communityQuestionsProvider.js'
 import { PublicResearchSignalProvider } from './providers/publicResearchProvider.js'
 import { SocialProfileProvider } from './providers/socialProvider.js'
 import { TechnologySignalProvider } from './providers/technologyProvider.js'
@@ -47,6 +48,10 @@ const PROVIDERS: IntentProvider[] = [
   // news, blogs, public social posts (2026-09-25). Its own site is left to the
   // providers above; this one reads only outside sources.
   new ExternalSourcesProvider(),
+  // Questions asked in the forums and communities where our buyers are, kept
+  // by the Community Engagement & Trust-Building method's own rules
+  // (2026-09-26). Additive: it changes none of the sources above.
+  new CommunityQuestionsProvider(),
 ]
 
 /**
