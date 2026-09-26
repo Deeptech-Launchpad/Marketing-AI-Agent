@@ -39,6 +39,11 @@ export const SOURCE_TYPES = [
   'company_website', // the company's own site, fetched by us
   'job_board', // third-party job board via a collection provider
   'news_article', // third-party publication
+  // A public social/company profile the company's OWN website links to. The
+  // link is the company's claim of ownership; the content is the platform's
+  // rendering of what the company posted. Neither is our own observation of
+  // the company, so it sits below the company's own website.
+  'social_profile',
   'third_party', // anything else with a URL
 ] as const
 export type SourceType = (typeof SOURCE_TYPES)[number]
@@ -51,6 +56,19 @@ export interface IntentSignalDraft {
   summary: string
   /** WHY this may indicate current need. Never asserts that it does. */
   interpretation: string
+  /**
+   * How a seller could OPEN on this, in one sentence.
+   *
+   * The one field here that is about US rather than about them, and the only
+   * one a reader may safely disagree with. `interpretation` says why the
+   * observation might matter; this says what to do about it — and the two are
+   * kept apart on purpose, because a suggestion presented as a finding is how
+   * a seller ends up asserting something the source never said.
+   *
+   * Null when the signal suggests no particular approach. A signal without an
+   * angle is shown without one; it is never given an invented one.
+   */
+  outreachAngle?: string | null
   /** The literal thing observed: a job title, a meta tag, an activity row. */
   evidence: string
   sourceUrl: string | null

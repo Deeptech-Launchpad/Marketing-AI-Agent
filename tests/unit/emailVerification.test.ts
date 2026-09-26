@@ -9,6 +9,26 @@ import {
 } from '../../src/emailverification/providers/provider.js'
 import { getVerificationPolicy, isStale } from '../../src/emailverification/policy.js'
 import { assertOutreachReady, verifyEmail, verificationProviderNames } from '../../src/emailverification/service.js'
+import { env } from '../../src/config/env.js'
+
+/**
+ * Empties the verification credentials for one assertion, and puts them back.
+ *
+ * The tests that use it are about what the platform does when NOTHING is
+ * configured. Reading that condition off the developer's own environment made
+ * them pass for the wrong reason and, once a key existed, made them call a
+ * paid API to prove a negative.
+ */
+function withoutVerificationProviders(): () => void {
+  const hunter = env.HUNTER_API_KEY
+  const verifalia = env.VERIFALIA_USERNAME
+  ;(env as { HUNTER_API_KEY: string }).HUNTER_API_KEY = ''
+  ;(env as { VERIFALIA_USERNAME: string }).VERIFALIA_USERNAME = ''
+  return () => {
+    ;(env as { HUNTER_API_KEY: string }).HUNTER_API_KEY = hunter
+    ;(env as { VERIFALIA_USERNAME: string }).VERIFALIA_USERNAME = verifalia
+  }
+}
 import type { VerificationRecord } from '../../src/emailverification/types.js'
 
 // Team Answer, Section 4 — the email verification layer.
@@ -33,7 +53,12 @@ describe('the outreach-ready gate', () => {
   })
 
   it('refuses when no provider is configured, and says so plainly', async () => {
-    const record = await verifyEmail('jane.doe@acme-industrial.com')
+    // Arranged, not inherited. This asserts what happens with NO verification
+    // provider, so it must hold whether or not this environment has keys —
+    // and it must not reach the network, because a real call would spend a
+    // metered credit to prove a negative.
+    const restore = withoutVerificationProviders()
+    const record = await verifyEmail('jane.doe@acme-industrial.com').finally(restore)
     expect(record.result).toBe('unverified')
     expect(record.status).toBe('not_configured')
     expect(record.outreachReady).toBe(false)
@@ -123,7 +148,9 @@ describe('local checks', () => {
 
 describe('Hunter adapter', () => {
   it('reports not_configured with an actionable reason', () => {
+    const restore = withoutVerificationProviders()
     const a = new HunterProvider().available()
+    restore()
     expect(a.status).toBe('not_configured')
     expect(a.reason).toMatch(/HUNTER_API_KEY/)
     expect(a.reason!.length).toBeGreaterThan(60)

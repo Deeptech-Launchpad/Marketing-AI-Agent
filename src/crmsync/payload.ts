@@ -126,10 +126,22 @@ export async function buildPayload(ctx: PayloadContext): Promise<BuiltPayload | 
       where: { tenantId: ctx.tenantId, qualificationId: q.id },
       orderBy: { createdAt: 'desc' },
     }),
-    prisma.decisionMakerCandidate.findFirst({
-      where: { tenantId: ctx.tenantId, crmCompanyId: q.crmCompanyId, outcome: 'shortlisted' },
-      orderBy: { rank: 'asc' },
-    }),
+    // Only from the LATEST completed discovery run: every run has its own rank
+    // 1, so ordering by rank across runs could pick a stale run's person.
+    prisma.decisionMakerRun
+      .findFirst({
+        where: { tenantId: ctx.tenantId, crmCompanyId: q.crmCompanyId, status: 'completed' },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      })
+      .then((latestDmRun) =>
+        latestDmRun
+          ? prisma.decisionMakerCandidate.findFirst({
+              where: { tenantId: ctx.tenantId, dmRunId: latestDmRun.id, outcome: 'shortlisted' },
+              orderBy: { rank: 'asc' },
+            })
+          : null,
+      ),
     engagementSummary(ctx.tenantId, q.crmCompanyId),
   ])
 

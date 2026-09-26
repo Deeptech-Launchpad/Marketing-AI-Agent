@@ -88,8 +88,22 @@ workbenchRoutes.get(
 
     const registrations = await prisma.workbenchVisitor.count({ where: { demoId: demo.id } })
 
+    // The product's own image, from the page this demonstration was built on.
+    //
+    // Derived rather than stored: it is one observation on a page already
+    // referenced here, and copying it onto the demo row would give it a second
+    // place to go stale. Null whenever the page published none — the interface
+    // then states that, rather than showing a stand-in.
+    const image = demo.productPageId
+      ? await prisma.pageObservation.findFirst({
+          where: { pageId: demo.productPageId, field: 'product.image', status: 'observed' },
+          select: { value: true },
+        })
+      : null
+
     res.json({
       ...demo,
+      productImageUrl: image?.value?.trim() || null,
       registrations,
       disclaimers: [
         'Every AFTER value is produced by restructuring, deriving from, or rewording an observed field. Nothing is invented.',

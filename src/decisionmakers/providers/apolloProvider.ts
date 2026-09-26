@@ -18,6 +18,19 @@ import type { ProviderStatus } from '../types.js'
 // Also deliberate: email reveal is NOT requested. Apollo bills credits to
 // unmask an email, and this stage identifies WHO to approach — it does not
 // need their inbox to do that.
+//
+// ON APOLLO'S TWO DIFFERENT 403s.
+//
+// A key can authenticate perfectly and still be refused this endpoint: the
+// people-search API is excluded from Apollo's Free plan, and asking for it
+// returns 403 with error_code API_INACCESSIBLE while /auth/health for the same
+// key answers { healthy: true, is_logged_in: true }.
+//
+// Reporting that as "Apollo rejected the credential" — which this adapter used
+// to do for every 403 — sends whoever reads it hunting for a bad key that is
+// not bad. The two cases are distinguished below and worded differently,
+// because "your key is wrong" and "your plan does not include this" lead to
+// completely different actions.
 
 interface ApolloPerson {
   id?: string
@@ -36,6 +49,10 @@ interface ApolloPerson {
 interface ApolloResponse {
   people?: ApolloPerson[]
   pagination?: { total_entries?: number }
+  /** Apollo's own words when it refuses. */
+  error?: string
+  /** e.g. API_INACCESSIBLE — the machine-readable reason for the refusal. */
+  error_code?: string
 }
 
 /**
@@ -106,11 +123,26 @@ export class ApolloProvider implements DecisionMakerProvider {
     })
 
     if (res.status === 401 || res.status === 403) {
+      // Read the body before deciding what to say: Apollo distinguishes a bad
+      // credential from a credential whose plan excludes the endpoint, and so
+      // must this.
+      const detail = (await res.json().catch(() => ({}))) as ApolloResponse
+      const planBlocked = detail.error_code === 'API_INACCESSIBLE'
       return {
         provider: this.name,
         status: 'unauthorized',
         candidates: [],
-        reason: `Apollo rejected the credential (HTTP ${res.status}).`,
+        reason: planBlocked
+          ? `Apollo authenticated this key but its plan does not include the people-search API. ${detail.error ?? ''} ` +
+            'The key is valid — no decision maker can be searched for until the plan includes API access.'
+          : `Apollo rejected the credential (HTTP ${res.status}).${detail.error ? ` ${detail.error}` : ''}`,
+        metadata: {
+          httpStatus: res.status,
+          apolloErrorCode: detail.error_code ?? null,
+          // The distinction the operator needs, stated as a fact rather than
+          // left to be inferred from the sentence above.
+          credentialValid: planBlocked,
+        },
         durationMs: Date.now() - started,
       }
     }

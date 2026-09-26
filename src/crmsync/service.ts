@@ -163,8 +163,20 @@ export async function syncQualification(options: SyncOptions): Promise<SyncResul
       .filter((i) => i.severity === 'error')
       .map((i) => i.message)
       .join(' ')
-  } else if (availability.status !== 'available' || !capabilities.canCreate) {
-    // The honest path today. The package is sound; nothing can deliver it.
+  } else if (availability.status !== 'available' || !capabilities.canUpdate) {
+    // The approved CRM write is UPDATE-scoped: updateCompany, carrying two
+    // custom fields onto a Company that already exists.
+    //
+    // This gate previously asked for `canCreate`. Creating records is
+    // deliberately outside the approved scope and has no implementation, so
+    // canCreate is permanently false — which meant this branch always won and
+    // the human-approval branch below could never be reached. Every approved
+    // handoff was held as `blocked_provider_unavailable`, and enabling
+    // CRM_WRITE_ENABLED would have changed nothing observable.
+    //
+    // The gate now asks for the capability this delivery actually uses. A
+    // provider that can deliver nothing (the outbox) has canUpdate false and
+    // is still held here, exactly as before.
     state = 'blocked_provider_unavailable'
     errorCode = availability.status === 'available' ? 'write_not_supported' : availability.status
     reason =
@@ -275,12 +287,26 @@ async function attemptDelivery(
       continue
     }
 
+    // The CRM record to update, when one is already known.
+    //
+    // For `company` it always is. The qualification carries the CRM company id
+    // it was raised against, and validation has already cross-checked that id
+    // against the payload — so the record is known AND verified before we reach
+    // here. Asking the CRM to find it again could only agree or fail.
+    //
+    // findExisting() remains for other resources. It returns null for NXT Sales
+    // because no CRM field holds our correlation key — which is exactly why the
+    // company path must not be made to depend on it. Nothing about correlation
+    // is stored CRM-side; idempotency stays on our side, on the unique
+    // qualificationId of the sync record.
+    const targetId = resource === 'company' ? built.refs.crmCompanyId : (existingRecord?.externalId ?? null)
+
     try {
       // Update an existing record where possible rather than creating a second
       // one — the duplicate-prevention rule, applied per resource.
       const outcome =
-        existingRecord?.found && existingRecord.externalId && capabilities.canUpdate
-          ? await provider.update(resource, existingRecord.externalId, built.payload)
+        targetId && capabilities.canUpdate
+          ? await provider.update(resource, targetId, built.payload)
           : capabilities.canUpsert
             ? await provider.upsert(resource, built.payload)
             : await provider.create(resource, built.payload)
@@ -301,14 +327,33 @@ async function attemptDelivery(
   const wrote = resources.filter((r) => r.result === 'created' || r.result === 'updated' || r.result === 'unchanged')
   const failed = resources.filter((r) => r.result === 'failed')
 
-  if (wrote.length === resources.length) {
-    return { state: 'synced', resources, reason: 'Every resource was written and confirmed by the CRM.' }
+  // A resource the provider deliberately does not support is not unfinished
+  // work. NXT Sales has no Task object at all, and writing an Activity from a
+  // qualification was never agreed — so `activity` and `task` report
+  // not_supported on every run and always will.
+  //
+  // Counting them as an incomplete delivery meant a fully successful
+  // company-only handoff could never be anything but `partial`, and the
+  // idempotency short-circuit keys on `synced` — so a completed sync was never
+  // recognised as complete. The terminal state is judged on the resources this
+  // provider actually undertakes.
+  const undertaken = resources.filter((r) => r.result !== 'not_supported')
+  const skipped = resources.length - undertaken.length
+
+  if (wrote.length > 0 && wrote.length === undertaken.length) {
+    return {
+      state: 'synced',
+      resources,
+      reason: skipped
+        ? `Every resource this CRM supports was written and confirmed. ${skipped} unsupported resource(s) were not attempted.`
+        : 'Every resource was written and confirmed by the CRM.',
+    }
   }
   if (wrote.length > 0) {
     return {
       state: 'partial',
       resources,
-      reason: `${wrote.length} of ${resources.length} resources were written. The rest were unsupported or failed.`,
+      reason: `${wrote.length} of ${undertaken.length} attempted resources were written. The rest failed.`,
       errorCode: failed.length ? failed[0]!.errorCode : 'unsupported_operation',
     }
   }

@@ -59,7 +59,10 @@ export function toCompanyParams(q: CrmCompanyQuery): QueryParams {
   if (q.cmsValues?.length) p.cmsValues = q.cmsValues.join(',')
   if (q.remarksValues?.length) p.remarksValues = q.remarksValues.join(',')
   if (q.industries?.length) p.industries = q.industries // array -> repeated param
-  if (q.hasDeal !== undefined) p.hasDeal = q.hasDeal
+  // NXT Sales accepts only the literal strings 'yes' / 'no' (deals some / none).
+  // A boolean serialises as "true"/"false", which it ignores — silently
+  // returning every company, with or without deals.
+  if (q.hasDeal !== undefined) p.hasDeal = q.hasDeal ? 'yes' : 'no'
   if (q.createDate) p.createDate = q.createDate
   if (q.customFilters && Object.keys(q.customFilters).length) {
     p.customFilters = JSON.stringify(q.customFilters)

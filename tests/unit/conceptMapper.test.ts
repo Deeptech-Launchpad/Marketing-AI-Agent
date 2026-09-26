@@ -91,6 +91,19 @@ describe('concept mapping — unmapped', () => {
     expect(m.applied).toEqual([])
     expect(m.requiresApproval).toBe(true)
     expect(m.note).toMatch(/could not be mapped/i)
+    // The note must not present running without a filter as acceptable.
+    expect(m.note).not.toMatch(/No industry filter was applied/i)
+    expect(m.note).toMatch(/do not run the audience without one/i)
+  })
+
+  it('is unmapped when every proposed value is absent from the CRM', async () => {
+    const m = await run(
+      { direct: [{ value: 'Online Catalogues', reason: 'invented' }], related: [], interpretation: 'x' },
+      'companies with online catalogues',
+    )
+    expect(m.status).toBe('unmapped')
+    expect(m.applied).toEqual([])
+    expect(m.rejected).toEqual(['Online Catalogues'])
   })
 
   it('reports an empty CRM vocabulary instead of calling the model', async () => {

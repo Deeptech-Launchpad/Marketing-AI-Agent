@@ -20,6 +20,9 @@ const SOURCE_BASE: Record<SourceType, Confidence> = {
   // A real listing with a URL, but reported by a third party.
   job_board: 'medium',
   news_article: 'medium',
+  // The company linked to it, so ownership is well evidenced; the content is
+  // the platform's rendering, and a logged-out reader sees a subset of it.
+  social_profile: 'medium',
   third_party: 'low',
 }
 

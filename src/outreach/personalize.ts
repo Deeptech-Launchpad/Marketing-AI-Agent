@@ -1,7 +1,10 @@
+import { z } from 'zod'
 import { env } from '../config/env.js'
+import { getLlm } from '../llm/index.js'
+import { logger } from '../platform/logger.js'
 import { assertSupported } from '../websiteaudit/claimGuard.js'
 import { renderTemplate, templateFor } from './templates.js'
-import type { ComposedMessage, MessageEvidence, OutreachChannel, OutreachTarget } from './types.js'
+import { CHANNEL_LIMITS, type ComposedMessage, type MessageEvidence, type OutreachChannel, type OutreachTarget } from './types.js'
 
 // TASK #982 — writing the message.
 //
@@ -10,12 +13,19 @@ import type { ComposedMessage, MessageEvidence, OutreachChannel, OutreachTarget 
 // evidence list travels with the message, so "why was this sent to this person"
 // has an answer that is not "the model wrote it".
 //
-// No Gemini call is made here. The audit already produced defensible sentences
+// No Gemini call is made here — this is the LEGACY, audit-basis path
+// (composeMessage below). The audit already produced defensible sentences
 // under a claim guard in Task #979, and the strongest thing an outreach email
 // can say is a quotation of a finding rather than a paraphrase of one. Every
 // composed block still passes back through that same guard, so a percentage, a
 // revenue figure or a catalogue-wide generalisation cannot reach a prospect
 // even if a future template author writes one in.
+//
+// The 2026-09-24 restructure's DEFAULT path is composeFromTemplate, near the
+// bottom of this file: a Sales-approved OutreachTemplate personalized by
+// Gemini, grounded in Intent Signals rather than audit findings. It is a
+// second function, not a rewrite of this one, so a campaign already built
+// from an approved audit keeps behaving exactly as it always has.
 
 export interface PersonalizationInput {
   channel: OutreachChannel
@@ -261,4 +271,193 @@ function complianceFooter(): string {
     `${env.OUTREACH_COMPANY_NAME}, ${env.OUTREACH_COMPANY_ADDRESS}\n` +
     `If you would rather not hear from us, reply with "unsubscribe" and we will remove you.`
   )
+}
+
+// ── TEMPLATE-BASIS PERSONALIZATION (2026-09-24 restructure) ────────────────
+//
+// The default path for a campaign with no approved audit: a Sales-approved
+// OutreachTemplate, rewritten by Gemini into a natural, non-spammy message for
+// one specific company and person, grounded in Intent Signals rather than
+// audit findings.
+//
+// TWO separate safety nets, not one:
+//
+//   1. GROUNDING. The model must quote, verbatim, every fact it drew on — see
+//      isGroundedInFacts(). A claim it cannot quote from the facts it was
+//      actually given is a claim it invented, and the whole personalization is
+//      discarded for it: not trimmed, not partially trusted. What is sent
+//      instead is the template exactly as Sales wrote it (plainTemplateMessage),
+//      which is always a safe message because nobody has personalized anything
+//      false into it.
+//
+//   2. THE CLAIM GUARD. The same one every legacy block already passes
+//      through (Task #979's findUnsupportedClaims). It runs on whichever body
+//      is actually sent — model-personalized or the plain template — so a
+//      percentage or a revenue promise cannot reach a prospect whichever path
+//      produced the words, including one a template author wrote in by hand.
+
+export interface OutreachTemplateRow {
+  id: string
+  key: string
+  version: string
+  subjectRaw: string | null
+  bodyRaw: string
+}
+
+export interface TemplatePersonalizationInput {
+  channel: OutreachChannel
+  target: OutreachTarget
+  companyName: string
+  /** From a DiscoveredCompany's own fetched page, or a CompanyEnrichment row. Never invented. */
+  companySummary: string | null
+  /** Up to a few, most recent first. Used only for what the facts actually say. */
+  intentSignals: Array<{ id: string; summary: string; sourceUrl: string | null }>
+  template: OutreachTemplateRow
+  senderName: string
+  senderCompany: string
+  tenantId: string
+}
+
+const PersonalizedMessage = z.object({
+  subject: z.string().nullable(),
+  body: z.string().min(1),
+  /** Verbatim quotes from the facts given — never a paraphrase. See isGroundedInFacts. */
+  factsUsed: z.array(z.string()).max(6),
+})
+
+/** The facts a personalization is allowed to draw on. */
+function factLines(input: TemplatePersonalizationInput): string[] {
+  const lines: string[] = [input.companyName]
+  if (input.companySummary) lines.push(input.companySummary)
+  if (input.target.contactName) lines.push(input.target.contactName)
+  if (input.target.contactTitle) lines.push(input.target.contactTitle)
+  for (const s of input.intentSignals) lines.push(s.summary)
+  return lines
+}
+
+/**
+ * True only when every claimed fact is a literal substring of what was given.
+ *
+ * The same discipline decisionmakers/modelReader.ts's isGroundedInSource
+ * already applies to a named person: a paraphrase is not verifiable, a
+ * verbatim quote is.
+ */
+export function isGroundedInFacts(factsUsed: string[], facts: string[]): boolean {
+  const haystack = facts.join('\n').toLowerCase()
+  return factsUsed.every((f) => {
+    const needle = f.trim().toLowerCase()
+    return needle.length >= 3 && haystack.includes(needle)
+  })
+}
+
+/** The template exactly as Sales wrote it. The safe fallback: nothing here was personalized. */
+function plainTemplateMessage(input: TemplatePersonalizationInput): ComposedMessage {
+  const body = input.template.bodyRaw
+  return {
+    channel: input.channel,
+    templateKey: input.template.key,
+    templateVersion: input.template.version,
+    subject: input.template.subjectRaw,
+    body,
+    blocks: { body },
+    ctaUrl: env.WORKBENCH_CTA_URL,
+    workbenchUrl: null,
+    evidence: [
+      {
+        kind: 'outreach_template',
+        referenceId: input.template.id,
+        summary: `Template "${input.template.key}@${input.template.version}", used exactly as approved — not personalized.`,
+        sourceUrl: null,
+      },
+    ],
+    length: body.length,
+  }
+}
+
+export async function composeFromTemplate(input: TemplatePersonalizationInput): Promise<ComposedMessage> {
+  const limits = CHANNEL_LIMITS[input.channel]
+  const facts = factLines(input)
+
+  const variables = {
+    channel: input.channel,
+    maxBody: String(limits.maxBody),
+    maxSubjectNote: limits.maxSubject ? `, subject max: ${limits.maxSubject} characters` : '',
+    templateSubject: input.template.subjectRaw ?? '(none)',
+    templateBody: input.template.bodyRaw,
+    companyName: input.companyName,
+    companySummary: input.companySummary ?? '(none provided)',
+    contactName: input.target.contactName ?? '(none — address generically)',
+    contactTitle: input.target.contactTitle ?? '(none)',
+    intentSignals: input.intentSignals.length
+      ? input.intentSignals.map((s, i) => `${i + 1}. ${s.summary}`).join('\n')
+      : '(none)',
+  }
+
+  let composed: ComposedMessage | null = null
+
+  for (let attempt = 1; attempt <= 2 && !composed; attempt++) {
+    let data: z.infer<typeof PersonalizedMessage>
+    try {
+      const result = await getLlm().generate({
+        promptKey: 'outreach.personalize_template',
+        variables,
+        schema: PersonalizedMessage,
+        feature: 'outreach.personalize_template',
+        tenantId: input.tenantId,
+      })
+      data = result.data
+    } catch (err) {
+      logger.info(
+        { err: (err as Error).message, templateKey: input.template.key },
+        'template personalization call failed; using the plain template',
+      )
+      break
+    }
+
+    if (!isGroundedInFacts(data.factsUsed, facts)) {
+      logger.info(
+        { templateKey: input.template.key, factsUsed: data.factsUsed },
+        'personalization claimed a fact not in what was given; using the plain template',
+      )
+      break
+    }
+    const overLength = data.body.length > limits.maxBody || Boolean(limits.maxSubject && data.subject && data.subject.length > limits.maxSubject)
+    if (overLength) {
+      if (attempt < 2) continue // one retry; the prompt already states the limit
+      logger.info({ templateKey: input.template.key }, 'personalization stayed over the channel limit after a retry; using the plain template')
+      break
+    }
+
+    composed = {
+      channel: input.channel,
+      templateKey: input.template.key,
+      templateVersion: input.template.version,
+      subject: data.subject,
+      body: data.body,
+      blocks: { body: data.body },
+      ctaUrl: env.WORKBENCH_CTA_URL,
+      workbenchUrl: null,
+      evidence: [
+        {
+          kind: 'outreach_template',
+          referenceId: input.template.id,
+          summary: `Personalized from template "${input.template.key}@${input.template.version}".`,
+          sourceUrl: null,
+        },
+        ...data.factsUsed.map((f) => ({ kind: 'personalization_fact', referenceId: null, summary: f, sourceUrl: null }) as MessageEvidence),
+      ],
+      length: data.body.length,
+    }
+  }
+
+  const final = composed ?? plainTemplateMessage(input)
+
+  // The same guard every legacy block already passes through, run on
+  // whichever body is actually being sent — so nothing reaches a prospect
+  // that states a percentage, a revenue figure, or a claim this guard cannot
+  // support, whether the model wrote it or a template author did.
+  assertSupported(`outreach.${input.channel}.body`, final.body)
+  if (final.subject) assertSupported(`outreach.${input.channel}.subject`, final.subject)
+
+  return final
 }

@@ -1,0 +1,126 @@
+.pdpa__head {
+  display: flex;
+  gap: var(--s3);
+  align-items: flex-start;
+}
+.pdpa__icon {
+  flex: none;
+  margin-top: 2px;
+}
+.pdpa--valid_product .pdpa__icon {
+  color: var(--ok, #15803d);
+}
+.pdpa--link_problem .pdpa__icon {
+  color: var(--warn, #b45309);
+}
+.pdpa--no_link .pdpa__icon {
+  color: var(--danger, #b91c1c);
+}
+.pdpa__headline {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin: 0 0 4px;
+}
+.pdpa__explain {
+  margin: 0;
+  color: var(--ink-2, #374151);
+  line-height: 1.5;
+}
+.pdpa__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s3);
+  margin: var(--s4) 0 0;
+}
+.pdpa__facts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3, #6b7280);
+}
+.pdpa__facts dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.pdpa__link {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.pdpa__next {
+  margin-top: var(--s4);
+}
+.pdpa__next ol,
+.pdpa__next ul {
+  margin: var(--s2) 0 0;
+  padding-left: 1.25rem;
+  line-height: 1.6;
+}
+.pdpa__suggest a {
+  overflow-wrap: anywhere;
+}
+
+.pdpframe {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 6px;
+  background: #f3f3f3;
+}
+
+.pdpsum__title {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin: 0 0 var(--s2);
+}
+.pdpsum__transform {
+  margin: 0 0 var(--s3);
+  line-height: 1.5;
+}
+.pdpsum__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+}
+.pdpsum__attrs {
+  margin-top: var(--s3);
+}
+.pdpsum__attrs summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.pdpsum__attrs table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--s3);
+  font-size: 0.9rem;
+}
+.pdpsum__attrs th,
+.pdpsum__attrs td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line, #e5e7eb);
+  vertical-align: top;
+}
+.pdpsum__src {
+  margin-left: 6px;
+  display: inline-flex;
+}
+.pdpsum__cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--s4);
+  margin-top: var(--s4);
+}
+.pdpsum__cols ul {
+  margin: var(--s2) 0 0;
+  padding-left: 1.1rem;
+  line-height: 1.6;
+}
+.pdpsum__cols a {
+  overflow-wrap: anywhere;
+}
+.pdpsum__muted {
+  color: var(--ink-3, #6b7280);
+}

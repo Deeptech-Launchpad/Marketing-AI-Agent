@@ -141,8 +141,16 @@ describeIfReady('Stage 3 — intent detection against real NXT Sales', () => {
     expect(run.companyName).toBe(company.name)
     // Per-provider outcomes recorded, so "few signals" can be told apart from
     // "a provider was unavailable".
+    // Named rather than counted. A bare count made adding a source look like a
+    // regression while saying nothing about which sources actually ran.
     const results = run.providerResults as Array<{ provider: string; ok: boolean }>
-    expect(results.length).toBe(4)
+    expect(results.map((r) => r.provider).sort()).toEqual([
+      'apify_jobs',
+      'careers_page',
+      'crm',
+      'social_profiles',
+      'technology',
+    ])
 
     // No composite intent score exists anywhere on the run or its signals.
     expect(Object.keys(run)).not.toContain('intentScore')

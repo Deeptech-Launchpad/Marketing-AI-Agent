@@ -33,6 +33,14 @@ export interface SuppressionInput {
   destination: string | null
   channel: OutreachChannel
   campaignId?: string | null
+  /**
+   * Whether an open CRM deal suppresses. Default 'enforce' (unchanged for the
+   * legacy engine). The Sales sequence passes 'skip' in two cases: a stage
+   * that answers the prospect's own reply (Sales often opens a deal once SKUs
+   * arrive, and the reply must still be answered), and a company found on the
+   * open web that has no NXT Sales record to hold a deal at all.
+   */
+  openDealCheck?: 'enforce' | 'skip'
 }
 
 /**
@@ -82,28 +90,30 @@ export async function checkSuppression(input: SuppressionInput): Promise<Suppres
   //
   // A company already in an active sales conversation should not receive cold
   // outreach from a different motion. This reads the CRM; it never writes.
-  try {
-    const deals = await getCrm().listDeals({ companyId: input.crmCompanyId })
-    const open = deals.find((d) => {
-      const stage = (d.stage ?? '').toLowerCase()
-      return stage && !/won|lost|closed/.test(stage)
-    })
-    if (open) {
+  if (input.openDealCheck !== 'skip') {
+    try {
+      const deals = await getCrm().listDeals({ companyId: input.crmCompanyId })
+      const open = deals.find((d) => {
+        const stage = (d.stage ?? '').toLowerCase()
+        return stage && !/won|lost|closed/.test(stage)
+      })
+      if (open) {
+        return {
+          suppressed: true,
+          reason: 'open_opportunity',
+          detail: `An open deal exists on this company in NXT Sales (stage "${open.stage}"). Cold outreach is suppressed while a sales conversation is live.`,
+          evidenceId: open.id,
+        }
+      }
+    } catch {
+      // A CRM read failure must not silently unsuppress. It is reported by the
+      // caller as a validation problem rather than treated as "not suppressed".
       return {
         suppressed: true,
-        reason: 'open_opportunity',
-        detail: `An open deal exists on this company in NXT Sales (stage "${open.stage}"). Cold outreach is suppressed while a sales conversation is live.`,
-        evidenceId: open.id,
+        reason: 'missing_consent',
+        detail: 'The CRM could not be reached to check for an open opportunity, so outreach is held rather than sent blind.',
+        evidenceId: null,
       }
-    }
-  } catch {
-    // A CRM read failure must not silently unsuppress. It is reported by the
-    // caller as a validation problem rather than treated as "not suppressed".
-    return {
-      suppressed: true,
-      reason: 'missing_consent',
-      detail: 'The CRM could not be reached to check for an open opportunity, so outreach is held rather than sent blind.',
-      evidenceId: null,
     }
   }
 

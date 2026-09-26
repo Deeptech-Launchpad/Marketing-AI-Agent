@@ -1,0 +1,140 @@
+/* ── Settings ────────────────────────────────────────────────────────────
+   Three blocks, in the order a person needs them: who am I, how do I leave,
+   and what has this cost. */
+
+.set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  max-width: 900px;
+}
+
+.set__title {
+  font-size: var(--fs-h1);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.set__sub {
+  margin-top: 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.set__profile {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+}
+
+/* Initials, not a photograph: the platform stores no image for a user, and a
+   grey silhouette would imply one is missing rather than never kept. */
+.set__avatar {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-inset));
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.set__profilebody { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.set__name { font-size: var(--fs-h3); font-weight: 700; color: var(--text); }
+.set__email { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+
+/* ── Usage ──────────────────────────────────────────────────────────── */
+
+.set__windows { display: flex; gap: 4px; }
+
+.set__window {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--bg-panel);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.set__window[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The default state of this panel. It names the dependency instead of drawing
+   an empty chart, because an empty chart reads as "nothing happened". */
+.set__unavail {
+  display: flex;
+  gap: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.set__unavail svg { flex: none; margin-top: 2px; }
+.set__unavailtitle { font-size: var(--fs-h3); font-weight: 700; }
+.set__unavailwhy { margin-top: 3px; font-size: var(--fs-sm); line-height: 1.55; }
+
+.set__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--s4);
+  margin: 0;
+}
+
+.set__stats dt { font-size: var(--fs-xs); color: var(--text-muted); margin-bottom: 2px; }
+.set__stats dd { margin: 0; font-size: var(--fs-h2); font-weight: 700; color: var(--text); }
+
+.set__caveats {
+  list-style: none;
+  margin: var(--s4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.set__caveats li {
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--warn);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--warn-line);
+}
+
+.set__bars { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.set__bars li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px auto;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.set__barlabel { font-size: var(--fs-xs); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set__bartrack { height: 6px; border-radius: var(--r-pill); background: var(--bg-inset); overflow: hidden; }
+.set__barfill { display: block; height: 100%; background: var(--accent); }
+.set__barval { font-size: var(--fs-micro); color: var(--text-dim); white-space: nowrap; }
+
+/* The scope promise. Stated more strongly than an ordinary note, because a
+   usage figure read as an account balance is the one misreading this panel
+   must not allow. */
+.set__scope {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.55;
+  color: var(--text);
+  padding: var(--s3) var(--s4);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-inset);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  margin-bottom: var(--s3);
+}

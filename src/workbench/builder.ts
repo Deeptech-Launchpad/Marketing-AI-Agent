@@ -3,9 +3,11 @@ import { audit } from '../platform/audit.js'
 import { prisma, newId } from '../platform/db.js'
 import { ConflictError, NotFoundError } from '../platform/errors.js'
 import { logger } from '../platform/logger.js'
+import { selectCaseStudyPages } from '../websiteaudit/enrichedRecord.js'
 import { buildComparison, type ObservationInput } from './improve.js'
 import { selectProductPage } from './selection.js'
 import { sampleTheme } from './themeExtractor.js'
+import { sampleWebsiteShell, type WebsiteShell } from './websiteShell.js'
 import { NEUTRAL_THEME, type DemoStatus, type ThemeProfile } from './types.js'
 
 // TASK #981 — building a Workbench from an approved audit.
@@ -72,7 +74,16 @@ export async function buildWorkbench(input: BuildInput): Promise<BuildResult> {
   const run = await prisma.websiteAuditRun.findUniqueOrThrow({ where: { id: input.auditRunId } })
 
   // ── Product selection ───────────────────────────────────────────────────
-  const selection = await selectProductPage(input.auditRunId, input.productPageId ?? undefined)
+  // The SAME product the customer report features.
+  //
+  // Both used to choose independently, so a report could show one product and
+  // the Workbench another — for the same company, from the same audit. A
+  // customer comparing the two would reasonably conclude one of them was made
+  // up. When no page is named explicitly, the report's own selector decides,
+  // and the two agree by construction.
+  const preferred =
+    input.productPageId ?? (await selectCaseStudyPages(input.auditRunId, 1))[0] ?? undefined
+  const selection = await selectProductPage(input.auditRunId, preferred)
 
   if (!selection.page) {
     // No fabricated product, no fake demo. The reason is stored and shown.
@@ -128,10 +139,21 @@ export async function buildWorkbench(input: BuildInput): Promise<BuildResult> {
   const comparison = buildComparison({ pageUrl: selection.page.url, observations })
   const productName = comparison.fields.find((f) => f.field === 'product.name')?.before ?? null
 
-  // ── The one live request, for styling only ──────────────────────────────
-  const theme = await sampleTheme(selection.page.url)
+  // ── The live requests, for presentation only ────────────────────────────
+  //
+  // Two reads of the same page: its palette, and its furniture. Neither
+  // produces a claim about the product; both are what make the demonstration
+  // recognisably the customer's own page rather than a card with their data
+  // in it. A failure in either is recorded and shown, never papered over.
+  const [theme, websiteShell] = await Promise.all([
+    sampleTheme(selection.page.url),
+    sampleWebsiteShell(selection.page.url),
+  ])
   if (theme.source === 'neutral_default') {
     log.info({ reason: theme.reason }, 'theme sampling failed; using the neutral default')
+  }
+  if (!websiteShell.captured) {
+    log.info({ reason: websiteShell.reason }, 'website shell not captured; the Workbench will say so')
   }
 
   const demo = await upsertDemo({
@@ -145,6 +167,7 @@ export async function buildWorkbench(input: BuildInput): Promise<BuildResult> {
     productName,
     selectionReason: selection.reason,
     theme,
+    websiteShell,
     comparison,
   })
 
@@ -216,6 +239,7 @@ interface UpsertInput {
   productName?: string | null
   selectionReason?: string
   theme?: ThemeProfile
+  websiteShell?: WebsiteShell
   comparison?: { structuredData: unknown; valuePoints: unknown; observedCount: number; totalCount: number; improvedCount: number }
 }
 
@@ -233,6 +257,7 @@ async function upsertDemo(i: UpsertInput) {
     status: i.status,
     statusReason: i.statusReason,
     theme: (i.theme ?? NEUTRAL_THEME) as never,
+    websiteShell: (i.websiteShell ?? null) as never,
     structuredData: (i.comparison?.structuredData ?? undefined) as never,
     valuePoints: (i.comparison?.valuePoints ?? undefined) as never,
     observedFieldCount: i.comparison?.observedCount ?? 0,

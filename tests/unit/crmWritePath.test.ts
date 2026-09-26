@@ -12,6 +12,9 @@ const CONFIRMED_MAP =
 
 const envMock: Record<string, unknown> = {
   CRM_WRITE_ENABLED: false,
+  // On for most of this file, so the other guards are what gets exercised.
+  // Its own behaviour is tested in its own section.
+  CRM_WRITE_ALLOW_LIVE: true,
   CRM_WRITE_FIELD_INTENT_SCORE: 'intentScore',
   CRM_WRITE_FIELD_QUALIFICATION_STATUS: 'qualificationStatus',
   CRM_WRITE_QUALIFICATION_VALUE_MAP: CONFIRMED_MAP,
@@ -36,6 +39,7 @@ const COMPANY = 'cms7fiyww06pnqj76gap3d9r4'
 beforeEach(() => {
   vi.restoreAllMocks()
   envMock.CRM_WRITE_ENABLED = false
+  envMock.CRM_WRITE_ALLOW_LIVE = true
   envMock.NXT_SALES_BASE_URL = 'http://crm.test'
   envMock.NXT_SALES_SERVICE_USER_ID = 'cmt8ljfon00top3t31zkt33wz'
   envMock.NXT_SALES_LIVE_SERVICE_USER_ID = 'cmt8ljfon00top3t31zkt33wz'
@@ -203,6 +207,54 @@ describe('the port declares one write and no more', () => {
 // A write signed with the wrong id is accepted silently and recorded in the CRM
 // against whoever that id names. Base URL and service id are separate settings,
 // so nothing but this guard keeps them in step.
+
+// ── THE LIVE CRM IS READ-ONLY BY DEFAULT ───────────────────────────────────
+//
+// The platform is connected to the live CRM to READ leads. Repointing the base
+// URL is one setting and enabling writes is another, and neither should be
+// able to produce a live write on its own — so a non-local target is refused
+// unless somebody says so in a third, separate place.
+
+describe('a live target refuses writes of its own accord', () => {
+  beforeEach(() => {
+    envMock.CRM_WRITE_ENABLED = true
+    envMock.CRM_WRITE_ALLOW_LIVE = false
+  })
+
+  it('refuses although writes are enabled and the identity is right', async () => {
+    const calls = captureFetch()
+    await expect(crmPut('/api/companies/x', { customFields: { intentScore: 1 } })).rejects.toThrow(
+      /CRM_WRITE_ALLOW_LIVE is off/,
+    )
+    expect(calls, 'nothing may reach the wire').toHaveLength(0)
+  })
+
+  it('says plainly that nothing was sent', async () => {
+    captureFetch()
+    await expect(crmPut('/api/companies/x', { customFields: {} })).rejects.toThrow(/Nothing was sent/)
+  })
+
+  it('does not stand in the way of a local snapshot', async () => {
+    const calls = captureFetch()
+    envMock.NXT_SALES_BASE_URL = 'http://localhost:4000'
+    await crmPut('/api/companies/x', { customFields: { intentScore: 1 } })
+    expect(calls).toHaveLength(1)
+  })
+
+  it('lets a live write through once it is deliberately allowed', async () => {
+    const calls = captureFetch()
+    envMock.CRM_WRITE_ALLOW_LIVE = true
+    await crmPut('/api/companies/x', { customFields: { intentScore: 1 } })
+    expect(calls).toHaveLength(1)
+  })
+
+  it('refuses before the identity check, so reading live needs no service id at all', async () => {
+    const calls = captureFetch()
+    envMock.NXT_SALES_LIVE_SERVICE_USER_ID = ''
+    await expect(crmPut('/api/companies/x', { customFields: {} })).rejects.toThrow(/CRM_WRITE_ALLOW_LIVE is off/)
+    expect(calls).toHaveLength(0)
+  })
+})
 
 describe('service identity must match the target host', () => {
   beforeEach(() => {

@@ -59,7 +59,8 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
+  /* One column per pipeline engine; the count is set on the element. */
+  grid-template-columns: repeat(var(--nodes, 6), minmax(0, 1fr));
   gap: var(--s2);
 }
 
@@ -241,7 +242,7 @@
 
 @media (max-width: 1280px) {
   .cc__nodes {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--s5) var(--s2);
   }
   .cc__rail {
@@ -257,3 +258,8 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* A row whose engine still runs but whose value is withheld this phase.
+   Dimmed and italic so it reads as "deliberately absent" rather than as a
+   value — it must not be mistaken for a result. */
+.cc__locked { color: var(--text-dim); font-style: italic; }

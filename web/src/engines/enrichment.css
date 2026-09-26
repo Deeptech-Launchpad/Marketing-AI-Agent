@@ -1,0 +1,222 @@
+/* ═════════════════════════════════════════════════════════════════════════
+   Company Enrichment — the centre of the workspace.
+
+   The screen used to open on a technology grid with the workspace-wide
+   register beside it, and a manager reading it could not tell what had been
+   learned about the company in front of them. These rules exist for the
+   read-out, the observation rows and the demoted register — everything else
+   on the page still comes from engines.css and the shared primitives.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ── The five-question read-out ─────────────────────────────────────────── */
+
+.enrich__readout {
+  margin: var(--s5) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.enrich__readout > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: var(--s4);
+  align-items: baseline;
+}
+
+.enrich__readout dt {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.enrich__readout dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* The stage's own caveat, carried by the API alongside every record. */
+.enrich__caveat {
+  margin-top: var(--s4);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line-faint);
+}
+
+/* ── Observation rows ───────────────────────────────────────────────────── */
+
+.enrich__group + .enrich__group {
+  margin-top: var(--s5);
+}
+
+.enrich__grouphead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+
+.enrich__groupname {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.enrich__groupnote {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+/* Label, value and the way to check it — in that order, because the value is
+   what is being read and the evidence is what is being offered. */
+.enrich__obs {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
+  gap: var(--s3) var(--s4);
+  align-items: baseline;
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line-faint);
+}
+
+.enrich__obs:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.enrich__obslabel {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.enrich__obsvalue {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Long observed text — a page title, a meta description — is the value, not a
+   quotation, so it stays in the reading face and simply wraps. */
+.enrich__obsvalue--long {
+  color: var(--text-soft);
+}
+
+@media (max-width: 720px) {
+  .enrich__obs {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .enrich__obslabel {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ── Detected technology ────────────────────────────────────────────────── */
+
+/* The evidence action sits under the detection it belongs to, so a card is
+   never read without the way to check it being in the same place. */
+.enrich__techfoot {
+  margin-top: var(--s3);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--line-faint);
+}
+
+.enrich__techmeaning {
+  font-size: var(--fs-micro);
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: var(--s2);
+}
+
+/* ── Provenance, as the run recorded it ─────────────────────────────────── */
+
+.enrich__claims {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.enrich__claim {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.enrich__claimlabel {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.enrich__claimtext {
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+/* ── The workspace register, demoted ────────────────────────────────────── */
+
+/* Kept on the page and kept closed. It is the answer to "what else has this
+   platform touched", which is a different question from the one this screen
+   is here to answer. */
+.enrich__more > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5);
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-muted);
+}
+
+.enrich__more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.enrich__more > summary:hover {
+  background: var(--bg-hover);
+}
+
+.enrich__moretitle {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.enrich__morecount {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  margin-right: auto;
+}
+
+.enrich__more > summary::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--t-quick) var(--ease-out);
+}
+
+.enrich__more[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.enrich__more[open] > summary::after {
+  transform: rotate(45deg);
+}

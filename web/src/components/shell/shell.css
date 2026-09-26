@@ -359,6 +359,35 @@
   animation: fade-up var(--t-quick) var(--ease-out);
 }
 
+/* The picker searches the CRM, so it needs somewhere to type. */
+.context__search {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 6px var(--s3);
+  margin-bottom: var(--s1);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.context__search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  outline: none;
+}
+.context__search input::placeholder {
+  color: var(--text-muted);
+}
+.context__menu-head {
+  padding: var(--s2) var(--s3) 4px;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .context__menu-item {
   display: flex;
   align-items: center;
@@ -517,4 +546,74 @@
   background: var(--bg-panel);
   color: var(--accent);
   box-shadow: var(--shadow-sm);
+}
+
+/* ── A panel whose engine still runs but whose numbers are not shown ─────
+   Deliberately quiet. This is not an error and not an empty state: the engine
+   ran, the result exists, and the decision not to show it yet is ours. */
+
+.context__locked {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 6px 0;
+}
+
+/* ── Recent activity ────────────────────────────────────────────────────
+   One act per row: what it was, on which channel and when, and who reported
+   it. Every line is checkable, which is the whole reason the counters it
+   replaced had to go. */
+
+.context__acts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.context__act {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: var(--s3);
+  border-left: 2px solid var(--line);
+}
+
+.context__act-what {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.context__act-meta {
+  font-size: var(--fs-micro);
+  color: var(--text-muted);
+}
+
+.context__act-src {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.context__none {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* Settings is not an engine. It sits below the pipeline, separated by a rule,
+   so it never reads as a thirteenth stage. */
+.nav__settings {
+  margin-top: auto;
+  border-top: 1px solid var(--line-faint);
+  padding-top: var(--s3);
+}
+
+/* Settings takes all the free space above it and sits just over Collapse.
+   Both claiming `margin-top: auto` split that space in two and left
+   Settings stranded mid-rail. */
+.nav__settings + .nav__collapse {
+  margin-top: var(--s2);
 }

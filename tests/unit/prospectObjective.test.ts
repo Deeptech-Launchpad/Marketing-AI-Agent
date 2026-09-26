@@ -94,10 +94,36 @@ describe('prospecting objective — filter vs hypothesis', () => {
 describe('resolveGeography', () => {
   const VOCAB = ['UNITED STATES', 'UNITED KINGDOM', 'IRELAND', 'AUSTRALIA', 'MALTA']
 
-  it('matches case-insensitively and in both directions', () => {
-    // The CRM stores "UNITED STATES"; a user writes "United States" or "US".
+  it('matches case-insensitively', () => {
+    // The CRM stores "UNITED STATES"; a user writes "United States".
     expect(resolveGeography(['united states'], VOCAB).matched).toEqual(['UNITED STATES'])
     expect(resolveGeography(['Ireland'], VOCAB).matched).toEqual(['IRELAND'])
+  })
+
+  it('resolves common aliases to the one country they name', () => {
+    expect(resolveGeography(['US'], VOCAB).matched).toEqual(['UNITED STATES'])
+    expect(resolveGeography(['U.S.A.'], VOCAB).matched).toEqual(['UNITED STATES'])
+    expect(resolveGeography(['UK'], VOCAB).matched).toEqual(['UNITED KINGDOM'])
+    expect(resolveGeography(['Great Britain'], VOCAB).matched).toEqual(['UNITED KINGDOM'])
+    expect(resolveGeography(['UAE'], ['UNITED ARAB EMIRATES', 'OMAN'])).toEqual({
+      matched: ['UNITED ARAB EMIRATES'],
+      unmatched: [],
+    })
+  })
+
+  it('never matches a country by substring', () => {
+    const WIDE = ['UNITED STATES', 'AUSTRALIA', 'RUSSIA', 'CYPRUS', 'ROMANIA', 'OMAN', 'INDIA', 'BRITISH INDIAN OCEAN TERRITORY']
+    expect(resolveGeography(['US'], WIDE).matched).toEqual(['UNITED STATES'])
+    expect(resolveGeography(['Oman'], WIDE).matched).toEqual(['OMAN'])
+    expect(resolveGeography(['India'], WIDE).matched).toEqual(['INDIA'])
+    // A partial name is not a country: reported unmatched, not widened.
+    expect(resolveGeography(['Austral'], WIDE)).toEqual({ matched: [], unmatched: ['Austral'] })
+  })
+
+  it('handles accents, punctuation and a leading "the"', () => {
+    expect(resolveGeography(['Côte d’Ivoire'], ["COTE D'IVOIRE"]).matched).toEqual(["COTE D'IVOIRE"])
+    expect(resolveGeography(['the Netherlands'], ['NETHERLANDS']).matched).toEqual(['NETHERLANDS'])
+    expect(resolveGeography(['Holland'], ['Netherlands', 'Norway']).matched).toEqual(['Netherlands'])
   })
 
   it('reports an unmatched term instead of dropping it', () => {

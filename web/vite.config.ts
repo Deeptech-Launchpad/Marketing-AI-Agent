@@ -22,7 +22,15 @@ export default defineConfig({
     port: 5174,
     proxy: {
       '/api/v1': { target: MARKETING_API, changeOrigin: true },
-      '/workbench': { target: MARKETING_API, changeOrigin: true },
+      // Only a workbench SHARE LINK, which always carries a token segment.
+      //
+      // The bare key '/workbench' matched the app's own /workbench route as
+      // well, so opening or reloading the AI Workbench went to the API instead
+      // of the app and rendered {"error":{"code":"not_found","message":"No such
+      // endpoint."}} as the whole page. Clicking through from the nav worked —
+      // that is client-side routing and never asks the server — which is why it
+      // survived until a browser actually loaded the URL directly.
+      '^/workbench/[^/]+': { target: MARKETING_API, changeOrigin: true },
       '/nxt': {
         target: NXT_SALES_API,
         changeOrigin: true,

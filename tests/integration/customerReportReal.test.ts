@@ -97,10 +97,21 @@ describeIfReady('customer report — real stored audits', () => {
 
     // Structure
     expect(r.pdf.bytes.subarray(0, 5).toString()).toBe('%PDF-')
-    expect(r.pdf.pageCount).toBeGreaterThanOrEqual(2)
-    expect(r.pdf.pageCount).toBeLessThanOrEqual(7)
-    expect(text).toContain('Product Data Health Check')
-    expect(text).toContain('Next step')
+    // Seven, exactly: every footer in the document says "of 7", and pdfkit
+    // adds pages silently when content overruns.
+    expect(r.pdf.pageCount).toBe(7)
+    expect(text).toContain('AI DISCOVERABILITY AUDIT')
+    expect(text).toContain('THE 15-POINT SCORECARD')
+    expect(text).toContain('Recommended Next Step')
+
+    // A check the platform cannot run is never scored as one it failed.
+    expect(text).toContain('NOT ASSESSED')
+    expect(text).not.toContain('Sector Baseline')
+    expect(text).not.toContain('Top Decile')
+
+    // Nothing decoded badly on its way to the customer.
+    expect(text).not.toContain('&amp;')
+    expect(text).not.toContain('&nbsp;')
 
     // Reproducibility
     const again = await generate({ tenantId, auditRunId: runId, workbenchUrl: 'https://demo.altiusnxt.com/w/x' })
@@ -120,7 +131,11 @@ describeIfReady('customer report — real stored audits', () => {
     expect(new Set(text.match(/https?:\/\/[^\s)]+/g) ?? []).size).toBeLessThanOrEqual(6)
 
     // No unsupported claim of any kind
-    expect(text).not.toMatch(/\b\d{1,3}\s?%/)
+    // Pillar weights are the one legitimate percentage in this document. The
+    // guard exists to catch invented performance claims like "40% more
+    // traffic", so it excludes the two weights the template itself prints.
+    const percentages = (text.match(/\b\d{1,3}\s?%/g) ?? []).filter((m) => !['30%', '40%'].includes(m.trim()))
+    expect(percentages).toEqual([])
     expect(text).not.toMatch(/[£$€]\s?\d/)
     expect(text).not.toMatch(/\bROI\b/i)
     expect(text).not.toMatch(/your (?:search )?ranking/i)
@@ -143,15 +158,18 @@ describeIfReady('customer report — real stored audits', () => {
     }
   })
 
-  it('refuses an unapproved report — the invariant, on real data', async () => {
+  it('renders an unapproved report as a REVIEW copy — the invariant, on real data', async () => {
     await setup()
     const [runId, name, state] = UNAPPROVED
     const report = await prisma.auditReport.findFirst({ where: { auditRunId: runId } })
     expect(report?.status, `${name} should still be ${state}`).toBe(state)
 
-    await expect(generate({ tenantId, auditRunId: runId })).rejects.toThrow(
-      /may only be produced from a report approved/,
-    )
+    // It renders, because the reviewer has to read what they are approving.
+    // What it must never be is the customer copy.
+    const r = await generate({ tenantId, auditRunId: runId })
+    expect(r.audience).toBe('internal_review')
+    expect(r.approvalState).toBe(state)
+    expect(pdfText(r.pdf.bytes).toUpperCase(), 'every page says so').toContain('INTERNAL REVIEW')
   })
 
   it('produces exactly one worked example for 1st Ayd, and says so truthfully', async () => {
@@ -202,5 +220,68 @@ describeIfReady('customer report — real stored audits', () => {
     expect(after?.currentRevision).toBe(before?.currentRevision)
     expect(after?.updatedAt?.getTime()).toBe(before?.updatedAt?.getTime())
     expect(revsAfter).toBe(revsBefore)
+  })
+
+  // ── One customer's document contains one customer ──────────────────────
+  //
+  // The screenshot bug was exactly this failing in the UI: a report rendered
+  // while one company was selected showed another company's pages. That was a
+  // frontend cache-key defect, but nothing downstream was asserting the
+  // property, so the same mistake made in the PDF builder would have shipped
+  // silently — and unlike a screen, a PDF gets emailed to the wrong customer.
+  it('never prints another audited company inside a customer report', async () => {
+    await setup()
+
+    const rendered = await Promise.all(
+      APPROVED.map(async ([runId, name]) => {
+        const result = await generate({ tenantId, auditRunId: runId })
+        return { runId, name, text: pdfText(result.pdf.bytes) }
+      }),
+    )
+
+    // Each company's own identifying strings, taken from its stored run rather
+    // than written down here, so this keeps working as the dataset changes.
+    const identity = await Promise.all(
+      APPROVED.map(async ([runId]) => {
+        const run = await prisma.websiteAuditRun.findFirstOrThrow({ where: { id: runId } })
+        const host = run.startUrl ? new URL(run.startUrl).hostname.replace(/^www\./, '') : null
+        return { runId, companyName: run.companyName, host, crmCompanyId: run.crmCompanyId }
+      }),
+    )
+
+    for (const doc of rendered) {
+      const mine = identity.find((i) => i.runId === doc.runId)!
+      expect(doc.text, `${doc.name} must name itself`).toContain(mine.companyName)
+
+      for (const other of identity) {
+        if (other.runId === doc.runId) continue
+        // A shared token between two real company names would make this
+        // assertion meaningless rather than strict, so only compare names
+        // that are actually distinct.
+        if (other.companyName && !mine.companyName.includes(other.companyName)) {
+          expect(doc.text, `${doc.name} must not name ${other.companyName}`).not.toContain(other.companyName)
+        }
+        if (other.host && other.host !== mine.host) {
+          expect(doc.text, `${doc.name} must not cite ${other.host}`).not.toContain(other.host)
+        }
+      }
+    }
+  })
+
+  it('draws its sectors from the audited run alone', async () => {
+    await setup()
+    const { analyseSectors } = await import('../../src/websiteaudit/sectorAnalysis.js')
+
+    for (const [runId, name] of APPROVED) {
+      const run = await prisma.websiteAuditRun.findFirstOrThrow({ where: { id: runId } })
+      const host = run.startUrl ? new URL(run.startUrl).hostname.replace(/^www\./, '') : null
+      if (!host) continue
+
+      for (const sector of (await analyseSectors(runId)).sectors) {
+        for (const url of sector.evidenceUrls) {
+          expect(new URL(url).hostname.replace(/^www\./, ''), `${name} sector "${sector.name}"`).toBe(host)
+        }
+      }
+    }
   })
 })

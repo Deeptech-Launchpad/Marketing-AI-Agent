@@ -210,3 +210,38 @@ export function AsyncBoundary<T>({
   if (isEmpty?.(state.data)) return <>{empty ?? <EmptyState title="Nothing to show yet." />}</>
   return <>{children(state.data)}</>
 }
+
+/**
+ * A screen refusing to draw another company's evidence.
+ *
+ * Deliberately shows the ids rather than a soft apology: when this appears,
+ * somebody needs to know WHICH record was about to be shown under the wrong
+ * customer's name. Nothing of the foreign record is rendered alongside it.
+ */
+export function LineageMismatch({
+  what,
+  expected,
+  found,
+  onReload,
+}: {
+  what: string
+  expected: string
+  found: string | null
+  onReload?: () => void
+}) {
+  return (
+    <BlockedState
+      what="Data lineage mismatch"
+      why={`The ${what} that loaded belongs to a different company than the one selected, so it has not been displayed.`}
+      affects={`Selected company ${expected}; the record names ${found ?? 'no company'}.`}
+      remediation="Reload this workspace for the selected company. If it keeps happening, quote both ids to engineering."
+      action={
+        onReload ? (
+          <Button icon={RefreshCw} onClick={onReload}>
+            Reload for the selected company
+          </Button>
+        ) : undefined
+      }
+    />
+  )
+}

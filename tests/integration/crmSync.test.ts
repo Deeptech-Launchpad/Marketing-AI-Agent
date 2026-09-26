@@ -135,7 +135,7 @@ describeIfReady('Task #986 — the real 1st Ayd handoff', () => {
     expect(built!.payload.workbench.publicUrl).toBeNull()
   })
 
-  it('4. prepares the handoff and holds it in the outbox', async () => {
+  it('4. prepares the handoff and holds it for a human decision', async () => {
     const { prisma } = await import('../../src/platform/db.js')
     const { syncQualification } = await import('../../src/crmsync/service.js')
 
@@ -147,17 +147,32 @@ describeIfReady('Task #986 — the real 1st Ayd handoff', () => {
 
     const r = await syncQualification({ tenantId, qualificationId: q.id })
 
-    // The honest state: validated, mapped, and undeliverable.
-    expect(r.state).toBe('blocked_provider_unavailable')
-    expect(r.providerStatus).toBe('write_not_supported')
+    // The honest state, now that the approved update path exists:
+    // validated, mapped, deliverable — and waiting for a person.
+    //
+    // This read `blocked_provider_unavailable` / `write_not_supported`,
+    // which was correct while no write path existed. It kept passing after
+    // updateCompany was added, because the capability gate still asked for
+    // `canCreate` — a capability the approved scope deliberately excludes —
+    // so every approved handoff was reported undeliverable and nothing was
+    // ever written (B1). The gate now asks for `canUpdate`, and an
+    // unapproved handoff stops at the HUMAN gate instead.
+    expect(r.state).toBe('awaiting_user_approval')
+    expect(r.providerStatus).toBe('available')
     expect(r.validation.ok).toBe(true)
-    expect(r.outboxId).toBeTruthy()
-    // Nothing claims to have been written.
+    // Still nothing claims to have been written: no approval, no write.
     for (const res of r.resources) expect(res.result).toBe('not_supported')
 
-    const held = await prisma.crmSyncOutbox.findUniqueOrThrow({ where: { id: r.outboxId! } })
-    expect(held.state).toBe('pending')
-    expect(held.mappingVersion).toBe('crm-map-1')
+    // No outbox entry, and that is correct. The outbox holds a validated
+    // package that COULD NOT be delivered; this one can be, as soon as a
+    // person says so. What carries it is the sync record, which is what
+    // approveSync reads and acts on.
+    expect(r.outboxId).toBeNull()
+    const record = await prisma.crmSyncRecord.findFirstOrThrow({
+      where: { tenantId, qualificationId: q.id },
+    })
+    expect(record.state).toBe('awaiting_user_approval')
+    expect(record.mappingVersion).toBe('crm-map-1')
   })
 })
 
@@ -271,18 +286,28 @@ describeIfReady('Task #986 — idempotency and history', () => {
     })
     if (!q) return
 
-    await syncQualification({ tenantId, qualificationId: q.id })
+    const first = await syncQualification({ tenantId, qualificationId: q.id })
     const before = await prisma.crmSyncOutbox.count({ where: { qualificationId: q.id } })
 
     await syncQualification({ tenantId, qualificationId: q.id })
     await syncQualification({ tenantId, qualificationId: q.id })
 
-    // The held package is refreshed, not duplicated.
-    expect(await prisma.crmSyncOutbox.count({ where: { qualificationId: q.id } })).toBe(before)
-    expect(before).toBe(1)
+    // The invariant is NON-DUPLICATION, and it holds on every path.
+    //
+    // What this must NOT assert is an exact count, which is what it used to
+    // do. The number depends on two things this test does not control: which
+    // path the sync takes (an unreachable CRM holds the validated package;
+    // a reachable one stops at awaiting_user_approval and holds nothing), and
+    // whether an earlier blocked attempt already left a row behind. Asserting
+    // "exactly 1" passed only while NXT Sales happened to be down — it was
+    // green for the wrong reason, and went red the moment the CRM came up.
+    const after = await prisma.crmSyncOutbox.count({ where: { qualificationId: q.id } })
+    expect(after, 'three syncs must not stack three packages').toBe(before)
+    expect(after, 'a held package is refreshed, never duplicated').toBeLessThanOrEqual(1)
 
-    // One sync record, whatever the attempt count.
+    // One sync record, whatever the path or the attempt count.
     expect(await prisma.crmSyncRecord.count({ where: { qualificationId: q.id } })).toBe(1)
+    void first
   })
 
   it('12. every attempt is appended to the history', async () => {
@@ -306,7 +331,7 @@ describeIfReady('Task #986 — idempotency and history', () => {
       orderBy: { occurredAt: 'desc' },
     })
     expect(latest.mappingVersion).toBe('crm-map-1')
-    expect(latest.newState).toBe('blocked_provider_unavailable')
+    expect(latest.newState).toBe('awaiting_user_approval')
     expect(latest.attempt).toBeGreaterThan(0)
   })
 

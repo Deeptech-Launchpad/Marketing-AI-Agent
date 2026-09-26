@@ -53,6 +53,10 @@ export const ACTION_STATUSES = [
   'blocked_provider_unavailable',
   'blocked_validation_failed',
   'blocked_no_target',
+  // No Sales-approved OutreachTemplate exists yet for this channel. Distinct
+  // from `blocked_provider_unavailable` (a fact about the sending channel):
+  // this is a fact about content — nobody has supplied the words yet.
+  'blocked_no_template',
   // Team Answer, Section 4: an address must be verified before it may be used.
   // Kept apart from `blocked_suppressed` deliberately — suppression means we
   // must not contact this person, this means we cannot yet reach this address.

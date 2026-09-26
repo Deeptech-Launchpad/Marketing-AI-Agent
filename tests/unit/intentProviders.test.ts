@@ -128,8 +128,10 @@ describe('careers page provider — missing source data', () => {
     const { CareersPageProvider } = await import('../../src/intent/providers/careersPageProvider.js')
     const r = await runProvider(new CareersPageProvider(), ctx({ company: company({ domain: null }) }))
     expect(r.ok).toBe(false)
-    expect(r.reason).toMatch(/no domain/i)
+    expect(r.reason).toMatch(/no domain|no website/i)
     expect(r.signals).toEqual([])
+    // A gap in the record, not a failure of the run.
+    expect(r.metadata?.notApplicable).toBe(true)
   })
 
   it('refuses a stored domain that is not a usable http(s) URL', async () => {

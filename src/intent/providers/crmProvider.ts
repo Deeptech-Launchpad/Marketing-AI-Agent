@@ -25,12 +25,41 @@ export class CrmSignalProvider implements IntentProvider {
 
   async collect(ctx: ProviderContext): Promise<ProviderResult> {
     const started = Date.now()
+
+    // A DiscoveredCompany has no CRM record to read yet — every call below
+    // would fail against NXT Sales for a placeholder id that was never one of
+    // its companies. That is not a CRM failure; it is the expected state of a
+    // brand-new prospect, so it is reported as such rather than as N failed reads.
+    if (ctx.isDiscovered) {
+      return {
+        provider: this.name,
+        ok: false,
+        signals: [],
+        reason: 'No CRM record exists for this company yet.',
+        durationMs: Date.now() - started,
+        // Expected, not a failure: nothing here to read. Marked so the run
+        // is not reported as partial for it.
+        metadata: { notApplicable: true },
+      }
+    }
+
     const crm = getCrm()
     const company = ctx.company
     const signals: IntentSignalDraft[] = []
 
+    // A failed CRM call is NOT an empty list. "No open deal" read from a call
+    // that errored would clear a company for outreach on no evidence, so each
+    // failure is recorded and the provider reports ok:false.
+    const errors: Array<{ call: string; message: string }> = []
+    const failed =
+      (call: string) =>
+      (err: unknown): never[] => {
+        errors.push({ call, message: (err as Error)?.message ?? String(err) })
+        return []
+      }
+
     // ── Open opportunities: NEGATIVE. Owned by sales, not marketing. ────────
-    const deals = await crm.listDeals({ companyId: company.id }).catch(() => [])
+    const deals = await crm.listDeals({ companyId: company.id }).catch(failed('listDeals'))
     const open = deals.filter((d) => d.stage !== 'Won' && d.stage !== 'Lost')
     if (open.length) {
       const d = open[0]!
@@ -73,7 +102,9 @@ export class CrmSignalProvider implements IntentProvider {
     }
 
     // ── Recent two-way engagement: POSITIVE. ────────────────────────────────
-    const activities = await crm.listActivities({ companyId: company.id, type: 'email' }).catch(() => [])
+    const activities = await crm
+      .listActivities({ companyId: company.id, type: 'email' })
+      .catch(failed('listActivities'))
     const cutoff = Date.now() - RECENT_ACTIVITY_DAYS * 86_400_000
     const recent = activities.filter((a) => new Date(a.createdAt).getTime() >= cutoff)
     const inbound = recent.filter((a) => a.direction === 'inbound')
@@ -133,7 +164,7 @@ export class CrmSignalProvider implements IntentProvider {
           ],
         },
       })
-      .catch(() => [])
+      .catch(failed('suppressionEntry.findMany'))
 
     for (const entry of suppression) {
       signals.push({
@@ -154,10 +185,14 @@ export class CrmSignalProvider implements IntentProvider {
 
     return {
       provider: this.name,
-      ok: true,
+      ok: errors.length === 0,
       signals,
+      reason: errors.length
+        ? `${errors.length} CRM read(s) failed, so what they would have shown is unknown: ` +
+          errors.map((e) => `${e.call}: ${e.message}`).join('; ')
+        : undefined,
       durationMs: Date.now() - started,
-      metadata: { dealsChecked: deals.length, activitiesChecked: activities.length },
+      metadata: { dealsChecked: deals.length, activitiesChecked: activities.length, errors },
     }
   }
 }

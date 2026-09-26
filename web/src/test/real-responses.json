@@ -1,0 +1,3367 @@
+{
+  "runId": "x16g6j0n4gkcp5fco5jaxd2p",
+  "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+  "captured": {
+    "auditRun": {
+      "status": 200,
+      "body": {
+        "id": "x16g6j0n4gkcp5fco5jaxd2p",
+        "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "companyName": "Jamesco Trading Ltd",
+        "startUrl": "https://jamescotrading.com/",
+        "rootHost": "jamescotrading.com",
+        "prospectSearchId": null,
+        "requestedByCrmUserId": "crm-user-jey",
+        "status": "partial",
+        "pagesFetched": 15,
+        "pagesSkipped": 0,
+        "productPages": 12,
+        "categoryPages": 2,
+        "otherPages": 1,
+        "duplicatePages": 0,
+        "canonicalDuplicates": 0,
+        "soft404Pages": 0,
+        "httpErrors": 0,
+        "unreachablePages": 0,
+        "structuredDataPages": 15,
+        "totalBytes": 6026346,
+        "limitsHit": [
+          "maxPages (15)",
+          "frontier not exhausted"
+        ],
+        "limitsApplied": {
+          "maxBytes": 15728640,
+          "maxDepth": 3,
+          "maxPages": 15,
+          "startUrlSource": "Stage 2 enrichment (a URL that responded)",
+          "maxProductPages": 20,
+          "maxCategoryPages": 5
+        },
+        "retryCount": 1,
+        "failureReason": null,
+        "error": null,
+        "startedAt": "2026-09-04T06:29:19.300Z",
+        "completedAt": "2026-09-04T06:29:35.273Z",
+        "createdAt": "2026-09-04T06:29:18.434Z",
+        "updatedAt": "2026-09-04T06:29:35.275Z",
+        "summary": "Incomplete: 15 page(s) inspected before maxPages (15), frontier not exhausted stopped the crawl."
+      }
+    },
+    "auditPages": {
+      "status": 200,
+      "body": {
+        "runId": "x16g6j0n4gkcp5fco5jaxd2p",
+        "companyName": "Jamesco Trading Ltd",
+        "startUrl": "https://jamescotrading.com/",
+        "total": 15,
+        "byType": {
+          "company": 1,
+          "product": 12,
+          "category": 2
+        },
+        "byOutcome": {
+          "fetched": 15
+        },
+        "pages": [
+          {
+            "id": "yexeyh0mtuoiw5b6k3i809f9",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/",
+            "finalUrl": "https://jamescotrading.com/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "company",
+            "typeSignals": [
+              "JSON-LD[1].@graph[4] declares @type Organization",
+              "Also scored product (45)."
+            ],
+            "depth": 0,
+            "bytes": 316482,
+            "wordCount": 1077,
+            "contentHash": "eaf0f849dcecfaf62e0610cd60fca8b9acf85451a432a8655d6229281e7d93f7",
+            "canonicalUrl": "https://jamescotrading.com/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 1708,
+            "fetchedAt": "2026-09-04T06:29:22.936Z"
+          },
+          {
+            "id": "abp5nyd67b9zvaubekpnpwo2",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/shop",
+            "finalUrl": "https://jamescotrading.com/shop/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "Also scored company (60).",
+              "Also scored category (25)."
+            ],
+            "depth": 1,
+            "bytes": 2113536,
+            "wordCount": 150142,
+            "contentHash": "845a63ce6333824aa9c6222e0ffad5e65182eac849599ef73e163deaba714104",
+            "canonicalUrl": "https://jamescotrading.com/shop/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/shop",
+              "https://jamescotrading.com/shop/"
+            ],
+            "truncated": true,
+            "failureReason": null,
+            "durationMs": 1177,
+            "fetchedAt": "2026-09-04T06:29:24.248Z"
+          },
+          {
+            "id": "x6pnho0cmexqjcr2abqwqj1x",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product-category/services/",
+            "finalUrl": "https://jamescotrading.com/product-category/services/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "category",
+            "typeSignals": [
+              "JSON-LD[1].@graph[0] declares @type CollectionPage",
+              "Also scored company (60).",
+              "Also scored product (45)."
+            ],
+            "depth": 1,
+            "bytes": 263394,
+            "wordCount": 946,
+            "contentHash": "b71039521e9a845a703495b8634e89037bbfb3fd4c32b9695a4f39a7532f8446",
+            "canonicalUrl": "https://jamescotrading.com/product-category/z-services/services/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product-category/services/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 709,
+            "fetchedAt": "2026-09-04T06:29:25.235Z"
+          },
+          {
+            "id": "ms29868ktawyuei0yagt8urb",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product-category/uncategorized/",
+            "finalUrl": "https://jamescotrading.com/product-category/uncategorized/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "category",
+            "typeSignals": [
+              "JSON-LD[1].@graph[0] declares @type CollectionPage",
+              "Page links to 26 distinct product-shaped URLs",
+              "Also scored company (60).",
+              "Also scored product (45)."
+            ],
+            "depth": 1,
+            "bytes": 339319,
+            "wordCount": 3235,
+            "contentHash": "526b72dac674887a705b8fa1466c593cf42413829b576aed0941bab5c0fb7124",
+            "canonicalUrl": "https://jamescotrading.com/product-category/uncategorized/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product-category/uncategorized/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 688,
+            "fetchedAt": "2026-09-04T06:29:26.862Z"
+          },
+          {
+            "id": "w4hpp8e94mtv2afytfuvf80k",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+            "finalUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 270704,
+            "wordCount": 856,
+            "contentHash": "08765a5097dda8330ed6849dbaa4592d86332b68b3cab49267beceb86af23b9e",
+            "canonicalUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/hire-of-ecg-machine-100l/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 691,
+            "fetchedAt": "2026-09-04T06:29:26.065Z"
+          },
+          {
+            "id": "sxvyt8dxbjqdiahkz130yl9s",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+            "finalUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 270647,
+            "wordCount": 859,
+            "contentHash": "d9139661483c7dc161ad3c282581512f89da3ac141f97962c6b8de1a9f8d2546",
+            "canonicalUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 678,
+            "fetchedAt": "2026-09-04T06:29:27.656Z"
+          },
+          {
+            "id": "nxfjv38jqi719uaglcvrs5i0",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/test-product/",
+            "finalUrl": "https://jamescotrading.com/product/test-product/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 269341,
+            "wordCount": 827,
+            "contentHash": "22a99851c621875841ccf9e60a11f3493c24e96415f4a5bbc3863737f198e48d",
+            "canonicalUrl": "https://jamescotrading.com/product/test-product/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/test-product/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 672,
+            "fetchedAt": "2026-09-04T06:29:28.464Z"
+          },
+          {
+            "id": "qbo8uu7takybbfqrhmmnyxf8",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+            "finalUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 270925,
+            "wordCount": 868,
+            "contentHash": "7ed2541d79f6f833d192d6b7b3d5c13ce8edbbdd24bf12357fa4daff1cf63fc9",
+            "canonicalUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 675,
+            "fetchedAt": "2026-09-04T06:29:29.251Z"
+          },
+          {
+            "id": "yr20jc8rh9lzygd5wgc14hr3",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/",
+            "finalUrl": "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 272436,
+            "wordCount": 854,
+            "contentHash": "d43883e492a7fb1729f523a66212b1a3e4880c6e4578d502f103f2d13a0318a7",
+            "canonicalUrl": "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 674,
+            "fetchedAt": "2026-09-04T06:29:30.036Z"
+          },
+          {
+            "id": "brfhbsvhi3a2ghynavirwkgt",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/dias-isothermal-bag-for-diabetics-kit-black/",
+            "finalUrl": "https://jamescotrading.com/product/dias-isothermal-bag-for-diabetics-kit-black/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 274337,
+            "wordCount": 848,
+            "contentHash": "da22c329c908f9a4915f3a81ae2c62392948a9cea43482808c69948d2bf6bc28",
+            "canonicalUrl": "https://jamescotrading.com/product/dias-isothermal-bag-for-diabetics-kit-black/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/dias-isothermal-bag-for-diabetics-kit-black/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 674,
+            "fetchedAt": "2026-09-04T06:29:30.832Z"
+          },
+          {
+            "id": "za002qbctfdn1ia785br9a47",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/customer-replacementrit-excel/",
+            "finalUrl": "https://jamescotrading.com/product/customer-replacementrit-excel/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 270594,
+            "wordCount": 849,
+            "contentHash": "82a6999beefa78abc71c1eb39fea6ffbaf1d9889438a3e1fac8981d647cddb3f",
+            "canonicalUrl": "https://jamescotrading.com/product/customer-replacementrit-excel/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/customer-replacementrit-excel/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 678,
+            "fetchedAt": "2026-09-04T06:29:31.639Z"
+          },
+          {
+            "id": "tshgqvrlw562gqryr6jc2vu9",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/hydros-hydration-system/",
+            "finalUrl": "https://jamescotrading.com/product/hydros-hydration-system/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 276104,
+            "wordCount": 836,
+            "contentHash": "531392de148a4485d584df29a906f7cd8cc48b2432be4e71f8cb83fd80da7c74",
+            "canonicalUrl": "https://jamescotrading.com/product/hydros-hydration-system/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/hydros-hydration-system/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 681,
+            "fetchedAt": "2026-09-04T06:29:32.454Z"
+          },
+          {
+            "id": "uixuidlaxaplzvqlrdaspaax",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/fit-isotermic-shoulder-diabetic-kit-grey-eb14-020/",
+            "finalUrl": "https://jamescotrading.com/product/fit-isotermic-shoulder-diabetic-kit-grey-eb14-020/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 276480,
+            "wordCount": 848,
+            "contentHash": "dca1779a783736bee9a7c9d3007326c123c75c8437010d7810f849440298efd8",
+            "canonicalUrl": "https://jamescotrading.com/product/fit-isotermic-shoulder-diabetic-kit-grey-eb14-020/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/fit-isotermic-shoulder-diabetic-kit-grey-eb14-020/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 679,
+            "fetchedAt": "2026-09-04T06:29:33.246Z"
+          },
+          {
+            "id": "ebtiekjdyw7h5tpgc3sjngpo",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/usb-cable-jumper-cord-for-sony-up-x898md/",
+            "finalUrl": "https://jamescotrading.com/product/usb-cable-jumper-cord-for-sony-up-x898md/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 271097,
+            "wordCount": 862,
+            "contentHash": "63edc830963a23015dc05d7feddfa5ec53ff7a658a8cba243f86ec48b21c47b3",
+            "canonicalUrl": "https://jamescotrading.com/product/usb-cable-jumper-cord-for-sony-up-x898md/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/usb-cable-jumper-cord-for-sony-up-x898md/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 676,
+            "fetchedAt": "2026-09-04T06:29:34.055Z"
+          },
+          {
+            "id": "kkt8m7132tmzw30hi4289ds9",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "requestedUrl": "https://jamescotrading.com/product/rubber-membrane-distancefor-ml-60_70_70-xvision/",
+            "finalUrl": "https://jamescotrading.com/product/rubber-membrane-distancefor-ml-60_70_70-xvision/",
+            "httpStatus": 200,
+            "contentType": "text/html; charset=utf-8",
+            "outcome": "fetched",
+            "pageType": "product",
+            "typeSignals": [
+              "JSON-LD[2].@graph[1] declares @type Product",
+              "Page contains an add-to-cart/quote control",
+              "Page carries single-product containers: a single-product container",
+              "URL contains a /product/<slug> path",
+              "Also scored company (60)."
+            ],
+            "depth": 2,
+            "bytes": 270950,
+            "wordCount": 859,
+            "contentHash": "58e786848003917f2864847c57af342bceb92ef563203954f755b3e8131ebe09",
+            "canonicalUrl": "https://jamescotrading.com/product/rubber-membrane-distancefor-ml-60_70_70-xvision/",
+            "duplicateOfUrl": null,
+            "redirectChain": [
+              "https://jamescotrading.com/product/rubber-membrane-distancefor-ml-60_70_70-xvision/"
+            ],
+            "truncated": false,
+            "failureReason": null,
+            "durationMs": 670,
+            "fetchedAt": "2026-09-04T06:29:34.827Z"
+          }
+        ],
+        "disclaimers": [
+          "A page recorded here was VISITED. HTTP 200 is not treated as proof it is a meaningful page — see `outcome` for soft_404 and duplicate.",
+          "`pageType` is a classification with its supporting signals in `typeSignals`, not a judgement about the page."
+        ]
+      }
+    },
+    "auditFindings": {
+      "status": 200,
+      "body": {
+        "runId": "x16g6j0n4gkcp5fco5jaxd2p",
+        "companyName": "Jamesco Trading Ltd",
+        "website": "https://jamescotrading.com/",
+        "sample": {
+          "pagesInspected": 15,
+          "productPagesInspected": 12,
+          "categoryPagesInspected": 2
+        },
+        "total": 8,
+        "byPriority": {
+          "high": 6,
+          "low": 1,
+          "medium": 1
+        },
+        "findings": [
+          {
+            "id": "ullks28x2dhhjgfzxw3dtzxw",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "missing_availability",
+            "title": "Availability not stated on inspected product pages",
+            "category": "availability",
+            "priority": "high",
+            "priorityReasons": [
+              "\"product.availability\" is a tier 2 field (affects how a found product presents).",
+              "It applies to 12 of the 12 inspected pages in this sample.",
+              "Tier 2 at this share of the sample gives priority \"high\"."
+            ],
+            "affectedCount": 12,
+            "observedCount": 0,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "An availability status was stated on 0 of 12 inspected product pages.",
+            "finding": "No stock or availability status was stated on 12 of the 12 inspected product pages.",
+            "impact": "Buyers cannot tell from the page whether an item can be supplied, which moves the question to a phone call.",
+            "recommendation": "Publish an availability status on each product page, even where the value is \"made to order\" or \"on request\".",
+            "evidence": [
+              {
+                "field": "product.availability",
+                "value": null,
+                "pageId": "abp5nyd67b9zvaubekpnpwo2",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/shop/",
+                "observedAt": "2026-09-04T06:29:34.974Z",
+                "sourcePath": null,
+                "observationId": "trbtlvn330z67btj65hyfjdo"
+              },
+              {
+                "field": "product.availability",
+                "value": null,
+                "pageId": "w4hpp8e94mtv2afytfuvf80k",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "observedAt": "2026-09-04T06:29:35.030Z",
+                "sourcePath": null,
+                "observationId": "j8j7ecqy7zo9fhgrfkwwmgna"
+              },
+              {
+                "field": "product.availability",
+                "value": null,
+                "pageId": "sxvyt8dxbjqdiahkz130yl9s",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "observedAt": "2026-09-04T06:29:35.076Z",
+                "sourcePath": null,
+                "observationId": "zywjkbir978iq57biuo0n87p"
+              },
+              {
+                "field": "product.availability",
+                "value": null,
+                "pageId": "nxfjv38jqi719uaglcvrs5i0",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/test-product/",
+                "observedAt": "2026-09-04T06:29:35.097Z",
+                "sourcePath": null,
+                "observationId": "h2wz44ofnnx8xrkmthut0sdq"
+              },
+              {
+                "field": "product.availability",
+                "value": null,
+                "pageId": "qbo8uu7takybbfqrhmmnyxf8",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "observedAt": "2026-09-04T06:29:35.118Z",
+                "sourcePath": null,
+                "observationId": "rsmgajjbm8w1uisivj89c7q6"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          },
+          {
+            "id": "wcbifowv8bez1etm8yq326ea",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "missing_brand",
+            "title": "Brand not stated on inspected product pages",
+            "category": "attributes",
+            "priority": "high",
+            "priorityReasons": [
+              "\"product.brand\" is a tier 2 field (affects how a found product presents).",
+              "It applies to 12 of the 12 inspected pages in this sample.",
+              "Tier 2 at this share of the sample gives priority \"high\"."
+            ],
+            "affectedCount": 12,
+            "observedCount": 0,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "A brand was stated on 0 of 12 inspected product pages.",
+            "finding": "No brand or manufacturer was stated in structured data or in a labelled field on 12 of the 12 inspected product pages.",
+            "impact": "Buyers searching for a specific manufacturer cannot narrow to it, and brand facets cannot be built from those pages.",
+            "recommendation": "State the brand in a structured field on each product page, not only in the product title.",
+            "evidence": [
+              {
+                "field": "product.brand",
+                "value": null,
+                "pageId": "abp5nyd67b9zvaubekpnpwo2",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/shop/",
+                "observedAt": "2026-09-04T06:29:34.974Z",
+                "sourcePath": null,
+                "observationId": "sf80zx6nw0huqouxrqrhq0rb"
+              },
+              {
+                "field": "product.brand",
+                "value": null,
+                "pageId": "w4hpp8e94mtv2afytfuvf80k",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "observedAt": "2026-09-04T06:29:35.030Z",
+                "sourcePath": null,
+                "observationId": "zimfvlhjn0no6rrotatsmcne"
+              },
+              {
+                "field": "product.brand",
+                "value": null,
+                "pageId": "sxvyt8dxbjqdiahkz130yl9s",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "observedAt": "2026-09-04T06:29:35.076Z",
+                "sourcePath": null,
+                "observationId": "x00ayo2wwiaadyi8hvmyy31q"
+              },
+              {
+                "field": "product.brand",
+                "value": null,
+                "pageId": "nxfjv38jqi719uaglcvrs5i0",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/test-product/",
+                "observedAt": "2026-09-04T06:29:35.097Z",
+                "sourcePath": null,
+                "observationId": "irc56ek8lx4yr6qzbt1owzkf"
+              },
+              {
+                "field": "product.brand",
+                "value": null,
+                "pageId": "qbo8uu7takybbfqrhmmnyxf8",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "observedAt": "2026-09-04T06:29:35.118Z",
+                "sourcePath": null,
+                "observationId": "idgcyztrxu2pw6gkkspyjv7z"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          },
+          {
+            "id": "lqo6w8e1p01qbyeeqwpbj1r9",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "missing_dimensions",
+            "title": "Dimensional data not present on inspected product pages",
+            "category": "attributes",
+            "priority": "high",
+            "priorityReasons": [
+              "\"product.dimensions\" is a tier 1 field (needed to find and filter a product).",
+              "It applies to 11 of the 12 inspected pages in this sample.",
+              "Tier 1 at this share of the sample gives priority \"high\"."
+            ],
+            "affectedCount": 11,
+            "observedCount": 1,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "Dimensional data was observed on 1 of 12 inspected product pages.",
+            "finding": "No dimensional attribute (width, height, length, depth, diameter or an explicit size) was found on 11 of the 12 inspected product pages.",
+            "impact": "Buyers who need to confirm fit cannot do so on the page, and dimensional filters cannot be offered for those products.",
+            "recommendation": "Record dimensions as separate named attributes with their units, rather than only inside prose or an image.",
+            "evidence": [
+              {
+                "field": "product.dimensions",
+                "value": null,
+                "pageId": "w4hpp8e94mtv2afytfuvf80k",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "observedAt": "2026-09-04T06:29:35.030Z",
+                "sourcePath": null,
+                "observationId": "f18nov2xbev9j2h5avcel2it"
+              },
+              {
+                "field": "product.dimensions",
+                "value": null,
+                "pageId": "sxvyt8dxbjqdiahkz130yl9s",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "observedAt": "2026-09-04T06:29:35.076Z",
+                "sourcePath": null,
+                "observationId": "bj2kin68n95ugpkkucdmvxnu"
+              },
+              {
+                "field": "product.dimensions",
+                "value": null,
+                "pageId": "nxfjv38jqi719uaglcvrs5i0",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/test-product/",
+                "observedAt": "2026-09-04T06:29:35.097Z",
+                "sourcePath": null,
+                "observationId": "pk3uwa98itudecvquvmcob5s"
+              },
+              {
+                "field": "product.dimensions",
+                "value": null,
+                "pageId": "qbo8uu7takybbfqrhmmnyxf8",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "observedAt": "2026-09-04T06:29:35.118Z",
+                "sourcePath": null,
+                "observationId": "p8dkp1ol4sdykfpacrswcx5b"
+              },
+              {
+                "field": "product.dimensions",
+                "value": null,
+                "pageId": "yr20jc8rh9lzygd5wgc14hr3",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/",
+                "observedAt": "2026-09-04T06:29:35.139Z",
+                "sourcePath": null,
+                "observationId": "c35phidz4nzmp376riz23tic"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          },
+          {
+            "id": "fdo3gkk9n2fn54nmu1b027lv",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "missing_weight",
+            "title": "Weight not present on inspected product pages",
+            "category": "attributes",
+            "priority": "high",
+            "priorityReasons": [
+              "\"product.weight\" is a tier 1 field (needed to find and filter a product).",
+              "It applies to 11 of the 12 inspected pages in this sample.",
+              "Tier 1 at this share of the sample gives priority \"high\"."
+            ],
+            "affectedCount": 11,
+            "observedCount": 1,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "A weight attribute was observed on 1 of 12 inspected product pages.",
+            "finding": "No weight or mass attribute was found on 11 of the 12 inspected product pages.",
+            "impact": "Shipping and handling questions cannot be answered from the page, and weight-based delivery rules have nothing to read.",
+            "recommendation": "Publish weight as a named attribute with its unit on each product page.",
+            "evidence": [
+              {
+                "field": "product.weight",
+                "value": null,
+                "pageId": "w4hpp8e94mtv2afytfuvf80k",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "observedAt": "2026-09-04T06:29:35.030Z",
+                "sourcePath": null,
+                "observationId": "zrjb7k8mou3ir4rfqmcd6qju"
+              },
+              {
+                "field": "product.weight",
+                "value": null,
+                "pageId": "sxvyt8dxbjqdiahkz130yl9s",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "observedAt": "2026-09-04T06:29:35.076Z",
+                "sourcePath": null,
+                "observationId": "fg2u1gno23at12gyw05h2ow8"
+              },
+              {
+                "field": "product.weight",
+                "value": null,
+                "pageId": "nxfjv38jqi719uaglcvrs5i0",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/test-product/",
+                "observedAt": "2026-09-04T06:29:35.097Z",
+                "sourcePath": null,
+                "observationId": "u49cc68tbozh47okiortaawg"
+              },
+              {
+                "field": "product.weight",
+                "value": null,
+                "pageId": "qbo8uu7takybbfqrhmmnyxf8",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "observedAt": "2026-09-04T06:29:35.118Z",
+                "sourcePath": null,
+                "observationId": "tipo0pxw6ku05r848f7davpp"
+              },
+              {
+                "field": "product.weight",
+                "value": null,
+                "pageId": "yr20jc8rh9lzygd5wgc14hr3",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/",
+                "observedAt": "2026-09-04T06:29:35.139Z",
+                "sourcePath": null,
+                "observationId": "vzj9525yevvb1dgf2laek3ml"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          },
+          {
+            "id": "s50npbjz9y4obmt64rzx58sm",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "incomplete_specifications",
+            "title": "Specifications not present on inspected product pages",
+            "category": "specifications",
+            "priority": "high",
+            "priorityReasons": [
+              "\"product.specifications\" is a tier 1 field (needed to find and filter a product).",
+              "It applies to 11 of the 12 inspected pages in this sample.",
+              "Tier 1 at this share of the sample gives priority \"high\"."
+            ],
+            "affectedCount": 11,
+            "observedCount": 1,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "A specification block was observed on 1 of 12 inspected product pages.",
+            "finding": "A specification block (a table, definition list, or labelled key/value list) could not be found on 11 of the 12 inspected product pages.",
+            "impact": "A buyer comparing options on those pages has nothing structured to compare, and the pages carry no attribute data for a search or filter to index.",
+            "recommendation": "Publish a consistent specification block on each product page, using the same attribute names across the range so the values can be compared and filtered.",
+            "evidence": [
+              {
+                "field": "product.specifications",
+                "value": null,
+                "pageId": "w4hpp8e94mtv2afytfuvf80k",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "observedAt": "2026-09-04T06:29:35.030Z",
+                "sourcePath": null,
+                "observationId": "knlw0c52kyswowhq7a97nret"
+              },
+              {
+                "field": "product.specifications",
+                "value": null,
+                "pageId": "sxvyt8dxbjqdiahkz130yl9s",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "observedAt": "2026-09-04T06:29:35.076Z",
+                "sourcePath": null,
+                "observationId": "xsdlfobs7nius81752l7ydo7"
+              },
+              {
+                "field": "product.specifications",
+                "value": null,
+                "pageId": "nxfjv38jqi719uaglcvrs5i0",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/test-product/",
+                "observedAt": "2026-09-04T06:29:35.097Z",
+                "sourcePath": null,
+                "observationId": "xwnp4omutyvrpyadl06g23hq"
+              },
+              {
+                "field": "product.specifications",
+                "value": null,
+                "pageId": "qbo8uu7takybbfqrhmmnyxf8",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "observedAt": "2026-09-04T06:29:35.118Z",
+                "sourcePath": null,
+                "observationId": "lfpu5iwluuk7t00eaypmq07h"
+              },
+              {
+                "field": "product.specifications",
+                "value": null,
+                "pageId": "yr20jc8rh9lzygd5wgc14hr3",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/",
+                "observedAt": "2026-09-04T06:29:35.139Z",
+                "sourcePath": null,
+                "observationId": "nk7709uj3wgil4gpub0594zj"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          },
+          {
+            "id": "w0yj2bshk9y0hw94x0zlyyhy",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "incomplete_product_metadata",
+            "title": "Inspected product pages carrying no descriptive or attribute data",
+            "category": "attributes",
+            "priority": "high",
+            "priorityReasons": [
+              "\"product.attributes\" is a tier 1 field (needed to find and filter a product).",
+              "It applies to 6 of the 12 inspected pages in this sample.",
+              "Tier 1 at this share of the sample gives priority \"high\"."
+            ],
+            "affectedCount": 6,
+            "observedCount": 6,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "Descriptive or attribute data was observed on 6 of 12 inspected product pages.",
+            "finding": "6 of the 12 inspected product pages carried none of: specifications, attributes, dimensions, weight, brand, or a description.",
+            "impact": "Those pages identify a product by name and little else, so a buyer cannot evaluate the item and a search engine has nothing specific to index against it.",
+            "recommendation": "Establish a minimum data set that a product page must carry before it is published, and backfill the pages that fall short of it.",
+            "evidence": [
+              {
+                "field": "product.name",
+                "value": "HIRE OF ECG MACHINE 100L",
+                "pageId": "w4hpp8e94mtv2afytfuvf80k",
+                "status": "observed",
+                "fragment": "name: HIRE OF ECG MACHINE 100L",
+                "sourceUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "observedAt": "2026-09-04T06:29:35.030Z",
+                "sourcePath": "JSON-LD[2].@graph[1].name",
+                "observationId": "j8lduex52p29zvgxr8t5wpv6"
+              },
+              {
+                "field": "product.name",
+                "value": "H7493926224450 SYNERGY OUS MR 4.50 X 24",
+                "pageId": "sxvyt8dxbjqdiahkz130yl9s",
+                "status": "observed",
+                "fragment": "name: H7493926224450 SYNERGY OUS MR 4.50 X 24",
+                "sourceUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "observedAt": "2026-09-04T06:29:35.076Z",
+                "sourcePath": "JSON-LD[2].@graph[1].name",
+                "observationId": "q8evxfsvont16u1cmpitp00z"
+              },
+              {
+                "field": "product.name",
+                "value": "test product",
+                "pageId": "nxfjv38jqi719uaglcvrs5i0",
+                "status": "observed",
+                "fragment": "name: test product",
+                "sourceUrl": "https://jamescotrading.com/product/test-product/",
+                "observedAt": "2026-09-04T06:29:35.097Z",
+                "sourcePath": "JSON-LD[2].@graph[1].name",
+                "observationId": "p60r9xa5sjuqv1cccasyj28c"
+              },
+              {
+                "field": "product.name",
+                "value": "MMP, MOLLE MODULAR PANEL, BIG SIZE, 16cm x 11cm. RED.",
+                "pageId": "qbo8uu7takybbfqrhmmnyxf8",
+                "status": "observed",
+                "fragment": "name: MMP, MOLLE MODULAR PANEL, BIG SIZE, 16cm x 11cm. RED.",
+                "sourceUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "observedAt": "2026-09-04T06:29:35.118Z",
+                "sourcePath": "JSON-LD[2].@graph[1].name",
+                "observationId": "a7c054fbhvo6imq3np10rg2a"
+              },
+              {
+                "field": "product.name",
+                "value": "USB CABLE+ JUMPER CORD FOR SONY UP-X898MD",
+                "pageId": "ebtiekjdyw7h5tpgc3sjngpo",
+                "status": "observed",
+                "fragment": "name: USB CABLE+ JUMPER CORD FOR SONY UP-X898MD",
+                "sourceUrl": "https://jamescotrading.com/product/usb-cable-jumper-cord-for-sony-up-x898md/",
+                "observedAt": "2026-09-04T06:29:35.238Z",
+                "sourcePath": "JSON-LD[2].@graph[1].name",
+                "observationId": "u2so6t9d2an77agnfw0ktbb1"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          },
+          {
+            "id": "fyn3ymsutlbzgfk0wmicpppw",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "no_product_structured_data",
+            "title": "Product structured data not declared on inspected product pages",
+            "category": "structure",
+            "priority": "low",
+            "priorityReasons": [
+              "\"product.category\" is a tier 2 field (affects how a found product presents).",
+              "It applies to 1 of the 12 inspected pages in this sample.",
+              "Tier 2 at this share of the sample gives priority \"low\"."
+            ],
+            "affectedCount": 1,
+            "observedCount": 11,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "Product structured data was declared on 11 of 12 inspected product pages.",
+            "finding": "No Product schema (JSON-LD or microdata) was declared on 1 of the 12 inspected product pages.",
+            "impact": "Search engines, marketplaces and data partners read that markup to understand a page. Without it they have to infer the product from layout, and often decline to show enhanced results for the page.",
+            "recommendation": "Emit Product structured data on each product page, populated from the same source as the visible attributes so the two cannot drift apart.",
+            "evidence": [
+              {
+                "field": "page.structuredDataTypes",
+                "value": "BreadcrumbList, EntryPoint, ImageObject, ListItem, Organization, PropertyValueSpecification, ReadAction, SearchAction, WebPage, WebSite",
+                "pageId": "abp5nyd67b9zvaubekpnpwo2",
+                "status": "observed",
+                "fragment": "BreadcrumbList, EntryPoint, ImageObject, ListItem, Organization, PropertyValueSpecification, ReadAction, SearchAction, WebPage, WebSite",
+                "sourceUrl": "https://jamescotrading.com/shop/",
+                "observedAt": "2026-09-04T06:29:34.974Z",
+                "sourcePath": "JSON-LD/microdata @type",
+                "observationId": "nv8zfk5frwl4eqqhr13km9ba"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          },
+          {
+            "id": "u5oq8tz4ppho9ja152brgv2f",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "code": "weak_product_description",
+            "title": "Product description not present on inspected product pages",
+            "category": "descriptions",
+            "priority": "medium",
+            "priorityReasons": [
+              "\"product.description\" is a tier 2 field (affects how a found product presents).",
+              "It applies to 7 of the 12 inspected pages in this sample.",
+              "Tier 2 at this share of the sample gives priority \"medium\"."
+            ],
+            "affectedCount": 7,
+            "observedCount": 5,
+            "sampleSize": 12,
+            "sampleUnit": "product pages",
+            "metric": "A product description was observed on 5 of 12 inspected product pages.",
+            "finding": "No product description was found in structured data or a description field on 7 of the 12 inspected product pages.",
+            "impact": "The page gives a buyer little to read beyond the title, and there is little text for a search engine to index against the product.",
+            "recommendation": "Add a short factual description to each product page covering what the item is, what it is used for, and what distinguishes it from adjacent items in the range.",
+            "evidence": [
+              {
+                "field": "product.description",
+                "value": null,
+                "pageId": "abp5nyd67b9zvaubekpnpwo2",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/shop/",
+                "observedAt": "2026-09-04T06:29:34.974Z",
+                "sourcePath": null,
+                "observationId": "lm9eownhu7wbi59a39i909na"
+              },
+              {
+                "field": "product.description",
+                "value": null,
+                "pageId": "w4hpp8e94mtv2afytfuvf80k",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "observedAt": "2026-09-04T06:29:35.030Z",
+                "sourcePath": null,
+                "observationId": "v3een5fllwii3iwew8qdkiqf"
+              },
+              {
+                "field": "product.description",
+                "value": null,
+                "pageId": "sxvyt8dxbjqdiahkz130yl9s",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "observedAt": "2026-09-04T06:29:35.076Z",
+                "sourcePath": null,
+                "observationId": "nbwkxi5gjkux6bvpwyufcdd7"
+              },
+              {
+                "field": "product.description",
+                "value": null,
+                "pageId": "nxfjv38jqi719uaglcvrs5i0",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/test-product/",
+                "observedAt": "2026-09-04T06:29:35.097Z",
+                "sourcePath": null,
+                "observationId": "u1y0gctgb7hjn14ejylqn31x"
+              },
+              {
+                "field": "product.description",
+                "value": null,
+                "pageId": "qbo8uu7takybbfqrhmmnyxf8",
+                "status": "not_observed",
+                "fragment": null,
+                "sourceUrl": "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "observedAt": "2026-09-04T06:29:35.118Z",
+                "sourcePath": null,
+                "observationId": "fwooq3c3nnhrztvlydodlrjv"
+              }
+            ],
+            "createdAt": "2026-09-04T06:29:35.362Z"
+          }
+        ],
+        "disclaimers": [
+          "Every finding is derived from stored observations and carries the observation references behind it.",
+          "Every metric names the inspected sample it came from. Nothing here is expressed as a percentage of the catalogue, because only the inspected pages were seen.",
+          "Priority is computed from a stated field tier and the share of the inspected sample affected — see priorityReasons on each finding.",
+          "These findings describe the inspected pages on the date of the audit run, not the catalogue as a whole."
+        ]
+      }
+    },
+    "auditApproval": {
+      "status": 200,
+      "body": {
+        "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+        "reportId": "wvdn0jg47gortepadnryg6m8",
+        "companyName": "Jamesco Trading Ltd",
+        "website": "https://jamescotrading.com/",
+        "status": "approved",
+        "availableActions": [
+          "reopen"
+        ],
+        "canEdit": false,
+        "currentRevision": 1,
+        "approvedRevision": 1,
+        "lockVersion": 3,
+        "reviewer": {
+          "crmUserId": "crm-user-approver",
+          "email": "approver@deeptechskills.com",
+          "reviewedAt": "2026-09-04T06:42:05.306Z",
+          "comment": "Reviewed against the crawled evidence."
+        },
+        "findingCount": 8,
+        "currentContent": {
+          "cta": {
+            "url": "https://altiusnxt.com/book-a-walkthrough",
+            "label": "Book a 15-minute walkthrough"
+          },
+          "status": "ready_for_approval",
+          "metrics": [
+            {
+              "basis": "Pages fetched successfully during this audit run.",
+              "label": "Pages inspected",
+              "value": "15"
+            },
+            {
+              "basis": "Pages classified as product pages from their own markup, not from their URL.",
+              "label": "Product pages inspected",
+              "value": "12"
+            },
+            {
+              "basis": "Pages classified as category or listing pages from their own markup.",
+              "label": "Category pages inspected",
+              "value": "2"
+            },
+            {
+              "basis": "Findings derived from stored observations; each one cites the pages behind it.",
+              "label": "Findings recorded",
+              "value": "8"
+            },
+            {
+              "basis": "Findings affecting fields needed to find and filter a product across at least half the inspected sample.",
+              "label": "Higher-priority findings",
+              "value": "6"
+            },
+            {
+              "basis": "A specification block was observed on 1 of 12 inspected product pages.",
+              "label": "Specifications not present on inspected product pages",
+              "value": "1 of 12 inspected product pages"
+            },
+            {
+              "basis": "A brand was stated on 0 of 12 inspected product pages.",
+              "label": "Brand not stated on inspected product pages",
+              "value": "0 of 12 inspected product pages"
+            },
+            {
+              "basis": "Dimensional data was observed on 1 of 12 inspected product pages.",
+              "label": "Dimensional data not present on inspected product pages",
+              "value": "1 of 12 inspected product pages"
+            },
+            {
+              "basis": "A weight attribute was observed on 1 of 12 inspected product pages.",
+              "label": "Weight not present on inspected product pages",
+              "value": "1 of 12 inspected product pages"
+            },
+            {
+              "basis": "Descriptive or attribute data was observed on 6 of 12 inspected product pages.",
+              "label": "Inspected product pages carrying no descriptive or attribute data",
+              "value": "6 of 12 inspected product pages"
+            }
+          ],
+          "summary": "This review covers 15 page(s) inspected on https://jamescotrading.com/, of which 12 were product pages and 2 were category pages. 8 product-data finding(s) were recorded, each traceable to a specific page and source fragment.",
+          "website": "https://jamescotrading.com/",
+          "audience": "internal",
+          "examples": [],
+          "headline": "Product Data Health Check — Jamesco Trading Ltd",
+          "nextStep": "Review these findings against the pages cited, and confirm whether the same gaps hold across the wider catalogue. AltiusNXT can then scope what it would take to close them.",
+          "auditDate": "2026-09-04",
+          "scopeNote": "Scope: this audit inspected a bounded sample and stopped at maxPages (15), frontier not exhausted. Every figure describes the inspected pages only and should not be read as a measure of the whole catalogue.",
+          "comparison": {
+            "reason": "No peer comparison was requested or supplied for this run.",
+            "message": "Comparable evidence not available for this audit.",
+            "available": false
+          },
+          "companyName": "Jamesco Trading Ltd",
+          "keyFindings": [
+            {
+              "title": "Specifications not present on inspected product pages",
+              "impact": "A buyer comparing options on those pages has nothing structured to compare, and the pages carry no attribute data for a search or filter to index.",
+              "metric": "A specification block was observed on 1 of 12 inspected product pages.",
+              "priority": "high",
+              "sourceUrls": [
+                "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "https://jamescotrading.com/product/test-product/",
+                "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/"
+              ],
+              "evidenceCount": 5,
+              "recommendation": "Publish a consistent specification block on each product page, using the same attribute names across the range so the values can be compared and filtered."
+            },
+            {
+              "title": "Brand not stated on inspected product pages",
+              "impact": "Buyers searching for a specific manufacturer cannot narrow to it, and brand facets cannot be built from those pages.",
+              "metric": "A brand was stated on 0 of 12 inspected product pages.",
+              "priority": "high",
+              "sourceUrls": [
+                "https://jamescotrading.com/shop/",
+                "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "https://jamescotrading.com/product/test-product/",
+                "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/"
+              ],
+              "evidenceCount": 5,
+              "recommendation": "State the brand in a structured field on each product page, not only in the product title."
+            },
+            {
+              "title": "Dimensional data not present on inspected product pages",
+              "impact": "Buyers who need to confirm fit cannot do so on the page, and dimensional filters cannot be offered for those products.",
+              "metric": "Dimensional data was observed on 1 of 12 inspected product pages.",
+              "priority": "high",
+              "sourceUrls": [
+                "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "https://jamescotrading.com/product/test-product/",
+                "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/"
+              ],
+              "evidenceCount": 5,
+              "recommendation": "Record dimensions as separate named attributes with their units, rather than only inside prose or an image."
+            },
+            {
+              "title": "Weight not present on inspected product pages",
+              "impact": "Shipping and handling questions cannot be answered from the page, and weight-based delivery rules have nothing to read.",
+              "metric": "A weight attribute was observed on 1 of 12 inspected product pages.",
+              "priority": "high",
+              "sourceUrls": [
+                "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "https://jamescotrading.com/product/test-product/",
+                "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "https://jamescotrading.com/product/fit-isotermic-bag-for-diabetic-kit-grey-eb14-021/"
+              ],
+              "evidenceCount": 5,
+              "recommendation": "Publish weight as a named attribute with its unit on each product page."
+            },
+            {
+              "title": "Inspected product pages carrying no descriptive or attribute data",
+              "impact": "Those pages identify a product by name and little else, so a buyer cannot evaluate the item and a search engine has nothing specific to index against it.",
+              "metric": "Descriptive or attribute data was observed on 6 of 12 inspected product pages.",
+              "priority": "high",
+              "sourceUrls": [
+                "https://jamescotrading.com/product/hire-of-ecg-machine-100l/",
+                "https://jamescotrading.com/product/h7493926224450-synergy-ous-mr-4-50-x-24/",
+                "https://jamescotrading.com/product/test-product/",
+                "https://jamescotrading.com/product/mmp-molle-modular-panel-big-size-16cm-x-11cm-red/",
+                "https://jamescotrading.com/product/usb-cable-jumper-cord-for-sony-up-x898md/"
+              ],
+              "evidenceCount": 5,
+              "recommendation": "Establish a minimum data set that a product page must carry before it is published, and backfill the pages that fall short of it."
+            }
+          ],
+          "businessPain": [
+            {
+              "findingCode": "incomplete_specifications",
+              "observation": "A specification block (a table, definition list, or labelled key/value list) could not be found on 11 of the 12 inspected product pages.",
+              "businessPain": "Buyers comparing similar parts may not find the same technical detail on each one, so the comparison has to happen off the site — in a datasheet, or on the phone.",
+              "whyItMatters": "Industrial buyers select on specification. Where a specification is absent, the product is hard to choose with confidence even when it is the right part.",
+              "potentialOpportunity": "Holding specifications as named attributes rather than prose lets the same values drive filtering, comparison and export to a marketplace.",
+              "recommendedDirection": "Agree a specification set per product family, then populate it from the sources that already hold the values."
+            },
+            {
+              "findingCode": "missing_brand",
+              "observation": "No brand or manufacturer was stated in structured data or in a labelled field on 12 of the 12 inspected product pages.",
+              "businessPain": "Brand was not consistently stated on the inspected product pages, so buyers who search by manufacturer may not find the product.",
+              "whyItMatters": "In distribution, brand is one of the first filters a buyer reaches for. A product without it is effectively outside that path.",
+              "potentialOpportunity": "A consistent brand attribute supports brand-led navigation and makes catalogue coverage visible by supplier.",
+              "recommendedDirection": "Normalise brand to a controlled list rather than free text."
+            },
+            {
+              "findingCode": "missing_dimensions",
+              "observation": "No dimensional attribute (width, height, length, depth, diameter or an explicit size) was found on 11 of the 12 inspected product pages.",
+              "businessPain": "Dimensions were not consistently available on the inspected product pages, so a buyer checking fit has to look elsewhere.",
+              "whyItMatters": "Fit is often the deciding question, and it is one of the few a buyer cannot resolve by judgement.",
+              "potentialOpportunity": "Recording dimensions as separate named values with their units makes them filterable and reusable across channels.",
+              "recommendedDirection": "Capture dimensions as structured attributes with an explicit unit, per product family."
+            },
+            {
+              "findingCode": "missing_weight",
+              "observation": "No weight or mass attribute was found on 11 of the 12 inspected product pages.",
+              "businessPain": "Weight was not consistently present, which affects both shipping expectations and handling decisions.",
+              "whyItMatters": "Weight drives freight cost and handling requirements, so its absence moves a question downstream.",
+              "potentialOpportunity": "A populated weight attribute supports shipping calculation and marketplace requirements.",
+              "recommendedDirection": "Populate weight with a stated unit as part of the core attribute set."
+            },
+            {
+              "findingCode": "incomplete_product_metadata",
+              "observation": "6 of the 12 inspected product pages carried none of: specifications, attributes, dimensions, weight, brand, or a description.",
+              "businessPain": "Page-level metadata was incomplete on the inspected pages, which affects how the page is represented when it appears elsewhere.",
+              "whyItMatters": "Metadata is what a page looks like before anyone has visited it.",
+              "potentialOpportunity": "Metadata derived from the product record stays correct as the catalogue changes.",
+              "recommendedDirection": "Generate page metadata from product attributes rather than maintaining it separately."
+            },
+            {
+              "findingCode": "weak_product_description",
+              "observation": "No product description was found in structured data or a description field on 7 of the 12 inspected product pages.",
+              "businessPain": "Descriptions on the inspected pages carried little distinguishing information, so similar products read alike.",
+              "whyItMatters": "A description is where a buyer confirms they have understood the product. Thin text moves that confirmation to a phone call.",
+              "potentialOpportunity": "Descriptions built from the product attributes stay accurate as the data changes and read consistently across the range.",
+              "recommendedDirection": "Generate descriptions from the attribute set, with a human review step, rather than writing each one independently."
+            },
+            {
+              "findingCode": "no_product_structured_data",
+              "observation": "No Product schema (JSON-LD or microdata) was declared on 1 of the 12 inspected product pages.",
+              "businessPain": "The inspected product pages did not publish machine-readable product markup, so systems that read the page have to infer its content.",
+              "whyItMatters": "Search engines, AI assistants and marketplace integrations all read structured markup. Without it they interpret the page as prose.",
+              "potentialOpportunity": "Publishing structured product data from the attributes that already exist makes the same content readable by machines.",
+              "recommendedDirection": "Emit product structured data generated from the product record, not hand-maintained."
+            },
+            {
+              "findingCode": "missing_availability",
+              "observation": "No stock or availability status was stated on 12 of the 12 inspected product pages.",
+              "businessPain": "Availability was not consistently shown, so a buyer cannot tell whether an item can be supplied without asking.",
+              "whyItMatters": "Availability is often the difference between an order placed now and an enquiry that waits.",
+              "potentialOpportunity": "Surfacing the stock position already held in the source system removes that question.",
+              "recommendedDirection": "Publish availability from the existing stock record, at whatever granularity is defensible."
+            }
+          ],
+          "withheldNote": null,
+          "businessValue": {
+            "nextStep": "A 15-minute walkthrough covers what was found, what it would take to address, and what a worked example looks like on your own products.",
+            "financialNote": "Potential opportunity — not quantified in this audit. This review observed product data on a bounded sample of pages. It did not measure sales, traffic or cost, and nothing here should be read as a projection of any of them.",
+            "whatWeObserved": "We inspected 15 page(s) on the Jamesco Trading Ltd website, 12 of them product pages, and recorded 8 product-data finding(s). 6 of them affect fields a buyer needs in order to find and filter a product.",
+            "whyThisMatters": "Industrial buyers select on specification. Where a specification is absent, the product is hard to choose with confidence even when it is the right part. In distribution, brand is one of the first filters a buyer reaches for. A product without it is effectively outside that path. Fit is often the deciding question, and it is one of the few a buyer cannot resolve by judgement.",
+            "improvedExperience": "The improved position is a product page where the specifications, identifiers and availability a buyer needs are each present as named values — filterable, comparable, and readable by the systems that list them elsewhere.",
+            "howAltiusNxtCanHelp": "AltiusNXT works on the product record itself: agreeing the attribute set for each product family, populating it from the sources that already hold the values, and publishing it in a form both buyers and systems can read. The audit points at where to start.",
+            "whereThePainMayAppear": "Buyers comparing similar parts may not find the same technical detail on each one, so the comparison has to happen off the site — in a datasheet, or on the phone. Brand was not consistently stated on the inspected product pages, so buyers who search by manufacturer may not find the product. Dimensions were not consistently available on the inspected product pages, so a buyer checking fit has to look elsewhere."
+          },
+          "businessImpact": [
+            "A buyer comparing options on those pages has nothing structured to compare, and the pages carry no attribute data for a search or filter to index.",
+            "Buyers searching for a specific manufacturer cannot narrow to it, and brand facets cannot be built from those pages.",
+            "Buyers who need to confirm fit cannot do so on the page, and dimensional filters cannot be offered for those products.",
+            "Shipping and handling questions cannot be answered from the page, and weight-based delivery rules have nothing to read.",
+            "Those pages identify a product by name and little else, so a buyer cannot evaluate the item and a search engine has nothing specific to index against it."
+          ],
+          "pagesInspected": 15,
+          "discoverability": [
+            {
+              "lens": "aeo",
+              "findingCode": "incomplete_specifications",
+              "observation": "Specifications not present on inspected product pages: 1 of 12 inspected product pages.",
+              "consideration": "Specification questions are answered from named attributes. Where specifications sit only in prose, they are harder for any system to extract reliably."
+            },
+            {
+              "lens": "seo",
+              "findingCode": "incomplete_product_metadata",
+              "observation": "Inspected product pages carrying no descriptive or attribute data: 6 of 12 inspected product pages.",
+              "consideration": "Page metadata determines how a page is represented in a result list. Incomplete metadata was observed on the inspected pages."
+            },
+            {
+              "lens": "seo",
+              "findingCode": "weak_product_description",
+              "observation": "Product description not present on inspected product pages: 5 of 12 inspected product pages.",
+              "consideration": "Where similar products carry similar text, there is little to distinguish the pages from one another. This is a potential discoverability consideration observed on the inspected pages."
+            },
+            {
+              "lens": "aeo",
+              "findingCode": "weak_product_description",
+              "observation": "Product description not present on inspected product pages: 5 of 12 inspected product pages.",
+              "consideration": "A question-answering system needs distinguishing detail to match a product to a question. Thin descriptions offer little to match on."
+            },
+            {
+              "lens": "seo",
+              "findingCode": "no_product_structured_data",
+              "observation": "Product structured data not declared on inspected product pages: 11 of 12 inspected product pages.",
+              "consideration": "Search engines read product markup to understand what a page describes. Without it, a product page is interpreted as ordinary text — a potential discoverability consideration, not a measured ranking effect."
+            },
+            {
+              "lens": "aeo",
+              "findingCode": "no_product_structured_data",
+              "observation": "Product structured data not declared on inspected product pages: 11 of 12 inspected product pages.",
+              "consideration": "Assistants answering a product question draw on structured data where it exists. Its absence means any answer has to be inferred from prose."
+            },
+            {
+              "lens": "geo",
+              "findingCode": "no_product_structured_data",
+              "observation": "Product structured data not declared on inspected product pages: 11 of 12 inspected product pages.",
+              "consideration": "Systems that summarise products for a generated answer rely on machine-readable attributes. Unstructured pages give them less to work with."
+            }
+          ],
+          "legalDisclaimer": null,
+          "productPagesInspected": 12,
+          "categoryPagesInspected": 2,
+          "recommendedImprovementAreas": [
+            "Publish a consistent specification block on each product page, using the same attribute names across the range so the values can be compared and filtered.",
+            "State the brand in a structured field on each product page, not only in the product title.",
+            "Record dimensions as separate named attributes with their units, rather than only inside prose or an image.",
+            "Publish weight as a named attribute with its unit on each product page.",
+            "Establish a minimum data set that a product page must carry before it is published, and backfill the pages that fall short of it."
+          ]
+        },
+        "currentPdfSha256": "483bb62c134a093e55954c4c83b33982df59a1eee91bfd33564d4e618ac92079",
+        "validation": {
+          "ok": true,
+          "errors": [],
+          "passed": [
+            "structure",
+            "immutable_fields",
+            "evidence_resolves",
+            "claim_guard",
+            "quantitative_claims",
+            "pdf_present",
+            "pdf_integrity"
+          ],
+          "checkedAt": "2026-09-04T06:42:05.306Z"
+        },
+        "approvable": true,
+        "revisions": [
+          {
+            "revisionNumber": 1,
+            "createdAt": "2026-09-04T06:29:35.422Z",
+            "createdByCrmUserId": null,
+            "createdByEmail": null,
+            "changeReason": "Generated by the website audit (Task #979).",
+            "sourceRevisionNumber": null,
+            "pdfSha256": "483bb62c134a093e55954c4c83b33982df59a1eee91bfd33564d4e618ac92079",
+            "pdfPageCount": 4,
+            "pdfBytesSize": 8733,
+            "validationOk": true
+          }
+        ],
+        "recentEvents": [
+          {
+            "id": "t7rl6dtm8bybboc18ybodemq",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditReportId": "wvdn0jg47gortepadnryg6m8",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "revisionNumber": 1,
+            "previousStatus": "in_review",
+            "newStatus": "approved",
+            "action": "approve",
+            "reviewerCrmUserId": "crm-user-approver",
+            "reviewerEmail": "approver@deeptechskills.com",
+            "reviewerName": "approver@deeptechskills.com",
+            "comment": "Reviewed against the crawled evidence.",
+            "validation": {
+              "ok": true,
+              "errors": [],
+              "passed": [
+                "structure",
+                "immutable_fields",
+                "evidence_resolves",
+                "claim_guard",
+                "quantitative_claims",
+                "pdf_present",
+                "pdf_integrity"
+              ],
+              "checkedAt": "2026-09-04T06:42:05.306Z"
+            },
+            "createdAt": "2026-09-04T06:42:05.366Z"
+          },
+          {
+            "id": "jpykebpzdw382a73zd8q4k9f",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "auditReportId": "wvdn0jg47gortepadnryg6m8",
+            "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+            "revisionNumber": 1,
+            "previousStatus": "ready_for_approval",
+            "newStatus": "in_review",
+            "action": "start",
+            "reviewerCrmUserId": "crm-user-approver",
+            "reviewerEmail": "approver@deeptechskills.com",
+            "reviewerName": "approver@deeptechskills.com",
+            "comment": null,
+            "validation": null,
+            "createdAt": "2026-09-04T06:42:05.103Z"
+          }
+        ],
+        "editableFields": [
+          "headline",
+          "summary",
+          "nextStep",
+          "businessImpact",
+          "recommendedImprovementAreas",
+          "keyFindingEdits"
+        ],
+        "immutableFields": {
+          "metrics": "Metrics are computed from stored observations. Changing one would detach it from its evidence.",
+          "keyFindings": "Use keyFindingEdits to reword impact and recommendation. Titles, metrics and evidence are source-controlled.",
+          "scopeNote": "The scope note states which crawl limits bound the sample. It is a fact about the audit run.",
+          "pagesInspected": "Counts come from the crawl and can only change by re-auditing.",
+          "productPagesInspected": "Counts come from the crawl and can only change by re-auditing.",
+          "categoryPagesInspected": "Counts come from the crawl and can only change by re-auditing.",
+          "companyName": "Identity fields come from the CRM record and the audit run.",
+          "website": "Identity fields come from the CRM record and the audit run.",
+          "auditDate": "The audit date is when the crawl ran.",
+          "status": "Status is controlled by the approval state machine, not by a revision payload.",
+          "evidence": "Evidence is written by the audit and is immutable.",
+          "observations": "Observations are written by the audit and are immutable."
+        },
+        "note": "Task #980 ends at a status. Delivery of this report to a client is a later task and is not implemented."
+      }
+    },
+    "workbench": {
+      "status": 200,
+      "body": {
+        "id": "nojdhh7efceg8qqfcym3o53r",
+        "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+        "auditRunId": "x16g6j0n4gkcp5fco5jaxd2p",
+        "auditReportId": "wvdn0jg47gortepadnryg6m8",
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "companyName": "Jamesco Trading Ltd",
+        "websiteUrl": "https://jamescotrading.com/",
+        "productPageId": "abp5nyd67b9zvaubekpnpwo2",
+        "productPageUrl": "https://jamescotrading.com/shop/",
+        "productName": null,
+        "selectionReason": "Selected automatically: 7 observed product field(s), 150142 words, depth 1, ahead of 11 other product page(s).",
+        "status": "ready",
+        "statusReason": null,
+        "theme": {
+          "ink": "#111827",
+          "muted": "#6b7280",
+          "accent": "#313131",
+          "radius": "10px",
+          "reason": null,
+          "source": "live_sample",
+          "logoUrl": null,
+          "primary": "#a7144c",
+          "surface": "#ffffff",
+          "fontFamily": "'Helvetica Neue', Helvetica, Arial, sans-serif",
+          "layoutFamily": "platform-storefront",
+          "headingFamily": "'Helvetica Neue', Helvetica, Arial, sans-serif"
+        },
+        "structuredData": {
+          "json": {
+            "sku": "1.130",
+            "@type": "Product",
+            "weight": "Net weight (kg): 42",
+            "@context": "https://schema.org",
+            "category": "Shop"
+          },
+          "usedFields": [
+            "product.sku",
+            "product.weight",
+            "product.category(derived)"
+          ]
+        },
+        "valuePoints": [
+          {
+            "why": "Search engines, marketplaces and data partners read structured product data to understand a page. Publishing it means the details already on this page can be understood without guessing at the layout.",
+            "title": "Machine-readable product data",
+            "fields": [
+              "product.sku",
+              "product.weight",
+              "product.category(derived)"
+            ]
+          },
+          {
+            "why": "Information that today only appears in the page navigation becomes a field in its own right, so products can be grouped, filtered and compared rather than only browsed.",
+            "title": "Category made explicit",
+            "fields": [
+              "product.category"
+            ]
+          },
+          {
+            "why": "Buyers often search by manufacturer or part number. On this page brand, manufacturer part number and gtin / barcode are not published, so those searches cannot match.",
+            "title": "Findable by what buyers search for",
+            "fields": [
+              "product.brand",
+              "product.mpn",
+              "product.gtin"
+            ]
+          }
+        ],
+        "observedFieldCount": 7,
+        "totalFieldCount": 16,
+        "improvedFieldCount": 3,
+        "sourceReportStatus": "approved",
+        "builtFromUnapproved": false,
+        "geminiUsed": false,
+        "geminiCostUsd": "0",
+        "generatedAt": "2026-09-04T06:42:07.985Z",
+        "createdAt": "2026-09-04T06:42:07.989Z",
+        "updatedAt": "2026-09-04T06:42:07.989Z",
+        "fields": [
+          {
+            "id": "i0fb1e7cegeezqearlsy7uve",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.name",
+            "label": "Product name",
+            "position": 0,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": true,
+            "transformKind": "not_present",
+            "sourceObservationId": "h89919iz4zw9w3qgbxnhprzh",
+            "sourceField": "product.name",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "wcl8r78od86syn6j3wxvee5z",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.sku",
+            "label": "Product code",
+            "position": 1,
+            "beforeValue": "1.130",
+            "afterValue": "1.130",
+            "delta": "restructured",
+            "headline": true,
+            "transformKind": "restructured",
+            "sourceObservationId": "vvdtyymmjk4hwn43mb5uhzst",
+            "sourceField": "product.sku",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "SKU label in page text",
+            "sourceFragment": "MODEL 1.130",
+            "transformRule": "Present on the audited page and carried across unchanged. Published as machine-readable schema.org Product data so search engines and marketplaces can read it."
+          },
+          {
+            "id": "tw2nyf1brqa0c7cxdualycrj",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.brand",
+            "label": "Brand",
+            "position": 2,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": true,
+            "transformKind": "not_present",
+            "sourceObservationId": "sf80zx6nw0huqouxrqrhq0rb",
+            "sourceField": "product.brand",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "k1dxussyqrlvz51b24ro1sa2",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.category",
+            "label": "Category",
+            "position": 3,
+            "beforeValue": null,
+            "afterValue": "Shop",
+            "delta": "added",
+            "headline": true,
+            "transformKind": "derived",
+            "sourceObservationId": "pw5hldjfd1z1oh9o1j525i72",
+            "sourceField": "page.breadcrumbs",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "JSON-LD[1].@graph[1].itemListElement[].name",
+            "sourceFragment": "Home > Shop",
+            "transformRule": "Derived from the breadcrumb trail published on this page (\"Home > Shop\") — the category the product is filed under, read from your own navigation."
+          },
+          {
+            "id": "bcgmacci1i5ywr2u81jydwg3",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.description",
+            "label": "Description",
+            "position": 4,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": true,
+            "transformKind": "not_present",
+            "sourceObservationId": "lm9eownhu7wbi59a39i909na",
+            "sourceField": "product.description",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "l55yomd66uz1zoc8u73sxwix",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.specifications",
+            "label": "Specifications",
+            "position": 5,
+            "beforeValue": "Overall Length (mm): 1250 | Overall Width (mm): 610 | Product Dimensions (mm): 1280x610x2150 | Net weight (kg): 42 | Capacity (litres): 7 | Colour: Grey and white | Configuration: Self Propelled | Footprint (WxL) Min/Max (mm): 640x840 | Footprint Depth (mm): 840 | Footprint Width (mm): 640 | Height from Floor to Top of Back (mm): 940 | Height from Floor to Top of Seat (mm): 520 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 940 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 1080 | Overall Height (mm): 940 | Overall Height (To Top Of Pram Handle): 940 | Overall Width (mm): 640 | Padded Seat (WxL) (mm): 440x430 | Seat Depth (mm): 430 | Seat Height (mm): 520 | Seat Width (mm): 440 | Width between Arms (mm): 460 | Product Dimensions (mm): 940x640x1080 | Net weight (kg): 20.35 | Arm Height from Seat (mm): 180 | Castor Size (mm): 125 | Colour: Grey and white | Configuration: Attendant Propelled | Footprint (WxL) Min/Max (mm): 520x820 | Height from Seat to Top of Back (mm): 460 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 980 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 820 incl. footrests | Overall Height (mm): 910 | Padded Seat (WxL) (mm): 435x425 | Seat Depth (mm): 425 | Seat Height (mm): 520 | Seat to Back Height (mm): 460 | Seat Width (mm): 435 | User Weight Limit (kg): 127 | Width between Arms (mm): 425 inside (550 from outside edges) | Product Dimensions (mm): 980x550x520 | Net weight (kg): 14 | Colour: Blue | Height of Arms from Seat (mm): 205 | Maximum User Weight (kg): 140 | Maximum User Weight (stones): 22 | Overall Depth (mm): 620 | Overall Height (mm): 1050-1285 | Overall Width (mm): 540 | Seat Height (mm): 440-590 | Product Dimensions (mm): 1050x540x620 | Net weight (kg): 15.4 | Weight (approx): 5,30 kg | Dimensions (approx): 44 × 39 × 29 cm | Capacity (Liters) (approx): 49.76 | Material: TARPAULIN | Color: BLUE | Recomme",
+            "afterValue": "Overall Length (mm): 1250 | Overall Width (mm): 610 | Product Dimensions (mm): 1280x610x2150 | Net weight (kg): 42 | Capacity (litres): 7 | Colour: Grey and white | Configuration: Self Propelled | Footprint (WxL) Min/Max (mm): 640x840 | Footprint Depth (mm): 840 | Footprint Width (mm): 640 | Height from Floor to Top of Back (mm): 940 | Height from Floor to Top of Seat (mm): 520 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 940 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 1080 | Overall Height (mm): 940 | Overall Height (To Top Of Pram Handle): 940 | Overall Width (mm): 640 | Padded Seat (WxL) (mm): 440x430 | Seat Depth (mm): 430 | Seat Height (mm): 520 | Seat Width (mm): 440 | Width between Arms (mm): 460 | Product Dimensions (mm): 940x640x1080 | Net weight (kg): 20.35 | Arm Height from Seat (mm): 180 | Castor Size (mm): 125 | Colour: Grey and white | Configuration: Attendant Propelled | Footprint (WxL) Min/Max (mm): 520x820 | Height from Seat to Top of Back (mm): 460 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 980 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 820 incl. footrests | Overall Height (mm): 910 | Padded Seat (WxL) (mm): 435x425 | Seat Depth (mm): 425 | Seat Height (mm): 520 | Seat to Back Height (mm): 460 | Seat Width (mm): 435 | User Weight Limit (kg): 127 | Width between Arms (mm): 425 inside (550 from outside edges) | Product Dimensions (mm): 980x550x520 | Net weight (kg): 14 | Colour: Blue | Height of Arms from Seat (mm): 205 | Maximum User Weight (kg): 140 | Maximum User Weight (stones): 22 | Overall Depth (mm): 620 | Overall Height (mm): 1050-1285 | Overall Width (mm): 540 | Seat Height (mm): 440-590 | Product Dimensions (mm): 1050x540x620 | Net weight (kg): 15.4 | Weight (approx): 5,30 kg | Dimensions (approx): 44 × 39 × 29 cm | Capacity (Liters) (approx): 49.76 | Material: TARPAULIN | Color: BLUE | Recomme",
+            "delta": "unchanged",
+            "headline": true,
+            "transformKind": "unchanged",
+            "sourceObservationId": "syeeyha5lbtlgttb6p4yxlph",
+            "sourceField": "product.specifications",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "specification table / definition list",
+            "sourceFragment": "Overall Length (mm): 1250 | Overall Width (mm): 610 | Product Dimensions (mm): 1280x610x2150 | Net weight (kg): 42",
+            "transformRule": "Present on the audited page and carried across unchanged."
+          },
+          {
+            "id": "wxqed69b7vvjkx1qjde6shly",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.dimensions",
+            "label": "Dimensions",
+            "position": 6,
+            "beforeValue": "Overall Length (mm): 1250",
+            "afterValue": "Overall Length (mm): 1250",
+            "delta": "unchanged",
+            "headline": true,
+            "transformKind": "unchanged",
+            "sourceObservationId": "kd0e6hf2oyyc40ktsk5lrrxx",
+            "sourceField": "product.dimensions",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "spec row \"Overall Length (mm)\"",
+            "sourceFragment": "<tr> <td width=\"267\">Overall Length (mm)</td> <td width=\"86\">1250</td> </tr>",
+            "transformRule": "Present on the audited page and carried across unchanged."
+          },
+          {
+            "id": "b4ichwzkbha67e27b9dg541j",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.weight",
+            "label": "Weight",
+            "position": 7,
+            "beforeValue": "Net weight (kg): 42",
+            "afterValue": "Net weight (kg): 42",
+            "delta": "restructured",
+            "headline": true,
+            "transformKind": "restructured",
+            "sourceObservationId": "mbl92phi5ocq6j91gzsews3w",
+            "sourceField": "product.weight",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "spec row \"Net weight (kg)\"",
+            "sourceFragment": "<tr> <td>Net weight (kg)</td> <td>42</td> </tr>",
+            "transformRule": "Present on the audited page and carried across unchanged. Published as machine-readable schema.org Product data so search engines and marketplaces can read it."
+          },
+          {
+            "id": "ref73rcyuv2fc48xi8qtyle9",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.attributes",
+            "label": "Attributes",
+            "position": 8,
+            "beforeValue": "Overall Length (mm): 1250 | Overall Width (mm): 610 | Product Dimensions (mm): 1280x610x2150 | Net weight (kg): 42 | Capacity (litres): 7 | Colour: Grey and white | Configuration: Self Propelled | Footprint (WxL) Min/Max (mm): 640x840 | Footprint Depth (mm): 840 | Footprint Width (mm): 640 | Height from Floor to Top of Back (mm): 940 | Height from Floor to Top of Seat (mm): 520 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 940 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 1080 | Overall Height (mm): 940 | Overall Height (To Top Of Pram Handle): 940 | Overall Width (mm): 640 | Padded Seat (WxL) (mm): 440x430 | Seat Depth (mm): 430 | Seat Height (mm): 520 | Seat Width (mm): 440 | Width between Arms (mm): 460 | Product Dimensions (mm): 940x640x1080 | Net weight (kg): 20.35 | Arm Height from Seat (mm): 180 | Castor Size (mm): 125 | Colour: Grey and white | Configuration: Attendant Propelled | Footprint (WxL) Min/Max (mm): 520x820 | Height from Seat to Top of Back (mm): 460 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 980 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 820 incl. footrests | Overall Height (mm): 910 | Padded Seat (WxL) (mm): 435x425 | Seat Depth (mm): 425 | Seat Height (mm): 520 | Seat to Back Height (mm): 460 | Seat Width (mm): 435 | User Weight Limit (kg): 127 | Width between Arms (mm): 425 inside (550 from outside edges) | Product Dimensions (mm): 980x550x520 | Net weight (kg): 14 | Colour: Blue | Height of Arms from Seat (mm): 205 | Maximum User Weight (kg): 140 | Maximum User Weight (stones): 22 | Overall Depth (mm): 620 | Overall Height (mm): 1050-1285 | Overall Width (mm): 540 | Seat Height (mm): 440-590 | Product Dimensions (mm): 1050x540x620 | Net weight (kg): 15.4 | Weight (approx): 5,30 kg | Dimensions (approx): 44 × 39 × 29 cm | Capacity (Liters) (approx): 49.76 | Material: TARPAULIN | Color: BLUE | Recomme",
+            "afterValue": "Overall Length (mm): 1250 | Overall Width (mm): 610 | Product Dimensions (mm): 1280x610x2150 | Net weight (kg): 42 | Capacity (litres): 7 | Colour: Grey and white | Configuration: Self Propelled | Footprint (WxL) Min/Max (mm): 640x840 | Footprint Depth (mm): 840 | Footprint Width (mm): 640 | Height from Floor to Top of Back (mm): 940 | Height from Floor to Top of Seat (mm): 520 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 940 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 1080 | Overall Height (mm): 940 | Overall Height (To Top Of Pram Handle): 940 | Overall Width (mm): 640 | Padded Seat (WxL) (mm): 440x430 | Seat Depth (mm): 430 | Seat Height (mm): 520 | Seat Width (mm): 440 | Width between Arms (mm): 460 | Product Dimensions (mm): 940x640x1080 | Net weight (kg): 20.35 | Arm Height from Seat (mm): 180 | Castor Size (mm): 125 | Colour: Grey and white | Configuration: Attendant Propelled | Footprint (WxL) Min/Max (mm): 520x820 | Height from Seat to Top of Back (mm): 460 | Height of Arms from Seat (mm): 180 | Height To Top Of Back From Floor: 980 | Maximum User Weight (kg): 127 | Maximum User Weight (stones): 20 | Overall Depth (mm): 820 incl. footrests | Overall Height (mm): 910 | Padded Seat (WxL) (mm): 435x425 | Seat Depth (mm): 425 | Seat Height (mm): 520 | Seat to Back Height (mm): 460 | Seat Width (mm): 435 | User Weight Limit (kg): 127 | Width between Arms (mm): 425 inside (550 from outside edges) | Product Dimensions (mm): 980x550x520 | Net weight (kg): 14 | Colour: Blue | Height of Arms from Seat (mm): 205 | Maximum User Weight (kg): 140 | Maximum User Weight (stones): 22 | Overall Depth (mm): 620 | Overall Height (mm): 1050-1285 | Overall Width (mm): 540 | Seat Height (mm): 440-590 | Product Dimensions (mm): 1050x540x620 | Net weight (kg): 15.4 | Weight (approx): 5,30 kg | Dimensions (approx): 44 × 39 × 29 cm | Capacity (Liters) (approx): 49.76 | Material: TARPAULIN | Color: BLUE | Recomme",
+            "delta": "unchanged",
+            "headline": false,
+            "transformKind": "unchanged",
+            "sourceObservationId": "e782tlieja67tpquvvzd2oas",
+            "sourceField": "product.attributes",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "specification table / definition list",
+            "sourceFragment": "Overall Length (mm): 1250 | Overall Width (mm): 610 | Product Dimensions (mm): 1280x610x2150 | Net weight (kg): 42",
+            "transformRule": "Present on the audited page and carried across unchanged."
+          },
+          {
+            "id": "pnvjdg5di1y0byjlnjpzkj04",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.units",
+            "label": "Units of measure",
+            "position": 9,
+            "beforeValue": "cm, kg, l",
+            "afterValue": "cm, kg, l",
+            "delta": "unchanged",
+            "headline": false,
+            "transformKind": "unchanged",
+            "sourceObservationId": "llgvom9j2m7hprj9rb0jb8r3",
+            "sourceField": "product.units",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "unit tokens in specification values",
+            "sourceFragment": "Weight (approx): 5,30 kg",
+            "transformRule": "Present on the audited page and carried across unchanged."
+          },
+          {
+            "id": "tp7lmpml7585zyua1b8pkt7j",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.price",
+            "label": "Price",
+            "position": 10,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": false,
+            "transformKind": "not_present",
+            "sourceObservationId": "lqzbfrkn4o3lhktcxa8wr2ij",
+            "sourceField": "product.price",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "y7uey2o5jvwyl7mlv97692zq",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.availability",
+            "label": "Availability",
+            "position": 11,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": false,
+            "transformKind": "not_present",
+            "sourceObservationId": "trbtlvn330z67btj65hyfjdo",
+            "sourceField": "product.availability",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "o7l8k4fnx6se0lpjm7cn5pcc",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.mpn",
+            "label": "Manufacturer part number",
+            "position": 12,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": false,
+            "transformKind": "not_present",
+            "sourceObservationId": "o5rmx9totmkpp08mu579kq6o",
+            "sourceField": "product.mpn",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "cvbqgqcnn8p7pxw5dpqj9fij",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.gtin",
+            "label": "GTIN / barcode",
+            "position": 13,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": false,
+            "transformKind": "not_present",
+            "sourceObservationId": "wc910rm7achz6psao5sx96sz",
+            "sourceField": "product.gtin",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "zjyzyl9h14nw668hyx379o3j",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.documents",
+            "label": "Datasheets",
+            "position": 14,
+            "beforeValue": null,
+            "afterValue": null,
+            "delta": "still_absent",
+            "headline": false,
+            "transformKind": "not_present",
+            "sourceObservationId": "gx2ss9vfbb6wo5mw17iimfhj",
+            "sourceField": "product.documents",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": null,
+            "sourceFragment": null,
+            "transformRule": "No value for this field was observed on the audited page, so it is shown empty."
+          },
+          {
+            "id": "vc2tcaidyhuzjkp22z33mwni",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "demoId": "nojdhh7efceg8qqfcym3o53r",
+            "field": "product.imageCount",
+            "label": "Images",
+            "position": 15,
+            "beforeValue": "22",
+            "afterValue": "22",
+            "delta": "unchanged",
+            "headline": false,
+            "transformKind": "unchanged",
+            "sourceObservationId": "b12wwudin3napqs5fcvmdszc",
+            "sourceField": "product.imageCount",
+            "sourceUrl": "https://jamescotrading.com/shop/",
+            "sourcePath": "<img> elements",
+            "sourceFragment": "22 <img> elements",
+            "transformRule": "Present on the audited page and carried across unchanged."
+          }
+        ],
+        "links": [],
+        "registrations": 0,
+        "disclaimers": [
+          "Every AFTER value is produced by restructuring, deriving from, or rewording an observed field. Nothing is invented.",
+          "A field with no observed source is shown empty and carries the observation proving it was looked for.",
+          "The visual style is an approximation sampled from the prospect site. No prospect HTML, CSS or JavaScript is served.",
+          "Registrations collected here are NOT written to NXT Sales and are not scored or routed."
+        ]
+      }
+    },
+    "enrichment": {
+      "status": 200,
+      "body": {
+        "id": "xu6ww3v29u3fjnghesclngam",
+        "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "companyName": "Jamesco Trading Ltd",
+        "prospectSearchId": null,
+        "requestedByCrmUserId": "crm-user-jey",
+        "status": "enriched",
+        "sourceUrl": "https://jamescotrading.com/",
+        "signals": {
+          "crmCms": "wordpress",
+          "domain": "jamescotrading.com",
+          "country": "MALTA",
+          "finalUrl": "https://jamescotrading.com/",
+          "industry": "Medical Devices & Supplies",
+          "generator": "Site Kit by Google 1.186.0",
+          "pageTitle": "Home - Jamesco Trading Online Shop",
+          "websiteStatus": "reachable",
+          "metaDescription": "UNKNOWN",
+          "hasProductSchema": false,
+          "hasStructuredData": true
+        },
+        "technologies": [
+          {
+            "name": "WooCommerce / WordPress",
+            "category": "cms",
+            "evidence": "ge\" content=\"https://jamescotrading.com/wp-content/uploads/2023/02/rating_2.png\" /> <script type=\"application"
+          },
+          {
+            "name": "Site Kit by Google 1.186.0",
+            "category": "declared",
+            "evidence": "' href='https://jamescotrading.com/' /> <meta name=\"generator\" content=\"Site Kit by Google 1.186.0\" /><script type=\"text/javascript\"> var root = document.getEl"
+          }
+        ],
+        "technologyCount": 2,
+        "provenance": [
+          {
+            "label": "crm_data",
+            "statement": "Company \"Jamesco Trading Ltd\" loaded from NXT Sales."
+          },
+          {
+            "label": "crm_data",
+            "statement": "Industry: Medical Devices & Supplies; country: MALTA."
+          },
+          {
+            "label": "crm_data",
+            "statement": "Website taken from Company.domain: https://jamescotrading.com/"
+          },
+          {
+            "label": "research",
+            "statement": "Fetched https://jamescotrading.com/."
+          },
+          {
+            "label": "research",
+            "statement": "WooCommerce / WordPress (cms) — evidence: ge\" content=\"https://jamescotrading.com/wp-content/uploads/2023/02/rating_2.png\" /> <script type=\"application"
+          },
+          {
+            "label": "research",
+            "statement": "Site Kit by Google 1.186.0 (declared) — evidence: ' href='https://jamescotrading.com/' /> <meta name=\"generator\" content=\"Site Kit by Google 1.186.0\" /><script type=\"text/javascript\"> var root = document.getEl"
+          },
+          {
+            "label": "crm_data",
+            "statement": "CRM value \"wordpress\" is consistent with what the page showed."
+          }
+        ],
+        "failureReason": null,
+        "error": null,
+        "fetchedAt": "2026-09-04T06:29:18.155Z",
+        "createdAt": "2026-09-04T06:29:17.286Z",
+        "updatedAt": "2026-09-04T06:29:18.157Z",
+        "finishedAt": "2026-09-04T06:29:18.155Z",
+        "disclaimers": [
+          "Technology signals are observed in the fetched page. Each carries the markup that proved it.",
+          "An empty technology list means NOT DETECTED, never \"no technology in use\" — many platforms leave no trace in delivered markup.",
+          "Fields marked UNKNOWN could not be verified. They are not absent values.",
+          "No model was called in this stage; nothing here is an AI inference."
+        ]
+      }
+    },
+    "intentSignals": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "total": 10,
+        "byCategory": {
+          "technology": 10
+        },
+        "byPolarity": {
+          "positive": 10
+        },
+        "signals": [
+          {
+            "id": "xrt8dy6d61tpjn6gxqebauo7",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "y9s32m2kix79t0zduzz87nmw",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "8275938f71df509b904f3e07f9b7dcd3",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "Site Kit by Google 1.186.0 detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "' href='https://jamescotrading.com/' /> <meta name=\"generator\" content=\"Site Kit by Google 1.186.0\" /><script type=\"text/javascript\"> var root = document.getEl",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T06:29:18.155Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "declared",
+              "technology": "Site Kit by Google 1.186.0",
+              "enrichmentId": "xu6ww3v29u3fjnghesclngam"
+            },
+            "detectedAt": "2026-09-04T06:29:18.321Z"
+          },
+          {
+            "id": "r8vbxtghz3ove3i36du5nrqn",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "y9s32m2kix79t0zduzz87nmw",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "d04ba1c3d831cb17beb3b63e3e397d1d",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "WooCommerce / WordPress detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "ge\" content=\"https://jamescotrading.com/wp-content/uploads/2023/02/rating_2.png\" /> <script type=\"application",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T06:29:18.155Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "cms",
+              "technology": "WooCommerce / WordPress",
+              "enrichmentId": "xu6ww3v29u3fjnghesclngam"
+            },
+            "detectedAt": "2026-09-04T06:29:18.305Z"
+          },
+          {
+            "id": "z67ziaf1zq6rhl5htzfd8ud3",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "lewxho8vtpagl84owl3xvcc9",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "8275938f71df509b904f3e07f9b7dcd3",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "Site Kit by Google 1.186.0 detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "' href='https://jamescotrading.com/' /> <meta name=\"generator\" content=\"Site Kit by Google 1.186.0\" /><script type=\"text/javascript\"> var root = document.getEl",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T06:09:41.242Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "declared",
+              "technology": "Site Kit by Google 1.186.0",
+              "enrichmentId": "ynxnlqsy70gb9zctgdi9lbpc"
+            },
+            "detectedAt": "2026-09-04T06:09:56.839Z"
+          },
+          {
+            "id": "wr24g0dl04g2jcfhetx988gm",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "lewxho8vtpagl84owl3xvcc9",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "d04ba1c3d831cb17beb3b63e3e397d1d",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "WooCommerce / WordPress detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "ge\" content=\"https://jamescotrading.com/wp-content/uploads/2023/02/rating_2.png\" /> <script type=\"application",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T06:09:41.242Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "cms",
+              "technology": "WooCommerce / WordPress",
+              "enrichmentId": "ynxnlqsy70gb9zctgdi9lbpc"
+            },
+            "detectedAt": "2026-09-04T06:09:56.826Z"
+          },
+          {
+            "id": "h2cgfmva2o7ajn6eh3il9ke9",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "j3rviqic1o70n797q3brx0uc",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "8275938f71df509b904f3e07f9b7dcd3",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "Site Kit by Google 1.186.0 detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "' href='https://jamescotrading.com/' /> <meta name=\"generator\" content=\"Site Kit by Google 1.186.0\" /><script type=\"text/javascript\"> var root = document.getEl",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T06:09:41.242Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "declared",
+              "technology": "Site Kit by Google 1.186.0",
+              "enrichmentId": "ynxnlqsy70gb9zctgdi9lbpc"
+            },
+            "detectedAt": "2026-09-04T06:09:51.540Z"
+          },
+          {
+            "id": "t8uun8icf2rnz8qtk7qkidhb",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "j3rviqic1o70n797q3brx0uc",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "d04ba1c3d831cb17beb3b63e3e397d1d",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "WooCommerce / WordPress detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "ge\" content=\"https://jamescotrading.com/wp-content/uploads/2023/02/rating_2.png\" /> <script type=\"application",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T06:09:41.242Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "cms",
+              "technology": "WooCommerce / WordPress",
+              "enrichmentId": "ynxnlqsy70gb9zctgdi9lbpc"
+            },
+            "detectedAt": "2026-09-04T06:09:51.521Z"
+          },
+          {
+            "id": "ghcyffm9pde7rgi1u2x1agvy",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "afgbmrpvcbcm6y5ykerhk2bi",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "8275938f71df509b904f3e07f9b7dcd3",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "Site Kit by Google 1.186.0 detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "' href='https://jamescotrading.com/' /> <meta name=\"generator\" content=\"Site Kit by Google 1.186.0\" /><script type=\"text/javascript\"> var root = document.getEl",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T05:10:07.026Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "declared",
+              "technology": "Site Kit by Google 1.186.0",
+              "enrichmentId": "lb0d09vet2d8v8xsjdk4uxdm"
+            },
+            "detectedAt": "2026-09-04T05:10:08.982Z"
+          },
+          {
+            "id": "ireci0r132uwm51e176uvqim",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "afgbmrpvcbcm6y5ykerhk2bi",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "d04ba1c3d831cb17beb3b63e3e397d1d",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "WooCommerce / WordPress detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "ge\" content=\"https://jamescotrading.com/wp-content/uploads/2023/02/rating_2.png\" /> <script type=\"application",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T05:10:07.026Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "cms",
+              "technology": "WooCommerce / WordPress",
+              "enrichmentId": "lb0d09vet2d8v8xsjdk4uxdm"
+            },
+            "detectedAt": "2026-09-04T05:10:08.968Z"
+          },
+          {
+            "id": "od1zaap4px7i8ynx337bx51r",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "oyj7pj9qkwj4llgrj9xejndh",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "8275938f71df509b904f3e07f9b7dcd3",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "Site Kit by Google 1.186.0 detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "' href='https://jamescotrading.com/' /> <meta name=\"generator\" content=\"Site Kit by Google 1.186.0\" /><script type=\"text/javascript\"> var root = document.getEl",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T05:05:30.929Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "declared",
+              "technology": "Site Kit by Google 1.186.0",
+              "enrichmentId": "jxyq68my896t1tcs4213qwz1"
+            },
+            "detectedAt": "2026-09-04T05:05:43.258Z"
+          },
+          {
+            "id": "unlr6jbw5jtn97zf4gjweeam",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "intentRunId": "oyj7pj9qkwj4llgrj9xejndh",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "eventFingerprint": "d04ba1c3d831cb17beb3b63e3e397d1d",
+            "signalType": "platform_detected",
+            "signalCategory": "technology",
+            "summary": "WooCommerce / WordPress detected on the company website",
+            "interpretation": "Indicates the commerce/content platform in use, which determines how catalog work would have to be delivered.",
+            "evidence": "ge\" content=\"https://jamescotrading.com/wp-content/uploads/2023/02/rating_2.png\" /> <script type=\"application",
+            "sourceUrl": "https://jamescotrading.com/",
+            "sourceType": "company_website",
+            "provider": "technology",
+            "observedAt": "2026-09-04T05:05:30.929Z",
+            "ageDays": 0,
+            "freshness": "fresh",
+            "confidence": "high",
+            "confidenceReasons": [
+              "Source type \"company_website\" is treated as high quality."
+            ],
+            "polarity": "positive",
+            "status": "active",
+            "corroboratingEvidence": null,
+            "corroborationCount": 0,
+            "metadata": {
+              "category": "cms",
+              "technology": "WooCommerce / WordPress",
+              "enrichmentId": "jxyq68my896t1tcs4213qwz1"
+            },
+            "detectedAt": "2026-09-04T05:05:43.245Z"
+          }
+        ],
+        "disclaimers": [
+          "These are SIGNALS, not a conclusion. They indicate what evidence exists, not that the company needs any particular solution.",
+          "There is deliberately no composite intent score at this stage; scoring is a later stage.",
+          "Confidence describes EVIDENCE QUALITY only, computed by deterministic rules — not by a model.",
+          "A negative signal (suppression, open opportunity, existing customer) overrides positive ones for outreach purposes.",
+          "An absent signal means NOT DETECTED, never that the underlying thing is not happening."
+        ]
+      }
+    },
+    "decisionMakers": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "companyName": "Jamesco Trading Ltd",
+        "runId": "hq8j242bigj7atkg5lgsysty",
+        "discoveredAt": "2026-09-04T06:29:19.178Z",
+        "total": 1,
+        "candidates": [
+          {
+            "id": "sdyhnaz13sxqzv6mw360yy0i",
+            "tenantId": "nb1pootw6w3i9y0jaxr81gdh",
+            "dmRunId": "hq8j242bigj7atkg5lgsysty",
+            "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+            "identityKey": "url:https://www.linkedin.com/in/mariella-mizzi-94896a46",
+            "fullName": "Mariella Mizzi",
+            "rawTitle": "General Manager",
+            "normalizedTitle": "general manager",
+            "roleGroup": "Executive Sponsor",
+            "rolePriority": 3,
+            "seniority": "manager",
+            "statedCompany": "Jamesco Trading Ltd",
+            "companyMatch": "verified",
+            "companyMatchReasons": [
+              "Recorded against CRM company cmt89cr640rf0s9d3x48vge96 (\"Jamesco Trading Ltd\")."
+            ],
+            "profileUrl": "https://www.linkedin.com/in/mariella-mizzi-94896a46",
+            "location": null,
+            "email": null,
+            "phone": null,
+            "confidence": "high",
+            "confidenceReasons": [
+              "Job title stated by crm_record (strongest source rank 5/5).",
+              "Employment at this company is verified.",
+              "Reported by a single provider (crm_contacts), so nothing corroborates it."
+            ],
+            "contactability": "profile_only",
+            "corroboratingProviders": [
+              "crm_contacts"
+            ],
+            "corroborationCount": 1,
+            "rankScore": 72,
+            "rankReasons": [
+              "+10 Priority 3 role (Executive Sponsor) — matched on \"general manager\".",
+              "+6 seniority \"manager\".",
+              "+30 company match \"verified\".",
+              "+20 evidence confidence \"high\".",
+              "+6 most recent source evidence is 10 day(s) old.",
+              "Title normalises to \"general manager\".",
+              "Matched the \"general manager\" function, which is a Priority 3 role group (Executive Sponsor).",
+              "Seniority read as \"manager\" — used for ranking only, never to establish relevance.",
+              "This is the executive-sponsor fallback. It counts only where the company has no specialist role, per the approved buyer policy."
+            ],
+            "rank": 1,
+            "evidence": [
+              {
+                "snippet": "NXT Sales company cmt89cr640rf0s9d3x48vge96 (\"Jamesco Trading Ltd\") — contactPersons entry: \"Mariella Mizzi - General Manager\" | linkedProfiles entry matching this name: https://www.linkedin.com/in/mariella-mizzi-94896a46",
+                "provider": "crm_contacts",
+                "supports": [
+                  "name",
+                  "company",
+                  "title",
+                  "profile_url"
+                ],
+                "sourceUrl": null,
+                "observedAt": "2026-08-25T06:02:18.892Z",
+                "sourceType": "crm_record"
+              }
+            ],
+            "outcome": "shortlisted",
+            "exclusionReason": null,
+            "discoveredAt": "2026-09-04T06:29:19.131Z"
+          }
+        ],
+        "providerResults": [
+          {
+            "reason": null,
+            "status": "available",
+            "costUsd": null,
+            "metadata": {
+              "withTitle": 2,
+              "entriesOnRecord": 2,
+              "unusableEntries": 0
+            },
+            "provider": "crm_contacts",
+            "candidates": 2,
+            "durationMs": 9
+          },
+          {
+            "reason": "LINKEDIN_ACCESS_TOKEN is not set. LinkedIn person data requires an approved LinkedIn Partner Program application; there is no self-service credential. Third-party LinkedIn scraper Actors ARE reachable from the configured Apify account and were deliberately NOT used, because scraping LinkedIn without authorisation violates its terms whether done directly or through an intermediary.",
+            "status": "unauthorized",
+            "costUsd": null,
+            "metadata": null,
+            "provider": "linkedin_reference",
+            "candidates": 0,
+            "durationMs": 0
+          },
+          {
+            "reason": "APOLLO_API_KEY is not set. No Apollo.io account or API credential exists in this environment, and Apollo people-search data is not obtainable without one. Apollo data reachable via third-party scrapers was NOT used, because that bypasses the provider paywall.",
+            "status": "unauthorized",
+            "costUsd": null,
+            "metadata": null,
+            "provider": "apollo",
+            "candidates": 0,
+            "durationMs": 0
+          },
+          {
+            "reason": "No ZoomInfo credentials are set (needs ZOOMINFO_USERNAME with either ZOOMINFO_PASSWORD, or ZOOMINFO_CLIENT_ID + ZOOMINFO_PRIVATE_KEY for PKI auth). ZoomInfo has no self-service API tier: access requires an enterprise contract, so this cannot be unblocked by signing up.",
+            "status": "unauthorized",
+            "costUsd": null,
+            "metadata": null,
+            "provider": "zoominfo",
+            "candidates": 0,
+            "durationMs": 0
+          },
+          {
+            "reason": "ROCKETREACH_API_KEY is not set. No RocketReach account exists in this environment, and its person-search API requires a paid plan.",
+            "status": "unauthorized",
+            "costUsd": null,
+            "metadata": null,
+            "provider": "rocketreach",
+            "candidates": 0,
+            "durationMs": 0
+          },
+          {
+            "reason": "None of the 6 standard team-page paths on jamescotrading.com could be reached.",
+            "status": "no_results",
+            "costUsd": null,
+            "metadata": {
+              "host": "jamescotrading.com",
+              "pagesTried": [
+                {
+                  "ok": false,
+                  "url": "https://jamescotrading.com/leadership",
+                  "people": 0,
+                  "reason": "The site returned HTTP 404."
+                },
+                {
+                  "ok": false,
+                  "url": "https://jamescotrading.com/team",
+                  "people": 0,
+                  "reason": "The site returned HTTP 404."
+                },
+                {
+                  "ok": false,
+                  "url": "https://jamescotrading.com/about/leadership",
+                  "people": 0,
+                  "reason": "The site returned HTTP 404."
+                },
+                {
+                  "ok": false,
+                  "url": "https://jamescotrading.com/about/team",
+                  "people": 0,
+                  "reason": "The site returned HTTP 404."
+                },
+                {
+                  "ok": false,
+                  "url": "https://jamescotrading.com/about-us/leadership",
+                  "people": 0,
+                  "reason": "The site returned HTTP 404."
+                },
+                {
+                  "ok": false,
+                  "url": "https://jamescotrading.com/our-team",
+                  "people": 0,
+                  "reason": "The site returned HTTP 404."
+                }
+              ],
+              "distinctPages": 0,
+              "duplicatePages": 0
+            },
+            "provider": "company_website",
+            "candidates": 0,
+            "durationMs": 58
+          }
+        ],
+        "noResultsReason": null,
+        "disclaimers": [
+          "Every field was STATED by a source. A null title, email or profile means no source stated it — nothing here is inferred, pattern-guessed, or completed from a name.",
+          "companyMatch describes how the person was tied to this company. Only \"verified\" means a source proved the employment.",
+          "Confidence describes EVIDENCE QUALITY, computed by deterministic rules — not by a model.",
+          "An empty list means no candidate could be verified, NOT that the company has no decision maker.",
+          "Relevance is decided by job FUNCTION, never by seniority alone: a title has to name a function that owns product or catalog data.",
+          "This stage identifies WHO. It does not contact anyone, and it writes nothing back to NXT Sales."
+        ]
+      }
+    },
+    "intentScore": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "scored": true,
+        "score": 0,
+        "rawScore": 0,
+        "scoreRange": {
+          "min": 0,
+          "max": 100
+        },
+        "clamped": false,
+        "level": "LOW",
+        "policyVersion": "v1-provisional",
+        "policyStatus": "provisional",
+        "calculationVersion": "calc-1",
+        "evaluatedAt": "2026-09-04T06:29:25.409Z",
+        "contactability": {
+          "status": "unknown",
+          "reasons": [
+            "Nothing has been observed either way."
+          ]
+        },
+        "eventsConsidered": 10,
+        "eventsScored": 0,
+        "eventsExcluded": 10,
+        "note": "Rule-based intent score derived from observed engagement. The scoring weights are a PROVISIONAL DEFAULT and have not been approved by the business. Not a prediction, not a machine-learning score, and not a probability of conversion."
+      }
+    },
+    "qualification": {
+      "status": 200,
+      "body": {
+        "evaluated": true,
+        "id": "gvkm0fgzvwxa0tlt15f07ipy",
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "companyName": null,
+        "status": "not_qualified",
+        "stage": "not_qualified",
+        "intentScore": 0,
+        "threshold": 70,
+        "aboveThreshold": -70,
+        "reason": "The intent score of 0 is below the configured high-intent threshold of 70.",
+        "qualificationPolicyVersion": "sq1-provisional",
+        "qualificationEngineVersion": "qual-1",
+        "scorePolicyVersion": "v1-provisional",
+        "scoreCalculationVersion": "calc-1",
+        "scoreEvaluatedAt": "2026-09-04T06:29:25.277Z",
+        "intentScoreSnapshotId": "shqfwv3r4xkg1qudxtbmgdvm",
+        "owner": {
+          "crmUserId": null,
+          "name": null,
+          "email": null,
+          "source": "none",
+          "reason": "Not resolved: this company is not currently a high-intent lead."
+        },
+        "alert": {
+          "status": "pending"
+        },
+        "followUp": {
+          "status": "pending",
+          "dueAt": null
+        },
+        "qualifiedAt": null,
+        "deQualifiedAt": null,
+        "evaluationCount": 6,
+        "lastEvaluatedAt": "2026-09-04T06:29:25.642Z",
+        "alerts": [],
+        "followUpTasks": [],
+        "note": "A high-intent lead means observed engagement crossed a PROVISIONAL threshold that has not been approved by the business. It is not a prediction that the company will buy, and not a probability of conversion."
+      }
+    },
+    "crmPending": {
+      "status": 200,
+      "body": {
+        "pending": [
+          {
+            "syncId": "ut7t807jb3to4nbace7azvpe",
+            "qualificationId": "zgxsot545gtz3lpwifuzz5k0",
+            "crmCompanyId": "cms7fiyww06pnqj76gap3d9r4",
+            "companyName": "1st Ayd",
+            "state": "awaiting_user_approval",
+            "stateLabel": "Prepared — waiting for a person to decide",
+            "qualification": {
+              "status": "qualified_unassigned",
+              "score": 100,
+              "reason": "The current intent score of 100 meets the configured high-intent threshold of 70."
+            },
+            "owner": {
+              "crmUserId": null,
+              "status": "unassigned"
+            },
+            "validation": {
+              "ok": true
+            },
+            "preparedAt": "2026-09-04T06:37:52.995Z",
+            "requestedByCrmUserId": "crm-user-jey",
+            "youPreparedThis": true,
+            "expectedUpdatedAt": "2026-09-04T06:37:52.997Z"
+          }
+        ],
+        "count": 1,
+        "note": "A CRM handoff is written only after a person approves it. Nothing here has been sent."
+      }
+    },
+    "outreachChannels": {
+      "status": 200,
+      "body": {
+        "channels": [
+          {
+            "channel": "email",
+            "provider": "email",
+            "status": "not_configured",
+            "reason": "No email provider is configured (EMAIL_PROVIDER is unset). There is no SMTP host or transactional email credential in this environment, and no mail library is installed.",
+            "remediation": "Set EMAIL_PROVIDER and the matching credentials, and configure OUTREACH_FROM_EMAIL with a verified sending domain."
+          },
+          {
+            "channel": "linkedin",
+            "provider": "linkedin",
+            "status": "draft_only",
+            "reason": "No LinkedIn API credential is configured. LinkedIn messaging requires an approved Partner Program application; there is no self-service credential. Third-party LinkedIn automation Actors ARE reachable from the configured Apify account and are deliberately NOT used, because automating the platform without authorisation breaches its terms and puts the recipient at risk as well as us.",
+            "remediation": "Obtain LinkedIn Partner Program access with a messaging scope and set LINKEDIN_ACCESS_TOKEN, then implement the specific endpoint that approval grants."
+          },
+          {
+            "channel": "call",
+            "provider": "call_task",
+            "status": "available"
+          },
+          {
+            "channel": "email_followup",
+            "provider": "email_followup",
+            "status": "not_configured",
+            "reason": "No email provider is configured (EMAIL_PROVIDER is unset). There is no SMTP host or transactional email credential in this environment, and no mail library is installed.",
+            "remediation": "Set EMAIL_PROVIDER and the matching credentials, and configure OUTREACH_FROM_EMAIL with a verified sending domain."
+          },
+          {
+            "channel": "whatsapp",
+            "provider": "whatsapp",
+            "status": "disabled_by_policy",
+            "reason": "The WhatsApp channel is disabled. Eligibility for an alternative channel is a business decision, and no eligibility rule has been configured — so the default is off rather than an invented \"high-value\" threshold.",
+            "remediation": "Define the eligibility criteria with the business, configure OUTREACH_WHATSAPP_MIN_DEAL_VALUE (or an explicit account list), then set OUTREACH_WHATSAPP_ENABLED=true."
+          }
+        ],
+        "disclaimers": [
+          "Status is read from configuration at request time. No credential is ever returned.",
+          "\"draft_only\" means the message is composed for a human to send — the platform will not act on that channel."
+        ]
+      }
+    },
+    "qualificationHistory": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "transitions": [
+          {
+            "id": "cbb7bbrox6etbui35x1nhr8w",
+            "transition": "re_evaluated",
+            "from": null,
+            "to": "not_qualified",
+            "previousScore": null,
+            "score": 0,
+            "threshold": 70,
+            "difference": -70,
+            "reason": "The intent score of 0 is below the configured high-intent threshold of 70.",
+            "qualificationPolicyVersion": "sq1-provisional",
+            "scorePolicyVersion": "v1-provisional",
+            "alertStatus": "pending",
+            "taskStatus": "pending",
+            "actorType": "user",
+            "occurredAt": "2026-09-04T05:06:39.202Z"
+          }
+        ],
+        "note": "Append-only. A de-qualification adds a row; it never removes the qualification that came before it."
+      }
+    },
+    "scoreHistory": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "snapshots": [
+          {
+            "snapshotId": "shqfwv3r4xkg1qudxtbmgdvm",
+            "score": 0,
+            "rawScore": 0,
+            "level": "LOW",
+            "clamped": false,
+            "change": 0,
+            "policyVersion": "v1-provisional",
+            "policyStatus": "provisional",
+            "calculationVersion": "calc-1",
+            "evaluatedAt": "2026-09-04T06:29:25.277Z",
+            "trigger": "recalculation",
+            "eventsConsidered": 10,
+            "eventsScored": 0,
+            "contactability": "unknown",
+            "recordedAt": "2026-09-04T06:29:25.386Z"
+          },
+          {
+            "snapshotId": "i4lztp13pdr029jd4wl9k804",
+            "score": 0,
+            "rawScore": 0,
+            "level": "LOW",
+            "clamped": false,
+            "change": 0,
+            "policyVersion": "v1-provisional",
+            "policyStatus": "provisional",
+            "calculationVersion": "calc-1",
+            "evaluatedAt": "2026-09-04T05:06:37.603Z",
+            "trigger": "recalculation",
+            "eventsConsidered": 0,
+            "eventsScored": 0,
+            "contactability": "unknown",
+            "recordedAt": "2026-09-04T05:06:37.700Z"
+          },
+          {
+            "snapshotId": "y89slwpmx5qu73ni4gcj5r1d",
+            "score": 0,
+            "rawScore": 0,
+            "level": "LOW",
+            "clamped": false,
+            "change": null,
+            "policyVersion": "v1-provisional",
+            "policyStatus": "provisional",
+            "calculationVersion": "calc-1",
+            "evaluatedAt": "2026-08-28T12:02:00.681Z",
+            "trigger": "event_ingested",
+            "eventsConsidered": 5,
+            "eventsScored": 0,
+            "contactability": "unknown",
+            "recordedAt": "2026-08-28T12:02:00.706Z"
+          }
+        ],
+        "note": "Each snapshot keeps the policy version that produced it, so an older score stays reproducible after the weights change."
+      }
+    },
+    "scoreBreakdown": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "score": 0,
+        "rawScore": 0,
+        "scoreRange": {
+          "min": 0,
+          "max": 100
+        },
+        "clamped": false,
+        "level": "LOW",
+        "policyVersion": "v1-provisional",
+        "policyStatus": "provisional",
+        "calculationVersion": "calc-1",
+        "evaluatedAt": "2026-09-04T06:29:25.409Z",
+        "contactability": {
+          "status": "unknown",
+          "reasons": [
+            "Nothing has been observed either way."
+          ]
+        },
+        "contributions": [],
+        "setAside": [
+          {
+            "engagementEventId": "jwezd3d7arlq8e9mxnub1ujx",
+            "eventType": "outreach_action_blocked",
+            "channel": "email",
+            "occurredAt": "2026-09-04T06:29:24.635Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_blocked\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "hf6wppg0mxh8vrzyvnayngyt",
+            "eventType": "linkedin_draft_created",
+            "channel": "linkedin",
+            "occurredAt": "2026-09-04T06:29:24.689Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"linkedin_draft_created\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "x12ksna7sq1r9i5yjw6kqo26",
+            "eventType": "outreach_action_scheduled",
+            "channel": "call",
+            "occurredAt": "2026-09-04T06:29:24.727Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_scheduled\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "h0um7i9ujoi697bcmv6h5mrv",
+            "eventType": "outreach_action_blocked",
+            "channel": "email",
+            "occurredAt": "2026-09-04T06:29:24.763Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_blocked\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "aicn0nmsc8gxqkztdxyitid4",
+            "eventType": "outreach_action_blocked",
+            "channel": "whatsapp",
+            "occurredAt": "2026-09-04T06:29:24.791Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_blocked\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "kom0zc3yg31ehzpizyuhhu7o",
+            "eventType": "outreach_action_blocked",
+            "channel": "email",
+            "occurredAt": "2026-09-04T06:29:25.018Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_blocked\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "g0f5qf5vi6azl8vd65xxz3nx",
+            "eventType": "linkedin_draft_created",
+            "channel": "linkedin",
+            "occurredAt": "2026-09-04T06:29:25.046Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"linkedin_draft_created\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "iaq8d9ximbuk0h414c3xpotl",
+            "eventType": "outreach_action_scheduled",
+            "channel": "call",
+            "occurredAt": "2026-09-04T06:29:25.073Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_scheduled\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "pyx15y1qalu6hc1o9zl8yhno",
+            "eventType": "outreach_action_blocked",
+            "channel": "email",
+            "occurredAt": "2026-09-04T06:29:25.104Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_blocked\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          },
+          {
+            "engagementEventId": "h0b986cf9sp4ta6xx40z4q1v",
+            "eventType": "outreach_action_blocked",
+            "channel": "whatsapp",
+            "occurredAt": "2026-09-04T06:29:25.131Z",
+            "policyRuleId": "none",
+            "dimension": "interest",
+            "basePoints": 0,
+            "freshnessMultiplier": 0,
+            "freshnessLabel": "not applied",
+            "ageDays": 0,
+            "contribution": 0,
+            "excluded": true,
+            "reason": "The policy has no rule for \"outreach_action_blocked\", so it contributes nothing.",
+            "scoringPolicyVersion": "v1-provisional"
+          }
+        ],
+        "totals": {
+          "counted": 0,
+          "setAside": 10,
+          "pointsFromPositive": 0,
+          "pointsFromNegative": 0,
+          "byChannel": {},
+          "byEventType": {}
+        },
+        "note": "Rule-based intent score derived from observed engagement. The scoring weights are a PROVISIONAL DEFAULT and have not been approved by the business. Not a prediction, not a machine-learning score, and not a probability of conversion."
+      }
+    },
+    "engagementTimeline": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "events": [
+          {
+            "id": "h0b986cf9sp4ta6xx40z4q1v",
+            "eventType": "outreach_action_blocked",
+            "actor": "altiusnxt",
+            "channel": "whatsapp",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:25.131Z",
+            "receivedAt": "2026-09-04T06:29:25.149Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "ajctpujk7dh3yzweog4dp9kb",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A WhatsApp outreach action for Jamesco Trading Ltd was blocked before any external contact was made.",
+              "where": "outreach campaign hsjxdw6kachs6d0axijsb819",
+              "referenceId": "ajctpujk7dh3yzweog4dp9kb",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "whatsapp",
+              "actionStatus": "blocked_no_target",
+              "statusReason": "No verified destination is stored for this contact on the whatsapp channel. One is never guessed from a name or a domain."
+            }
+          },
+          {
+            "id": "pyx15y1qalu6hc1o9zl8yhno",
+            "eventType": "outreach_action_blocked",
+            "actor": "altiusnxt",
+            "channel": "email",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:25.104Z",
+            "receivedAt": "2026-09-04T06:29:25.149Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "yoluis213l8wo6ghww20aml3",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A follow-up email outreach action for Jamesco Trading Ltd was blocked before any external contact was made.",
+              "where": "outreach campaign hsjxdw6kachs6d0axijsb819",
+              "referenceId": "yoluis213l8wo6ghww20aml3",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "email_followup",
+              "actionStatus": "blocked_no_target",
+              "statusReason": "No verified destination is stored for this contact on the email_followup channel. One is never guessed from a name or a domain."
+            }
+          },
+          {
+            "id": "iaq8d9ximbuk0h414c3xpotl",
+            "eventType": "outreach_action_scheduled",
+            "actor": "altiusnxt",
+            "channel": "call",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:25.073Z",
+            "receivedAt": "2026-09-04T06:29:25.149Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "ee5e51epgqk7z7mnivxhoxxb",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A call outreach action for Jamesco Trading Ltd was scheduled.",
+              "where": "outreach campaign hsjxdw6kachs6d0axijsb819",
+              "referenceId": "ee5e51epgqk7z7mnivxhoxxb",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "call",
+              "actionStatus": "scheduled"
+            }
+          },
+          {
+            "id": "g0f5qf5vi6azl8vd65xxz3nx",
+            "eventType": "linkedin_draft_created",
+            "actor": "altiusnxt",
+            "channel": "linkedin",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:25.046Z",
+            "receivedAt": "2026-09-04T06:29:25.149Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "sc1si9qdf651wtzqi1vxlv1s",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A LinkedIn action for Jamesco Trading Ltd was prepared for a person to carry out.",
+              "where": "outreach campaign hsjxdw6kachs6d0axijsb819",
+              "referenceId": "sc1si9qdf651wtzqi1vxlv1s",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "linkedin",
+              "actionStatus": "manual_required",
+              "statusReason": "No LinkedIn API credential is configured. LinkedIn messaging requires an approved Partner Program application; there is no self-service credential. Third-party LinkedIn automation Actors ARE reachable"
+            }
+          },
+          {
+            "id": "kom0zc3yg31ehzpizyuhhu7o",
+            "eventType": "outreach_action_blocked",
+            "actor": "altiusnxt",
+            "channel": "email",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:25.018Z",
+            "receivedAt": "2026-09-04T06:29:25.149Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "x4z9smnv8c7fazk07i1tpxe5",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "An email outreach action for Jamesco Trading Ltd was blocked before any external contact was made.",
+              "where": "outreach campaign hsjxdw6kachs6d0axijsb819",
+              "referenceId": "x4z9smnv8c7fazk07i1tpxe5",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "email",
+              "actionStatus": "blocked_no_target",
+              "statusReason": "No verified destination is stored for this contact on the email channel. One is never guessed from a name or a domain."
+            }
+          },
+          {
+            "id": "aicn0nmsc8gxqkztdxyitid4",
+            "eventType": "outreach_action_blocked",
+            "actor": "altiusnxt",
+            "channel": "whatsapp",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:24.791Z",
+            "receivedAt": "2026-09-04T06:29:24.808Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "a6873zwkou58nu5744xkjpdp",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A WhatsApp outreach action for Jamesco Trading Ltd was blocked before any external contact was made.",
+              "where": "outreach campaign k52abfihipin84r1jj1wjei6",
+              "referenceId": "a6873zwkou58nu5744xkjpdp",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "whatsapp",
+              "actionStatus": "blocked_no_target",
+              "statusReason": "No verified destination is stored for this contact on the whatsapp channel. One is never guessed from a name or a domain."
+            }
+          },
+          {
+            "id": "h0um7i9ujoi697bcmv6h5mrv",
+            "eventType": "outreach_action_blocked",
+            "actor": "altiusnxt",
+            "channel": "email",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:24.763Z",
+            "receivedAt": "2026-09-04T06:29:24.808Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "wx1kk6gfq52rvmuonf8dfi9e",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A follow-up email outreach action for Jamesco Trading Ltd was blocked before any external contact was made.",
+              "where": "outreach campaign k52abfihipin84r1jj1wjei6",
+              "referenceId": "wx1kk6gfq52rvmuonf8dfi9e",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "email_followup",
+              "actionStatus": "blocked_no_target",
+              "statusReason": "No verified destination is stored for this contact on the email_followup channel. One is never guessed from a name or a domain."
+            }
+          },
+          {
+            "id": "x12ksna7sq1r9i5yjw6kqo26",
+            "eventType": "outreach_action_scheduled",
+            "actor": "altiusnxt",
+            "channel": "call",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:24.727Z",
+            "receivedAt": "2026-09-04T06:29:24.808Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "szmowfy3yj7733oclmxtrrsi",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A call outreach action for Jamesco Trading Ltd was scheduled.",
+              "where": "outreach campaign k52abfihipin84r1jj1wjei6",
+              "referenceId": "szmowfy3yj7733oclmxtrrsi",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "call",
+              "actionStatus": "scheduled"
+            }
+          },
+          {
+            "id": "hf6wppg0mxh8vrzyvnayngyt",
+            "eventType": "linkedin_draft_created",
+            "actor": "altiusnxt",
+            "channel": "linkedin",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:24.689Z",
+            "receivedAt": "2026-09-04T06:29:24.808Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "uquse9t0ohpiq95eyp2cije6",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "A LinkedIn action for Jamesco Trading Ltd was prepared for a person to carry out.",
+              "where": "outreach campaign k52abfihipin84r1jj1wjei6",
+              "referenceId": "uquse9t0ohpiq95eyp2cije6",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "linkedin",
+              "actionStatus": "manual_required",
+              "statusReason": "No LinkedIn API credential is configured. LinkedIn messaging requires an approved Partner Program application; there is no self-service credential. Third-party LinkedIn automation Actors ARE reachable"
+            }
+          },
+          {
+            "id": "jwezd3d7arlq8e9mxnub1ujx",
+            "eventType": "outreach_action_blocked",
+            "actor": "altiusnxt",
+            "channel": "email",
+            "source": "outreach_engine",
+            "sourceProvider": null,
+            "occurredAt": "2026-09-04T06:29:24.635Z",
+            "receivedAt": "2026-09-04T06:29:24.808Z",
+            "freshnessLabel": "fresh",
+            "ageHours": 0,
+            "timestampNote": null,
+            "sessionRef": null,
+            "workbenchDemoId": null,
+            "outreachActionId": "r9v3sffq6joe375abeijhlb9",
+            "auditRunId": null,
+            "evidence": {
+              "how": "Recorded by the outreach engine from the action it created.",
+              "what": "An email outreach action for Jamesco Trading Ltd was blocked before any external contact was made.",
+              "where": "outreach campaign k52abfihipin84r1jj1wjei6",
+              "referenceId": "r9v3sffq6joe375abeijhlb9",
+              "referenceKind": "outreach_action"
+            },
+            "metadata": {
+              "channel": "email",
+              "actionStatus": "blocked_no_target",
+              "statusReason": "No verified destination is stored for this contact on the email channel. One is never guessed from a name or a domain."
+            }
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    "engagementSummary": {
+      "status": 200,
+      "body": {
+        "crmCompanyId": "cmt89cr640rf0s9d3x48vge96",
+        "totalEvents": 10,
+        "prospectEvents": 0,
+        "ourEvents": 10,
+        "systemEvents": 0,
+        "byChannel": {
+          "email": 4,
+          "linkedin": 2,
+          "call": 2,
+          "whatsapp": 2
+        },
+        "byEventType": {
+          "outreach_action_blocked": 6,
+          "linkedin_draft_created": 2,
+          "outreach_action_scheduled": 2
+        },
+        "bySource": {
+          "outreach_engine": 10
+        },
+        "firstEventAt": "2026-09-04T06:29:24.635Z",
+        "lastEventAt": "2026-09-04T06:29:25.131Z",
+        "lastEventFreshness": "fresh",
+        "lastEventAgeHours": 0,
+        "distinctSessions": 0,
+        "channelsObserved": [
+          "email",
+          "linkedin",
+          "call",
+          "whatsapp"
+        ],
+        "channelsNotObserved": [
+          "workbench",
+          "audit_report"
+        ],
+        "note": "These are counts of observed acts and the times they happened. Nothing here is a score, a rating or a qualification. Acts performed by AltiusNXT are reported separately from acts performed by the prospect."
+      }
+    }
+  }
+}

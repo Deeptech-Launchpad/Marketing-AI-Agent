@@ -194,10 +194,23 @@ describe('unauthorized providers report a precise blocker', () => {
     expect(providerNames()).toEqual([
       'crm_contacts',
       'linkedin_reference',
+      // Stage 3's own findings, before any paid provider is asked: a person
+      // the company already published and Intent Signals already stored is
+      // evaluated here rather than rediscovered, and it costs nothing.
+      'intent_social',
       'apollo',
       'zoominfo',
       'rocketreach',
+      // Hunter sits after the people-databases and before the open-web
+      // fallback: it reports addresses seen on public pages, so it answers
+      // "how do we reach them" rather than "who are they".
+      'hunter',
       'company_website',
+      // The open web, searched rather than guessed at. Last on purpose: every
+      // source above either holds a record of this company or reads the
+      // company's own site, and both are better evidence about who works
+      // somewhere than a third-party page is.
+      'public_web_research',
     ])
   })
 
@@ -515,5 +528,64 @@ describe('company website provider', () => {
     expect(r.status).toBe('available')
     expect(r.candidates[0]).toMatchObject({ fullName: 'Jane Smith', rawTitle: 'VP of Ecommerce' })
     expect(r.candidates[0]!.evidence[0]!.sourceType).toBe('company_website')
+  })
+})
+
+// APOLLO'S TWO DIFFERENT 403s.
+//
+// A key can authenticate perfectly and still be refused: Apollo excludes the
+// people-search API from its Free plan and answers 403 with error_code
+// API_INACCESSIBLE, while /auth/health for that same key returns
+// { healthy: true, is_logged_in: true }.
+//
+// Reporting that as "Apollo rejected the credential" — which this adapter did
+// for every 403 — sends whoever reads it hunting for a key that is not broken.
+// "Your key is wrong" and "your plan excludes this" lead to different actions,
+// so they have to read differently.
+describe('a plan limit is not a rejected credential', () => {
+  const ctx = {
+    tenantId: 't1',
+    company: { id: 'c1', name: 'Acme' } as never,
+    companyDomain: 'acme.test',
+    maxResults: 10,
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  const apolloSays = (status: number, body: unknown) =>
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+  it('says the key is valid when the plan is what blocked the call', async () => {
+    apolloSays(403, {
+      error: 'The api/v1/mixed_people/search API is not included in your Free plan and is not accessible.',
+      error_code: 'API_INACCESSIBLE',
+    })
+    const r = await new ApolloProvider().search(ctx)
+
+    expect(r.status).toBe('unauthorized')
+    expect(r.reason).toContain('authenticated this key')
+    expect(r.reason).toContain('plan does not include')
+    expect(r.reason).not.toContain('rejected the credential')
+    expect(r.metadata?.credentialValid).toBe(true)
+    expect(r.metadata?.apolloErrorCode).toBe('API_INACCESSIBLE')
+  })
+
+  it('still says "rejected" when the credential really was rejected', async () => {
+    apolloSays(401, { error: 'Unauthorized' })
+    const r = await new ApolloProvider().search(ctx)
+
+    expect(r.status).toBe('unauthorized')
+    expect(r.reason).toContain('rejected the credential')
+    expect(r.metadata?.credentialValid).toBe(false)
+  })
+
+  // Whichever kind of 403 it was, no candidate may be produced from it.
+  it('produces no candidate from either refusal', async () => {
+    apolloSays(403, { error_code: 'API_INACCESSIBLE', error: 'nope' })
+    expect((await new ApolloProvider().search(ctx)).candidates).toEqual([])
+    apolloSays(401, {})
+    expect((await new ApolloProvider().search(ctx)).candidates).toEqual([])
   })
 })

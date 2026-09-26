@@ -1,0 +1,162 @@
+/* ── AI Workbench: the customer's own record, before and after ───────────
+   The screen is one demonstration, so the styles here only serve it: the
+   proposition at the top, the three-column BEFORE / THE GAP / AFTER, and the
+   enriched rows the AFTER column is made of.
+
+   Nothing in engines.css is redefined. The two rules that reach shared
+   classes (.ba--gapped, dd.ba__val--stack) are modifiers applied alongside
+   them, and both raise their own specificity so they cannot depend on which
+   stylesheet the bundler emits first. */
+
+/* The proposition, ahead of anything the reader has to interpret. */
+.wb__lead { display: flex; flex-direction: column; gap: var(--s4); }
+.wb__leadrow { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s4); flex-wrap: wrap; }
+.wb__company { font-family: var(--font-display); font-size: var(--fs-h1); font-weight: 700; margin: 0; }
+.wb__promise { margin: 5px 0 0; font-size: var(--fs-body); line-height: 1.55; color: var(--text-muted); max-width: 64ch; }
+
+/* The demonstration reads as the page rather than as one more section of it. */
+.wb__stage { box-shadow: var(--shadow-sm); }
+
+/* SOURCE closes the case-study band, where a reader reaches for it after the
+   product's name rather than before it. */
+.cstudy__src { margin-left: auto; flex: none; text-decoration: none; }
+
+/* BEFORE -> THE GAP -> AFTER, in that order across the page: the gap takes the
+   middle column, because a reader who meets it under the enriched record has
+   already been answered and reads it as a footnote. Below 900px engines.css
+   collapses .ba to one column, which stacks the three in the same order. */
+@media (min-width: 901px) {
+  .ba.ba--gapped { grid-template-columns: minmax(0, 1fr) minmax(180px, 0.72fr) minmax(0, 1fr); }
+}
+
+/* A row carrying named attributes, or a recommendation, stacks; the shared
+   rule lays a single value out on one line. */
+.ba__field dd.ba__val--stack { flex-direction: column; align-items: flex-start; gap: var(--s2); }
+
+/* The attributes the page's own text states, each given a name of its own.
+   This is the row that used to be the customer's paragraph reprinted verbatim
+   under an "After" heading, which demonstrated nothing to the person reading
+   it. */
+.deriv { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: var(--s1); }
+.deriv__row {
+  display: grid;
+  grid-template-columns: minmax(88px, 34%) minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: baseline;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+}
+.deriv__label {
+  font-family: var(--font-mono); font-size: var(--fs-micro);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim);
+}
+.deriv__value { font-size: var(--fs-sm); color: var(--text); overflow-wrap: anywhere; }
+
+/* An absent field is never left blank: what to publish sits under the
+   statement that nothing is published today. The italic and the dimmed colour
+   the shared absent rule sets are reset here, because the recommendation is a
+   real instruction rather than the missing value. */
+.ba__rec { margin: 0; font-style: normal; font-size: var(--fs-xs); line-height: 1.55; color: var(--text-muted); }
+.ba__reclabel {
+  font-family: var(--font-mono); font-size: var(--fs-micro);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--e, var(--accent));
+  margin-right: var(--s1);
+}
+
+/* ── RECOMMENDED ENRICHMENT — fields for the customer's category ─────────
+   Rendered under THE GAP / AFTER. Three row shapes that must be told apart at
+   a glance, because the difference is the point: an observed row carries the
+   page's own value, a derived row carries a value read out of the page's own
+   prose, and a recommended row carries NO value — only the field and why a
+   buyer needs it. The recommended row is the one that used to be missing from
+   every report ("publish attributes" told nobody what to publish), and the
+   one that must never be mistaken for a value. */
+.rschema { display: flex; flex-direction: column; gap: var(--s4); }
+
+.rschema__band { display: flex; flex-direction: column; gap: 4px; }
+.rschema__cap {
+  font-family: var(--font-mono); font-size: var(--fs-micro);
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--e, var(--accent));
+  margin: 0;
+}
+.rschema__title { font-size: var(--fs-h3); font-weight: 600; margin: 0; }
+.rschema__note { margin: 4px 0 0; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-muted); max-width: 78ch; }
+
+.rschema__basis { margin: 0; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-muted); }
+.rschema__basis .src-link { display: inline-flex; }
+/* A schema assessed against a page this story does not carry is refused,
+   in the same attention tint the preview banner uses. */
+.rschema__basis--refused {
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.rschema__rows {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s3);
+}
+
+.rschema__row {
+  display: flex; flex-direction: column; gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+/* The left edge carries the state colour so the three shapes read apart even
+   before the chip is read. */
+.rschema__row--observed { border-left-color: var(--ok); }
+.rschema__row--derived { border-left-color: var(--info); }
+.rschema__row--recommended {
+  border-left-color: var(--warn);
+  border-style: dashed;
+  border-left-style: solid;
+  background: color-mix(in srgb, var(--warn, #d9a441) 5%, var(--bg-inset));
+}
+
+.rschema__head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; }
+.rschema__label { font-size: var(--fs-sm); font-weight: 600; }
+
+.rschema__value { margin: 0; font-size: var(--fs-sm); color: var(--text); overflow-wrap: anywhere; }
+.rschema__source { margin: 0; font-size: var(--fs-micro); line-height: 1.5; color: var(--text-dim); overflow-wrap: anywhere; }
+.rschema__srccap, .rschema__whycap {
+  font-family: var(--font-mono); font-size: var(--fs-micro);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim);
+  margin-right: var(--s1);
+}
+.rschema__basis .rschema__whycap { color: var(--e, var(--accent)); }
+
+/* The statement of absence, in the same italic and dim the AFTER column's
+   absent rows use, so "Not published on current website" reads the same
+   wherever it appears. */
+.rschema__absent { margin: 0; font-size: var(--fs-xs); font-style: italic; color: var(--text-dim); }
+.rschema__why { margin: 0; font-size: var(--fs-xs); line-height: 1.55; color: var(--text-muted); }
+.rschema__row--recommended .rschema__why { color: var(--text); }
+
+.rschema__evidence { font-size: var(--fs-xs); color: var(--text-muted); }
+.rschema__evidence summary { cursor: pointer; color: var(--text-muted); }
+.rschema__evidence summary:hover { color: var(--text); }
+.rschema__evidence ul { margin: var(--s2) 0 0; padding-left: 1.2em; line-height: 1.7; }
+.rschema__evidence li { overflow-wrap: anywhere; }
+
+.rschema__foot { margin: 0; font-size: var(--fs-micro); line-height: 1.55; color: var(--text-dim); }
+
+/* The field-by-field comparison, available but no longer the headline. */
+.wb__fields { padding: 0; }
+.wb__fields > summary {
+  cursor: pointer;
+  padding: var(--s4);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.wb__fieldstitle { font-weight: 600; font-size: var(--fs-sm); }
+.wb__fieldsnote { font-size: var(--fs-micro); color: var(--text-dim); }
+.wb__fieldsbody { padding: 0 var(--s4) var(--s4); }

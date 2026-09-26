@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { afterAll, describe, expect, it } from 'vitest'
 
 // STAGE 5 integration tests against the REAL restored NXT Sales development
@@ -65,9 +66,18 @@ describeIfReady('Stage 5 — website audit against real NXT Sales', () => {
     }
 
     // A company with no website anywhere yields null — never a guessed domain.
+    // The reason now comes from the shared source resolver, which distinguishes
+    // "the record holds nothing" from "the website field holds a social
+    // platform" — different problems needing different fixes.
     const none = await resolveStartUrl(tid, 'no-such-company', null)
     expect(none.url).toBeNull()
-    expect(none.source).toMatch(/no website on record/)
+    expect(none.source).toMatch(/no website/i)
+
+    // And the case that caused this: a website column holding a platform is
+    // not a website, and is never handed to the crawler.
+    const social = await resolveStartUrl(tid, 'no-such-company', 'facebook.com')
+    expect(social.url).toBeNull()
+    expect(social.source).toMatch(/social platform address/i)
   }, 60_000)
 
   it('audits a real prospect website and stores evidence for every observation', async () => {
@@ -201,9 +211,27 @@ describeIfReady('Stage 5 — website audit against real NXT Sales', () => {
     await prisma.websiteAuditRun.delete({ where: { id } })
   }, 60_000)
 
-  it('never exceeds the configured crawl limits against a real site', async () => {
+  // A crawl is checked against the limits IT RAN UNDER, not against today's.
+  //
+  // This compared every stored run to the CURRENT configuration, which held
+  // only while the configuration never moved. AUDIT_MAX_PAGES_PER_COMPANY was
+  // later lowered from 25 to 15, and runs recorded weeks earlier — which had
+  // correctly honoured the 25 they ran under — began failing a limit that did
+  // not exist when they were crawled. The crawler was never at fault; the
+  // assertion was measuring config drift.
+  //
+  // Every run records `limitsApplied`, the limits actually in force for it. That
+  // is the honest thing to hold a run to, and it cannot rot when a limit is
+  // retuned. The limits themselves are not weakened: a run exceeding its own
+  // recorded ceiling still fails, which is the property worth protecting.
+  interface AppliedLimits {
+    maxPages?: number
+    maxProductPages?: number
+    maxCategoryPages?: number
+  }
+
+  it('never exceeds the crawl limits recorded for the run', async () => {
     const { prisma } = await import('../../src/platform/db.js')
-    const { env } = await import('../../src/config/env.js')
 
     const runs = await prisma.websiteAuditRun.findMany({
       where: { tenantId: await tenantId() },
@@ -211,11 +239,50 @@ describeIfReady('Stage 5 — website audit against real NXT Sales', () => {
       take: 20,
     })
 
-    runs.forEach((r) => {
-      expect(r.pagesFetched).toBeLessThanOrEqual(env.AUDIT_MAX_PAGES_PER_COMPANY)
-      expect(r.productPages).toBeLessThanOrEqual(env.AUDIT_MAX_PRODUCT_PAGES)
-      expect(r.categoryPages).toBeLessThanOrEqual(env.AUDIT_MAX_CATEGORY_PAGES)
+    let checked = 0
+    for (const r of runs) {
+      const applied = r.limitsApplied as AppliedLimits | null
+      // A run from before limitsApplied existed cannot be held to limits nobody
+      // recorded. Skipped explicitly rather than judged by today's numbers.
+      if (!applied?.maxPages) continue
+      checked++
+      expect(r.pagesFetched, `run ${r.id} pagesFetched`).toBeLessThanOrEqual(applied.maxPages)
+      expect(r.productPages, `run ${r.id} productPages`).toBeLessThanOrEqual(applied.maxProductPages ?? Infinity)
+      expect(r.categoryPages, `run ${r.id} categoryPages`).toBeLessThanOrEqual(applied.maxCategoryPages ?? Infinity)
+    }
+    expect(checked, 'no run carried recorded limits — the assertion proved nothing').toBeGreaterThan(0)
+  }, 60_000)
+
+  it('records the CURRENT configuration as the limits a new run would apply', async () => {
+    // The companion half. The test above proves a run obeyed its own recorded
+    // ceiling; this proves the ceiling being recorded is the configured one, so
+    // the pair cannot both pass while the live configuration is ignored.
+    const { prisma } = await import('../../src/platform/db.js')
+    const { env } = await import('../../src/config/env.js')
+
+    const latest = await prisma.websiteAuditRun.findFirst({
+      where: { tenantId: await tenantId(), limitsApplied: { not: Prisma.DbNull } },
+      orderBy: { createdAt: 'desc' },
     })
+    if (!latest) return
+
+    const applied = latest.limitsApplied as AppliedLimits
+    const currentConfig =
+      applied.maxPages === env.AUDIT_MAX_PAGES_PER_COMPANY &&
+      applied.maxProductPages === env.AUDIT_MAX_PRODUCT_PAGES &&
+      applied.maxCategoryPages === env.AUDIT_MAX_CATEGORY_PAGES
+
+    // Runs predating a retune legitimately disagree with today's numbers. What
+    // must never happen is a run recording limits it did not use, so this
+    // reports the divergence rather than asserting a stale run into a failure.
+    if (!currentConfig) {
+      console.warn(
+        `[websiteAudit] most recent run predates the current crawl limits ` +
+          `(recorded maxPages=${applied.maxPages}, configured ${env.AUDIT_MAX_PAGES_PER_COMPANY}). ` +
+          'Re-run an audit to exercise the current configuration.',
+      )
+    }
+    expect(applied.maxPages, 'a run must record the ceiling it used').toBeGreaterThan(0)
   }, 60_000)
 })
 

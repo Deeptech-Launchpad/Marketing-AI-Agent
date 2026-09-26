@@ -21,6 +21,15 @@ export const QUEUE_OUTREACH_ACTION = 'outreach.action'
 export const QUEUE_INTENT_SCORE = 'intent.score'
 export const QUEUE_QUALIFICATION_EVALUATE = 'qualification.evaluate'
 export const QUEUE_CRM_SYNC = 'crm.sync'
+/** Scheduled check for new leads that need decision-maker discovery. */
+export const QUEUE_DM_LEAD_WATCH = 'decisionmaker.lead_watch'
+/**
+ * Open-web company discovery (2026-09-24 restructure). Deliberately a
+ * separate queue from QUEUE_PROSPECT_DISCOVER, whose handler is CRM-only by
+ * explicit design — this keeps that boundary unambiguous rather than
+ * overloading one queue with two different contracts.
+ */
+export const QUEUE_COMPANY_WEB_DISCOVER = 'company.web_discover'
 
 const ALL_QUEUES = [
   QUEUE_RUN_STEP,
@@ -34,6 +43,8 @@ const ALL_QUEUES = [
   QUEUE_INTENT_SCORE,
   QUEUE_QUALIFICATION_EVALUATE,
   QUEUE_CRM_SYNC,
+  QUEUE_DM_LEAD_WATCH,
+  QUEUE_COMPANY_WEB_DISCOVER,
 ]
 
 /**

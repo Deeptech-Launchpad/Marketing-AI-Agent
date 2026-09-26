@@ -23,10 +23,20 @@
 .field-label {
   display: block;
   font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-weight: 600;
+  color: var(--text);
   margin-bottom: var(--s2);
 }
-.field-hint { color: var(--text-dim); }
+
+/* On its own line. Inline, the two ran together into one unpunctuated
+   sentence — "Objective What kind of company are you looking for?" — which
+   reads as neither a label nor a question. */
+.field-hint {
+  display: block;
+  margin-top: 2px;
+  font-weight: var(--fw-body);
+  color: var(--text-dim);
+}
 
 .viz__empty {
   position: absolute;
@@ -106,6 +116,19 @@
 .why__body { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .why__what { font-size: var(--fs-sm); color: var(--text); }
 .why__when { font-size: var(--fs-micro); color: var(--text-dim); }
+
+/* ── Understanding (Intent Source / Engagement / Qualification) ──────────── */
+
+.understanding { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s5); }
+.understanding__col { min-width: 0; }
+.understanding__count { font-size: var(--fs-sm); color: var(--text-muted); margin: 2px 0 var(--s2); }
+.understanding__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.understanding__item { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s3); font-size: var(--fs-sm); }
+.understanding__item span { flex: 1; min-width: 0; }
+
+@media (max-width: 720px) {
+  .understanding { grid-template-columns: 1fr; }
+}
 
 /* ── Engagement timeline ───────────────────────────────────────────────── */
 
@@ -189,6 +212,141 @@
 /* ── Decision makers ───────────────────────────────────────────────────── */
 
 .people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+/* People the search turned up but could not verify. Deliberately quieter than
+   a candidate card: a set-aside person is a record, not a proposal.
+
+   Grouped by reason, because the reason is a fact about the group. What made
+   the first version unreadable was per-row prose that quoted each person's own
+   title back at them - so the reason moved to the group heading and a row is
+   now one line: who, what they are called, where it was read. */
+.aside__group + .aside__group {
+  margin-top: var(--s4);
+}
+.aside__grouphead {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.aside__groupname {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.aside__groupcount {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-align: center;
+}
+.aside__groupwhy {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+.aside {
+  /* A list of records, not a bulleted list: the markers read as emphasis. */
+  list-style: none;
+  margin: var(--s3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.aside__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: 7px var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+}
+.aside__who {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+.aside__name {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 26ch;
+}
+/* A source sometimes offers a whole sentence where a title belongs. It is
+   shown as read - never rewritten - but held to one line, with the full text
+   on hover, so one bad row cannot push the panel apart. */
+.aside__title {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40ch;
+}
+.aside__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-shrink: 0;
+}
+.aside__link {
+  font-size: var(--fs-micro);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.aside__foot {
+  margin-top: var(--s4);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+/* A provider's account of itself: readable at a glance, complete on request. */
+.prov-row__note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.prov-row__why.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prov-row__more {
+  font-size: var(--fs-micro);
+  color: var(--accent);
+  padding: 0;
+  background: none;
+  border: 0;
+}
+.prov-row__more:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 720px) {
+  .aside__row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .aside__name,
+  .aside__title {
+    max-width: 100%;
+  }
+}
+
 .people__card {
   display: flex;
   align-items: flex-start;
@@ -326,6 +484,145 @@
 
 .ba__field--lift { animation: field-lift var(--t-calm) var(--ease-out) both; animation-delay: calc(var(--i) * 45ms); }
 
+/* ── The customer story: report + workbench share this ─────────────────── */
+
+.story { display: flex; flex-direction: column; gap: var(--s5, 20px); }
+.story__lead { font-size: var(--fs-sm); line-height: 1.6; color: var(--text); margin-bottom: var(--s4); }
+.story__next { margin-top: var(--s4); font-size: var(--fs-sm); line-height: 1.6; }
+
+/* "Your website today": their own visual beside the factual gaps. */
+.today { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: var(--s5, 20px); align-items: start; }
+.today__shot { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+.today__gaps { min-width: 0; }
+@media (max-width: 900px) { .today { grid-template-columns: 1fr; } }
+
+/* The audited product's own image. Bounded in height so a tall product photo
+   cannot push the comparison itself off-screen. */
+.pimg { margin: 0 0 var(--s3); display: flex; flex-direction: column; gap: var(--s2); align-items: flex-start; }
+.pimg img {
+  max-height: 190px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: #fff;
+  object-fit: contain;
+}
+.pimg--sm img { max-height: 110px; }
+.pimg--lg img { max-height: 300px; }
+.pimg figcaption { font-size: var(--fs-micro); color: var(--text-dim); }
+.pimg--absent {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  width: 100%;
+}
+.pimg--absent p { margin: 0; font-size: var(--fs-xs); font-style: italic; }
+
+.src-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-micro); color: var(--text-dim); text-decoration: none;
+  word-break: break-all;
+}
+.src-link:hover { color: var(--e, var(--accent)); text-decoration: underline; }
+
+/* A case study, banded the way the reference document bands them. */
+.cstudy { display: flex; flex-direction: column; gap: var(--s4); }
+.cstudy__band {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border-left: 3px solid var(--e, var(--accent));
+  background: var(--bg-inset);
+  border-radius: var(--r-sm);
+}
+.cstudy__num { font-size: var(--fs-micro); letter-spacing: 0.12em; color: var(--e, var(--accent)); }
+.cstudy__title { font-size: var(--fs-sm); font-weight: 600; margin: 0; }
+
+.ba__title { font-size: var(--fs-sm); font-weight: 600; margin: 0 0 var(--s3); }
+.ba__none { font-size: var(--fs-xs); font-style: italic; color: var(--text-dim); margin: 0 0 var(--s3); }
+.ba__note { font-size: var(--fs-micro); color: var(--text-dim); line-height: 1.5; margin: var(--s3) 0 var(--s2); }
+
+/* The gap, stated as its own subject rather than as a count. */
+.gapblock {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s4);
+  background: var(--bg-inset);
+}
+.gapblock__cap {
+  font-family: var(--font-mono); font-size: var(--fs-micro);
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn, #d9a441);
+  margin: 0 0 var(--s2);
+}
+.gapblock__lead { font-size: var(--fs-xs); color: var(--text-muted); margin: 0 0 var(--s3); line-height: 1.55; }
+
+.gap { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s2); }
+.gap__row {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-panel, var(--bg-inset));
+}
+.gap__label { font-size: var(--fs-xs); font-weight: 600; }
+
+/* KEY TRANSFORMATION — the callout the reference document ends each study on. */
+.keytrans {
+  border-left: 3px solid var(--e, var(--accent));
+  padding: var(--s3) var(--s4);
+  background: color-mix(in srgb, var(--e, var(--accent)) 7%, transparent);
+  border-radius: var(--r-sm);
+}
+.keytrans__cap {
+  font-family: var(--font-mono); font-size: var(--fs-micro);
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--e, var(--accent));
+  margin: 0 0 5px;
+}
+.keytrans__body { font-size: var(--fs-xs); line-height: 1.6; margin: 0; color: var(--text); }
+
+/* Catalogue-wide data gaps. */
+.dgaps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.dgaps__row { padding: var(--s3) var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-inset); }
+.dgaps__head { display: flex; align-items: center; gap: var(--s3); justify-content: space-between; }
+.dgaps__label { font-size: var(--fs-sm); font-weight: 600; }
+.dgaps__stmt { font-size: var(--fs-xs); color: var(--text-muted); margin: 4px 0 0; line-height: 1.5; }
+
+/* Categories, as the customer's own site names them. */
+.sectors { display: flex; flex-direction: column; gap: var(--s3); }
+.sector { padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-inset); }
+.sector__head { display: flex; align-items: center; gap: var(--s3); justify-content: space-between; margin-bottom: var(--s2); }
+.sector__name { font-size: var(--fs-sm); font-weight: 600; }
+.sector__gaps { margin: 0 0 var(--s2); padding-left: 1.1em; font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.7; }
+
+/* The approval state, said without emptying the page. */
+.preview-banner {
+  display: flex; gap: var(--s3); align-items: flex-start;
+  padding: var(--s4);
+  border: 1px solid color-mix(in srgb, var(--warn, #d9a441) 45%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warn, #d9a441) 8%, transparent);
+  color: var(--warn, #d9a441);
+}
+.preview-banner__title { margin: 0 0 4px; font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0.04em; }
+.preview-banner__body { margin: 0; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-muted); }
+
+/* The gap: fields the page does not publish, named rather than counted. */
+.gap { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.gap__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+.gap__label { font-size: var(--fs-sm); font-weight: 600; flex: 1 1 auto; }
+
 .value { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s4); background: var(--bg-inset); }
 .value__title { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 5px; }
 .value__why { font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.55; }
@@ -411,3 +708,16 @@
   word-break: break-word;
   line-height: 1.55;
 }
+
+/* Where a contact address came from, beside the address itself. Dimmed and
+   smaller: the address is the answer, the provenance is the footnote that
+   makes it checkable. */
+.people__src { color: var(--text-dim); font-size: var(--fs-micro); }
+
+/* One source this run asked, what it answered, and why when it could not.
+   A column of these replaces a single sentence of static prose: "queried and
+   found nobody" and "never configured" are different facts. */
+.prov-row { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; padding: var(--s2) 0; border-bottom: 1px solid var(--line); }
+.prov-row:last-child { border-bottom: none; }
+.prov-row__name { font-size: var(--fs-sm); font-weight: 650; color: var(--text); }
+.prov-row__why { flex-basis: 100%; margin: 0; font-size: var(--fs-micro); color: var(--text-dim); }

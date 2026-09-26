@@ -3,6 +3,7 @@ import { runCompanyEnrichment } from './enrichment/companyEnrichment.js'
 import { runIntentDetection } from './intent/intentDetection.js'
 import { processDocument } from './knowledge/ingest.js'
 import { runProspectDiscovery } from './prospects/prospectDiscovery.js'
+import { runCompanyWebDiscovery } from './prospects/companyWebDiscovery.js'
 import { executeAction } from './outreach/engine.js'
 import { scoreCompany } from './intentscore/service.js'
 import { evaluateCompany } from './salesqualification/service.js'
@@ -13,8 +14,10 @@ import { disconnect } from './platform/db.js'
 import { logger } from './platform/logger.js'
 import {
   QUEUE_COMPANY_ENRICH,
+  QUEUE_COMPANY_WEB_DISCOVER,
   QUEUE_CRM_SYNC,
   QUEUE_DM_DISCOVER,
+  QUEUE_DM_LEAD_WATCH,
   QUEUE_INTENT_DETECT,
   QUEUE_INTENT_SCORE,
   QUEUE_KNOWLEDGE_INGEST,
@@ -23,9 +26,12 @@ import {
   QUEUE_QUALIFICATION_EVALUATE,
   QUEUE_RUN_STEP,
   QUEUE_WEBSITE_AUDIT,
+  getQueue,
   stopQueue,
   work,
 } from './platform/queue.js'
+import { checkForNewLeads } from './decisionmakers/leadWatch.js'
+import { env } from './config/env.js'
 
 // Worker entrypoint.
 //
@@ -50,6 +56,12 @@ async function main() {
     const searchId = String(data.searchId ?? '')
     if (!searchId) return
     await runProspectDiscovery(searchId)
+  })
+
+  await work(QUEUE_COMPANY_WEB_DISCOVER, async (data) => {
+    const searchId = String(data.searchId ?? '')
+    if (!searchId) return
+    await runCompanyWebDiscovery(searchId)
   })
 
   await work(QUEUE_COMPANY_ENRICH, async (data) => {
@@ -185,8 +197,24 @@ async function main() {
     )
   })
 
+  // New lead → decision-maker discovery. A durable pg-boss schedule rather than
+  // a timer, so only one check runs per interval however many workers exist,
+  // and turning the flag off removes the schedule instead of leaving it behind.
+  await work(QUEUE_DM_LEAD_WATCH, async () => {
+    await checkForNewLeads()
+  })
+  const boss = await getQueue()
+  if (env.DM_AUTO_DISCOVER_ENABLED) {
+    await boss.schedule(QUEUE_DM_LEAD_WATCH, `*/${env.DM_AUTO_DISCOVER_INTERVAL_MINUTES} * * * *`)
+  } else {
+    await boss.unschedule(QUEUE_DM_LEAD_WATCH)
+  }
+
   logger.info(
     {
+      autoDecisionMakerDiscovery: env.DM_AUTO_DISCOVER_ENABLED
+        ? `every ${env.DM_AUTO_DISCOVER_INTERVAL_MINUTES} min`
+        : 'off',
       queues: [
         QUEUE_RUN_STEP,
         QUEUE_KNOWLEDGE_INGEST,

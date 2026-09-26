@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { env } from '../../src/config/env.js'
 
 // End-to-end run of the full pipeline against the FAKE CRM and FAKE LLM, but a
 // REAL database and a REAL queue. Those two have to be real: resumability and
@@ -137,15 +138,28 @@ describeIfDb('end-to-end: "Generate infrastructure leads"', () => {
     ).rejects.toThrow(/payload changed/i)
 
     // The requester cannot approve their own run.
-    await expect(
-      decideApproval({
-        tenantId,
-        approvalId: strategyApproval.id,
-        decision: 'approved',
-        payloadHash: strategyApproval.payloadHash,
-        crmUserId: 'operator-1',
-      }),
-    ).rejects.toThrow(/self-approval/i)
+    //
+    // PINNED, because this assertion is about the RULE and not about whichever
+    // way a developer's .env happens to be set. ALLOW_SELF_APPROVAL is a real
+    // operational switch — a solo reviewer turns it on — and this test silently
+    // inverted its own meaning the moment somebody did, reporting a correctly
+    // configured environment as a broken pipeline. A test whose result depends
+    // on local configuration is testing the configuration.
+    const selfApproval = env.ALLOW_SELF_APPROVAL
+    ;(env as { ALLOW_SELF_APPROVAL: boolean }).ALLOW_SELF_APPROVAL = false
+    try {
+      await expect(
+        decideApproval({
+          tenantId,
+          approvalId: strategyApproval.id,
+          decision: 'approved',
+          payloadHash: strategyApproval.payloadHash,
+          crmUserId: 'operator-1',
+        }),
+      ).rejects.toThrow(/self-approval/i)
+    } finally {
+      ;(env as { ALLOW_SELF_APPROVAL: boolean }).ALLOW_SELF_APPROVAL = selfApproval
+    }
 
     await decideApproval({
       tenantId,

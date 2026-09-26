@@ -22,6 +22,12 @@ export interface ResolveInput {
    * 5,000 still yields at most that.
    */
   limit?: number
+  /**
+   * When true, companies with an open deal are NOT suppressed. Default false:
+   * an open deal belongs to sales. Set only when the requester explicitly asked
+   * to include existing opportunities.
+   */
+  includeOpenDeals?: boolean
 }
 
 export interface ResolveResult {
@@ -41,44 +47,76 @@ export interface ResolveResult {
   }>
 }
 
+/** Parallel contact-history reads per batch; the CRM client rate-limits beneath this. */
+const CONTACT_CHECK_CONCURRENCY = 10
+
+/** NXT Sales matches filter values case-insensitively, so the ranking must too. */
+function inList(value: string | null, list: string[] | undefined): boolean {
+  if (!value || !list?.length) return false
+  const v = value.trim().toLowerCase()
+  return list.some((x) => x.trim().toLowerCase() === v)
+}
+
 /**
- * Scores a company against the requested filters. Purely a ranking aid for when
- * the audience must be capped — it decides WHICH of the matches survive the
- * cap, never whether a company matches at all.
+ * Facts the CRM record itself carries that make a company more actionable for
+ * the next stages. Each is a present/absent check on the company's own fields
+ * — nothing is inferred, and none of them claims anything about the company's
+ * needs. They are what distinguishes one filter-matching company from another.
  */
+function recordSignals(company: CrmCompany): string[] {
+  const signals: string[] = []
+  if (company.domain?.trim()) signals.push('a website')
+  if (company.endPdpUrl?.trim()) signals.push('a product page URL')
+  if (company.contactPersons.some((c) => c?.trim())) signals.push('a named contact person')
+  if (company.email?.trim() || company.emails.some((e) => e?.trim())) signals.push('an email address')
+  if (company.linkedProfiles.some((l) => l?.trim())) signals.push('a LinkedIn profile')
+  return signals
+}
+
 /**
  * Why THIS company is in the list. Built from the filters that actually matched
  * it, so every row can be defended individually rather than by pointing at the
  * query. Deliberately states only what was matched — it never characterises the
  * company or claims it has a problem.
  */
-function explain(company: CrmCompany, query: CrmCompanyQuery): string {
+function explain(company: CrmCompany, query: CrmCompanyQuery, openDealsExcluded = true): string {
   const parts: string[] = []
-  if (query.industries?.length && company.industry) {
-    parts.push(`industry "${company.industry}" is one of the ${query.industries.length} requested value(s)`)
+  if (inList(company.industry, query.industries)) {
+    parts.push(`industry "${company.industry}" is one of the ${query.industries!.length} requested value(s)`)
   }
-  if (query.countries?.length && company.country) {
+  if (inList(company.country, query.countries)) {
     parts.push(`country "${company.country}" is one of the requested value(s)`)
   }
-  if (query.leadStatuses?.length && company.leadStatus) {
+  if (inList(company.leadStatus, query.leadStatuses)) {
     parts.push(`lead status "${company.leadStatus}" matched`)
   }
-  if (query.cmsValues?.length && company.cms) {
+  if (inList(company.cms, query.cmsValues)) {
     parts.push(`platform "${company.cms}" matched`)
   }
-  if (query.hasDeal === false) parts.push('no open opportunity in the CRM')
+  if (query.hasDeal === false) parts.push('no deal on record in the CRM')
+  else if (openDealsExcluded) parts.push('no open opportunity in the CRM')
   parts.push('passed suppression')
-  return parts.length ? `Selected because ${parts.join('; ')}.` : 'Matched the segment filters and passed suppression.'
+  const signals = recordSignals(company)
+  const ranked = signals.length
+    ? ` Ranked on the CRM record having ${signals.join(', ')}.`
+    : ' The CRM record carries no website, product page, contact person, email or LinkedIn profile, so it ranks below records that do.'
+  return `Selected because ${parts.join('; ')}.${ranked}`
 }
 
-function score(company: CrmCompany, query: CrmCompanyQuery): number {
+/**
+ * Ranking aid for when the audience must be capped — it decides WHICH of the
+ * matches survive the cap, never whether a company matches at all.
+ *
+ * Filter matches are worth more than record completeness, but on a filtered
+ * export every company matches the filters equally, so it is the record
+ * signals that actually order the list. Ties fall back to name.
+ */
+export function score(company: CrmCompany, query: CrmCompanyQuery): number {
   let s = 0
-  if (query.industries?.length && company.industry && query.industries.includes(company.industry)) s += 3
-  if (query.countries?.length && company.country && query.countries.includes(company.country)) s += 2
-  if (query.cmsValues?.length && company.cms && query.cmsValues.includes(company.cms)) s += 2
-  if (company.linkedProfiles.length) s += 1
-  if (company.email || company.emails.length) s += 1
-  if (company.endPdpUrl) s += 1
+  if (inList(company.industry, query.industries)) s += 3
+  if (inList(company.country, query.countries)) s += 2
+  if (inList(company.cms, query.cmsValues)) s += 2
+  s += recordSignals(company).length
   return s
 }
 
@@ -90,29 +128,25 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
   // filters, which is the property that makes it auditable.
   const matched = await crm.exportCompanies(query)
 
-  // Companies with an open deal belong to sales, not to cold marketing.
-  const deals = await crm.exportDeals()
-  const activeDealCompanyIds = new Set(
-    deals.filter((d) => d.companyId && !['Won', 'Lost'].includes(d.stage)).map((d) => d.companyId!),
-  )
-
-  // Recent-contact suppression. Checked only for companies that actually
-  // matched, and only for those with any email history worth checking.
-  const cutoff = Date.now() - RECENT_CONTACT_WINDOW_DAYS * 86_400_000
-  const recentlyContacted = new Set<string>()
-  const contactCandidates = matched.items.slice(0, env.MAX_AUDIENCE_SIZE * 2)
-  for (const company of contactCandidates) {
-    const activities = await crm.listActivities({ companyId: company.id, type: 'email' })
-    if (activities.some((a) => new Date(a.createdAt).getTime() >= cutoff)) {
-      recentlyContacted.add(company.id)
-    }
+  // Companies with an open deal belong to sales, not to cold marketing — unless
+  // the requester explicitly asked for existing opportunities.
+  const includeOpenDeals = input.includeOpenDeals === true
+  const activeDealCompanyIds = new Set<string>()
+  if (!includeOpenDeals) {
+    const deals = await crm.exportDeals()
+    deals
+      .filter((d) => d.companyId && !['Won', 'Lost'].includes(d.stage))
+      .forEach((d) => activeDealCompanyIds.add(d.companyId!))
   }
 
+  // Recent-contact history is a per-company CRM call, so it is checked AFTER
+  // ranking and only for the companies about to be chosen. The shared context
+  // therefore carries an empty set; the contact check is applied below.
   const ctx = await loadSuppressionContext({
     tenantId,
     campaignId: input.campaignId ?? null,
     activeDealCompanyIds,
-    recentlyContacted,
+    recentlyContacted: new Set<string>(),
   })
 
   const eligible: Array<{ company: CrmCompany; score: number }> = []
@@ -131,8 +165,29 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
 
   // Math.min so a caller can ask for fewer, never for more than the safety cap.
   const cap = Math.min(input.limit ?? env.MAX_AUDIENCE_SIZE, env.MAX_AUDIENCE_SIZE)
-  const truncated = eligible.length > cap
-  const included = eligible.slice(0, cap)
+
+  // Walk the RANKED list, checking contact history, until the cap is filled.
+  // A company that drops out is replaced by the next-ranked one, so the list
+  // is never short because of CRM order, and never includes an unchecked row.
+  const cutoff = Date.now() - RECENT_CONTACT_WINDOW_DAYS * 86_400_000
+  const included: Array<{ company: CrmCompany; score: number }> = []
+  let cursor = 0
+  while (included.length < cap && cursor < eligible.length) {
+    const batch = eligible.slice(cursor, cursor + Math.min(cap - included.length, CONTACT_CHECK_CONCURRENCY))
+    cursor += batch.length
+    const contacted = await Promise.all(
+      batch.map(async ({ company }) => {
+        const activities = await crm.listActivities({ companyId: company.id, type: 'email' })
+        return activities.some((a) => new Date(a.createdAt).getTime() >= cutoff)
+      }),
+    )
+    batch.forEach((row, i) => {
+      if (contacted[i]) totalSuppressed++
+      else if (included.length < cap) included.push(row)
+    })
+  }
+  // Companies never reached remain eligible but uncounted: that is truncation.
+  const truncated = cursor < eligible.length
 
   const snapshotId = newId()
   await prisma.$transaction(async (tx) => {
@@ -163,7 +218,7 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
           country: company.country,
           cms: company.cms,
           ownerCrmUserId: company.ownerId,
-          includeReason: explain(company, query),
+          includeReason: explain(company, query, !includeOpenDeals),
           score: s,
         })),
       })
@@ -182,7 +237,7 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
       companyName: company.name,
       industry: company.industry,
       country: company.country,
-      includeReason: explain(company, query),
+      includeReason: explain(company, query, !includeOpenDeals),
     })),
   }
 }

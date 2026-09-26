@@ -63,12 +63,76 @@ export async function parseProspectObjective(opts: {
 }
 
 /**
+ * Common alternative names for the same country. Each group is one country;
+ * every spelling in a group is interchangeable. Generic reference data, not a
+ * per-customer list: it only lets "UK" find "UNITED KINGDOM".
+ *
+ * Deliberately NO substring matching. Substrings made "US" match AUSTRALIA,
+ * RUSSIA and CYPRUS, "Oman" match ROMANIA, and "India" match BRITISH INDIAN
+ * OCEAN TERRITORY — each one silently widening the audience to other countries.
+ */
+const COUNTRY_ALIASES: string[][] = [
+  ['united states', 'united states of america', 'us', 'usa', 'the states'],
+  ['united kingdom', 'uk', 'great britain', 'britain', 'gb', 'united kingdom of great britain and northern ireland'],
+  ['united arab emirates', 'uae', 'emirates'],
+  ['netherlands', 'holland', 'the netherlands'],
+  ['south korea', 'korea republic of', 'republic of korea', 'korea south'],
+  ['north korea', 'korea democratic peoples republic of', 'democratic peoples republic of korea'],
+  ['russia', 'russian federation'],
+  ['czech republic', 'czechia'],
+  ['turkey', 'turkiye'],
+  ['vietnam', 'viet nam'],
+  ['iran', 'iran islamic republic of'],
+  ['syria', 'syrian arab republic'],
+  ['laos', 'lao peoples democratic republic'],
+  ['bolivia', 'bolivia plurinational state of'],
+  ['venezuela', 'venezuela bolivarian republic of'],
+  ['tanzania', 'tanzania united republic of'],
+  ['moldova', 'moldova republic of'],
+  ['saudi arabia', 'ksa', 'kingdom of saudi arabia'],
+  ['ivory coast', 'cote divoire'],
+  ['cape verde', 'cabo verde'],
+  ['eswatini', 'swaziland'],
+  ['north macedonia', 'macedonia'],
+  ['myanmar', 'burma'],
+  ['hong kong', 'hong kong sar', 'hong kong sar china'],
+  ['taiwan', 'taiwan province of china', 'republic of china'],
+  ['democratic republic of the congo', 'dr congo', 'drc', 'congo democratic republic of the'],
+]
+
+/** Case, accents, punctuation and a leading "the" never distinguish two countries. */
+export function normaliseCountry(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[.'’]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/^the /, '')
+}
+
+const ALIAS_INDEX: Map<string, Set<string>> = (() => {
+  const index = new Map<string, Set<string>>()
+  for (const group of COUNTRY_ALIASES) {
+    const names = new Set(group.map(normaliseCountry))
+    for (const n of names) {
+      const existing = index.get(n)
+      index.set(n, existing ? new Set([...existing, ...names]) : names)
+    }
+  }
+  return index
+})()
+
+/**
  * Resolves the user's geography terms against the CRM's own country values.
  *
- * Substring matching in both directions, because the CRM stores values like
- * "UNITED STATES" while a user writes "US" or "the States". A term that
- * resolves to nothing is reported rather than dropped — an unmatched geography
- * silently ignored would widen the audience without anyone noticing.
+ * Exact match after normalisation (case, accents, punctuation), plus the
+ * generic alias table above, because the CRM stores "UNITED STATES" while a
+ * user writes "US". A term that resolves to nothing is reported rather than
+ * dropped — an unmatched geography silently ignored would widen the audience
+ * without anyone noticing.
  */
 export function resolveGeography(
   terms: string[],
@@ -78,12 +142,10 @@ export function resolveGeography(
   const unmatched: string[] = []
 
   for (const term of terms) {
-    const t = term.trim().toLowerCase()
+    const t = normaliseCountry(term)
     if (!t) continue
-    const hits = vocabulary.filter((v) => {
-      const lv = v.toLowerCase()
-      return lv === t || lv.includes(t) || t.includes(lv)
-    })
+    const accepted = ALIAS_INDEX.get(t) ?? new Set([t])
+    const hits = vocabulary.filter((v) => accepted.has(normaliseCountry(v)))
     if (hits.length) hits.forEach((h) => matched.add(h))
     else unmatched.push(term)
   }

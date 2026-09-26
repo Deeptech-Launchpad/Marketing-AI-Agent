@@ -8,10 +8,16 @@
    futuristic environment from the reference designs, defined as an override
    under `[data-theme='dark']`.
 
-   The themes differ ONLY in the values below the theme headings. Type, space,
-   geometry, radius and motion are shared, so layout, hierarchy and animation
-   are provably identical between them — a theme cannot move a thing, it can
-   only recolour it.
+   The themes differ ONLY in the values below the theme headings. Space,
+   geometry, radius, type size and motion are shared, so layout, hierarchy and
+   animation stay the same shape in both — a theme cannot move a thing.
+
+   The one exception is text WEIGHT, and it is deliberate. Dark text on a
+   near-black ground blooms and reads heavier than it is; the same stroke on
+   white looks thin and washed out, which is exactly what light-theme readers
+   reported. So the light theme carries its type one step heavier. It is the
+   only shared-scale value a theme is allowed to change, it changes strictly
+   by one step, and it goes through a token like everything else.
 
    Every colour used anywhere in the interface resolves through one of these
    variables. A hard-coded colour in a component would be one that cannot
@@ -28,52 +34,80 @@
 
   /* ═════════════════════════════════════════════════════════════════════
      LIGHT THEME — default
-     A soft light-graphite ground with white surfaces lifting off it, so the
-     depth is carried by elevation rather than by borders alone. Deliberately
-     not a plain white dashboard: on a pure white ground a white panel has
-     nothing to lift from.
+     A soft light-graphite ground with paper-white surfaces lifting off it, so
+     the depth is carried by elevation rather than by borders alone.
+     Deliberately not a plain white dashboard: on a pure white ground a white
+     panel has nothing to lift from.
+
+     Nothing here is pure #ffffff any more except the one surface that has to
+     sit on top of everything. A screen-sized field of pure white beside
+     near-black type is what makes a light interface tiring to sit in front of
+     all day, and it is what "too harsh" meant. Every step of the ladder moved
+     down a shade: the ground is deeper, the panels are paper rather than
+     light, and the whole set is a hair cooler and quieter. The distance
+     between the steps is unchanged, so the depth still reads.
      ═════════════════════════════════════════════════════════════════════ */
 
   /* ── Ground and surfaces ────────────────────────────────────────────── */
-  --bg-void: #eceff5;
-  --bg-shell: #f5f7fa;
-  --bg-panel: #ffffff;
+  --bg-void: #e3e8f0;
+  --bg-shell: #edf0f6;
+  --bg-panel: #fafbfd;
+  /* The only near-white left: modals, menus and anything that must read as
+     floating above the panel it covers. */
   --bg-raised: #ffffff;
-  --bg-inset: #f4f6fa;
-  --bg-hover: #e9edf4;
+  --bg-inset: #eff2f8;
+  --bg-hover: #e2e8f1;
 
-  /* ── Lines ──────────────────────────────────────────────────────────── */
-  --line: #e3e8ef;
-  --line-strong: #cdd5e0;
-  --line-faint: #eef1f6;
+  /* ── Lines ─────────────────────────────────────────────────────────────
+     Softened to match. On the deeper panel a border does not need to be as
+     dark to separate two things, and a hard rule everywhere is half of what
+     made the screen feel busy. */
+  --line: #dae0ea;
+  --line-strong: #bfc9d7;
+  --line-faint: #e9edf4;
 
-  /* ── Text — every step meets AA on the surfaces it is used on ───────── */
-  --text: #0f172a;
-  --text-soft: #3c4a5e;
-  --text-muted: #5a6b80;
-  --text-dim: #5f6e80;
+  /* ── Text ─────────────────────────────────────────────────────────────
+     Every step is darkened well past AA rather than to it. The old ramp
+     cleared the standard on paper and still read as washed out on a real
+     screen: the two quiet steps were mid-greys carrying 11px labels, which
+     is where "I cannot see the text" actually comes from.
+
+     Softened from flat near-black to a deep slate: pure black type on a light
+     ground glares, and the fix for that is hue, not lightness. Contrast on
+     the panel ground is 14.9 / 10.8 / 7.6 / 6.3 : 1 — every step still well
+     past AA, at every size this interface uses. */
+  --text: #16202e;
+  --text-soft: #2a3746;
+  --text-muted: #3f4d5e;
+  --text-dim: #4d5b6c;
+
+  /* ── Weight — see the note at the top of this file ───────────────────── */
+  --fw-body: 500;
+  --fw-strong: 700;
+  /* JetBrains Mono is loaded at 400 and 500 only; 600 would be synthesised. */
+  --fw-eyebrow: 500;
 
   /* ── Semantic state, kept apart from engine accents ─────────────────── */
-  --ok: #15803d;
-  --ok-bg: #ecfdf3;
-  --ok-line: rgba(21, 128, 61, 0.24);
-  --warn: #854d0e;
-  --warn-bg: #fdf8e7;
-  --warn-line: rgba(161, 98, 7, 0.26);
-  --danger: #b91c1c;
-  --danger-bg: #fef2f2;
-  --danger-line: rgba(185, 28, 28, 0.24);
-  --danger-text: #b91c1c;
-  --info: #0369a1;
-  --info-bg: #eff6ff;
-  --info-line: rgba(3, 105, 161, 0.24);
-  --neutral-state: #5a6b80;
-  --neutral-state-bg: #f1f4f9;
+  --ok: #14652f;
+  --ok-bg: #eef8f1;
+  --ok-line: rgba(20, 101, 47, 0.18);
+  --warn: #6d3f0a;
+  --warn-bg: #faf6e9;
+  --warn-line: rgba(109, 63, 10, 0.2);
+  --danger: #a11212;
+  --danger-bg: #fbf1f1;
+  --danger-line: rgba(161, 18, 18, 0.18);
+  --danger-text: #a11212;
+  --info: #02557f;
+  --info-bg: #eef4fb;
+  --info-line: rgba(2, 85, 127, 0.18);
+  --neutral-state: #384657;
+  --neutral-state-bg: #edf1f7;
   /* Human review / provisional. Its own colour so it is never read as either
      a success or a failure — it is neither. */
-  --review: #7e22ce;
-  --review-bg: #f8f2ff;
-  --review-line: rgba(126, 34, 206, 0.24);
+  --review: #661aa9;
+  --review-bg: #f4f0fb;
+  --review-line: rgba(102, 26, 169, 0.18);
 
   /* ── Engine accents ───────────────────────────────────────────────────
      Same hue per engine in both themes, so an engine's identity is constant.
@@ -107,20 +141,20 @@
   --sig-ink: 1.5;
   /* Glow is a dark-environment device; on a light ground it reads as grime. */
   --glow: 0;
-  --scroll-thumb: #c2ccda;
-  --scroll-thumb-hover: #a5b2c4;
+  --scroll-thumb: #ccd4e0;
+  --scroll-thumb-hover: #b0bccd;
 
   /* ── Elevation — light leans on shadow, dark leans on luminance ─────── */
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
-  --shadow-lg: 0 18px 48px rgba(15, 23, 42, 0.16);
+  --shadow-sm: 0 1px 2px rgba(22, 32, 46, 0.05);
+  --shadow-md: 0 6px 22px rgba(22, 32, 46, 0.07);
+  --shadow-lg: 0 22px 60px rgba(22, 32, 46, 0.13);
 
   /* The active engine sets these; every accent-aware component reads them,
      so an engine changes identity by changing two variables. Away from any
      engine this is the brand cyan, deepened for a light ground — the logo
      keeps the issued value, this is the reading value. */
-  --accent: #136184;
-  --accent-rgb: 19, 97, 132;
+  --accent: #11597a;
+  --accent-rgb: 17, 89, 122;
 
   color-scheme: light;
 
@@ -139,8 +173,18 @@
   --fs-h3: 14px;
   --fs-body: 13.5px;
   --fs-sm: 12.5px;
-  --fs-xs: 11px;
-  --fs-micro: 10px;
+  /* The two smallest tiers carry the labels, eyebrows and captions that were
+     hardest to read. Half a pixel each is the most that can be given without
+     reflowing the components that were laid out around them. */
+  --fs-xs: 11.5px;
+  --fs-micro: 10.5px;
+
+  /* ── Reading rhythm ───────────────────────────────────────────────────
+     Body copy is set looser than UI chrome. A dense settings row wants 1.5;
+     a paragraph of explanation — and this interface is full of them — wants
+     air between the lines or the eye loses its place on the way back. */
+  --lh-body: 1.5;
+  --lh-prose: 1.62;
 
   /* ── Space, on a 4px grid ───────────────────────────────────────────── */
   --s1: 4px;
@@ -205,6 +249,11 @@
   /* Raised from the original #576372, which fell below AA on the panel
      ground it labels. The role is unchanged: the quietest text in the set. */
   --text-dim: #8593a4;
+
+  /* The reference designs' weights. Dark type blooms; it needs no extra. */
+  --fw-body: 400;
+  --fw-strong: 600;
+  --fw-eyebrow: 400;
 
   --ok: #22c55e;
   --ok-bg: #0e2a1a;

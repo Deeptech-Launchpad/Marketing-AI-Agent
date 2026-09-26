@@ -1,0 +1,131 @@
+/* ── Evidence, explained ─────────────────────────────────────────────────
+   Only the summary-first layout lives here; the as-recorded table in ui.css
+   is untouched, so an observation with nothing to explain looks exactly as
+   it always has.
+
+   The stacking order is the order a person checks a claim in: what was
+   detected, what it means, why it matters, where and when it was seen, and
+   only then the literal fragment. Opening with the fragment made every check
+   start by reading markup and reconstructing the finding from it.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.evidence-summary__title {
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+  margin: 0 0 var(--s2);
+}
+
+/* The sentence the reader is meant to land on, so it carries more weight than
+   any of the provenance rows beneath it. */
+.evidence-summary__text {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-soft);
+  margin: 0 0 var(--s3);
+}
+
+.evidence-summary__why {
+  border-left: 2px solid var(--line-strong);
+  padding: 2px 0 2px var(--s3);
+  margin: 0 0 var(--s4);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* The one block on the panel that is OUR suggestion rather than the source's
+   observation. Marked with the accent rather than the neutral rule so a reader
+   can see at a glance which lines they are entitled to disagree with. */
+.evidence-summary__why--angle {
+  border-left-color: var(--accent, var(--line-strong));
+}
+
+.evidence-summary__whylabel {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+
+/* Tighter than the standalone table: here it is a provenance strip under the
+   summary rather than the body of the item. */
+.evidence-summary__meta { margin-bottom: var(--s3); }
+
+/* Raw evidence stays one click away rather than gone — a reviewer disputing a
+   finding still needs the exact bytes that produced it. */
+.evidence-summary__raw {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-void);
+  margin-bottom: var(--s3);
+}
+
+.evidence-summary__raw > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px var(--s3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.evidence-summary__raw > summary::-webkit-details-marker { display: none; }
+
+.evidence-summary__raw > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform var(--t-instant) var(--ease-out);
+}
+
+.evidence-summary__raw[open] > summary::before { transform: rotate(90deg); }
+
+.evidence-summary__rawbody {
+  padding: 0 var(--s3) var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.evidence-summary__rawbody .evidence__fragment { margin: 0; }
+
+.evidence-summary__observed {
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+/* An absence is never folded away: if nothing was stored, the reader should
+   see that without having to open anything. */
+.evidence-summary__missing {
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--s2) var(--s3);
+  margin-bottom: var(--s3);
+}
+
+.evidence-summary__how {
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.evidence-summary__ref {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}

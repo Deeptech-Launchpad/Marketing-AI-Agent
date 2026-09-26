@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken'
 import pLimit from 'p-limit'
 import { env } from '../../config/env.js'
-import { assertServiceIdentity } from '../../crmsync/writeGate.js'
+import { assertServiceIdentity, isLocalTarget } from '../../crmsync/writeGate.js'
 import { UpstreamError } from '../../platform/errors.js'
 import { logger } from '../../platform/logger.js'
 
@@ -152,6 +152,20 @@ export async function crmPut<T>(path: string, body: unknown): Promise<T> {
       retryable: false,
       details: { path },
     })
+  }
+
+  // A LIVE CRM IS READ-ONLY UNLESS SOMEONE SAYS OTHERWISE, SEPARATELY.
+  //
+  // Enabling writes against a local snapshot is ordinary. Pointing the base URL
+  // at the real CRM is also ordinary. What must not be ordinary is the two of
+  // them together happening by accident, so a non-local target needs its own
+  // deliberate switch, and the default answer is no.
+  if (!isLocalTarget(env.NXT_SALES_BASE_URL) && !env.CRM_WRITE_ALLOW_LIVE) {
+    throw new UpstreamError(
+      'Refusing to write to a non-local NXT Sales: CRM_WRITE_ALLOW_LIVE is off. This platform is connected to ' +
+        'the live CRM for reading only. Nothing was sent.',
+      { retryable: false, details: { path } },
+    )
   }
 
   // Checked here as well as in the write gate. This is the last code before the

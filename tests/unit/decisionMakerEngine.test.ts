@@ -397,12 +397,48 @@ describe('ambiguous candidates', () => {
     expect(shortlist.map((c) => c.fullName)).toEqual(['Vera Verified', 'Pat Probable'])
   })
 
-  it('keeps an unverified candidate visible but at LOW confidence', () => {
+  it('keeps an unverified candidate on record at LOW confidence, but never shortlists them', () => {
+    // CHANGED: this used to assert the unverified person WAS shortlisted ("the
+    // reviewer decides"). That contradicted the governing rule — "no verified
+    // decision maker found" beats "probably this person" — and the screen's
+    // "Verified people" label. They are now excluded with a stated reason.
     const c = score(draft({ statedCompany: null }), company(), null)
     expect(c.companyMatch).toBe('unverified')
     expect(c.confidence).toBe('low')
-    // Still shortlistable — the reviewer decides, with the reason in hand.
-    expect(selectShortlist([c], 5).shortlist.length).toBe(1)
+    const { shortlist, excluded } = selectShortlist([c], 5)
+    expect(shortlist).toEqual([])
+    expect(excluded).toHaveLength(1)
+    expect(excluded[0]!.identityKey).toBe(c.identityKey)
+    expect(excluded[0]!.reason).toMatch(/employment is unproven/)
+  })
+
+  it('does not let an unverified specialist suppress a verified executive fallback', () => {
+    const owner = score(
+      draft({
+        fullName: 'Olive Owner',
+        rawTitle: 'Owner',
+        evidence: [ev({ provider: 'company_website', sourceType: 'company_website' })],
+      }),
+    )
+    const thirdParty = score(
+      draft({ fullName: 'Tom Thirdparty', rawTitle: 'Ecommerce Manager', statedCompany: null }),
+      company(),
+      null,
+    )
+    expect(owner.roleIsFallback).toBe(true)
+    expect(thirdParty.companyMatch).toBe('unverified')
+    const { shortlist, excluded } = selectShortlist([thirdParty, owner], 5)
+    expect(shortlist.map((c) => c.fullName)).toEqual(['Olive Owner'])
+    expect(excluded.map((e) => e.name)).toEqual(['Tom Thirdparty'])
+  })
+
+  it('records a suppressed fallback with the fallback reason, keyed by identity', () => {
+    const owner = score(draft({ fullName: 'Olive Owner', rawTitle: 'Owner' }))
+    const specialist = score(draft({ fullName: 'Sam Special', rawTitle: 'Ecommerce Manager' }))
+    const { excluded } = selectShortlist([owner, specialist], 5)
+    expect(excluded).toEqual([
+      expect.objectContaining({ identityKey: owner.identityKey, reason: expect.stringMatching(/executive-sponsor fallback/) }),
+    ])
   })
 
   it('breaks a score tie deterministically, so the same input gives the same order', () => {
@@ -416,8 +452,11 @@ describe('ambiguous candidates', () => {
     const many = ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven'].map((n) =>
       score(draft({ fullName: `${n} Person`, rawTitle: 'Catalog Manager' })),
     )
-    const { shortlist } = selectShortlist(many, 5)
+    const { shortlist, excluded } = selectShortlist(many, 5)
     expect(shortlist.length).toBe(5)
+    // The overflow is excluded and says why, so counts cover everyone.
+    expect(excluded).toHaveLength(2)
+    expect(excluded.every((e) => /Ranked below the top 5/.test(e.reason))).toBe(true)
   })
 
   it('never returns hundreds of people', () => {

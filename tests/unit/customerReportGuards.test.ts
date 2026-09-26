@@ -19,8 +19,20 @@ const db = {
   auditReport: { findFirst: vi.fn() },
   auditReportRevision: { findFirst: vi.fn() },
   catalogFinding: { findMany: vi.fn() },
-  websiteAuditRun: { findUniqueOrThrow: vi.fn() },
+  // findUnique as well as findUniqueOrThrow: the report now also reads which
+  // of the four product-evidence states the run reached, so that a document
+  // for a site with a catalogue but no product page says so rather than
+  // printing the same sentence as a site that was never read.
+  // findFirst and update are reached through buildCustomerView, which the
+  // report now consumes instead of re-deriving the demonstration for itself.
+  websiteAuditRun: { findUniqueOrThrow: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   workbenchDemo: { findFirst: vi.fn() },
+  // The customer report now builds real before/after case studies and a
+  // category read-out from the crawl. These tests are about the GATES, so
+  // the new reads return nothing and the report renders without examples —
+  // which is itself a supported outcome.
+  auditedPage: { findMany: vi.fn(async () => []), findUnique: vi.fn(async () => null) },
+  pageObservation: { findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
 }
 vi.mock('../../src/platform/db.js', () => ({ prisma: db }))
 
@@ -73,7 +85,7 @@ function seed(status: string) {
       evidence: [{ observationId: 'o1', pageId: 'p1', sourceUrl: 'https://x.com/p/1', field: 'product.specifications', status: 'missing', value: null, sourcePath: null, fragment: null, observedAt: new Date() }],
     },
   ])
-  db.websiteAuditRun.findUniqueOrThrow.mockResolvedValue({
+  const run = {
     companyName: '1st Ayd',
     startUrl: 'https://1stayd.com',
     completedAt: new Date('2026-08-27T00:00:00Z'),
@@ -82,7 +94,11 @@ function seed(status: string) {
     productPages: 12,
     categoryPages: 3,
     limitsHit: [],
-  })
+    failureReason: null,
+  }
+  db.websiteAuditRun.findUniqueOrThrow.mockResolvedValue(run)
+  db.websiteAuditRun.findUnique.mockResolvedValue(run)
+  db.websiteAuditRun.findFirst.mockResolvedValue(run)
   db.workbenchDemo.findFirst.mockResolvedValue(null)
 }
 
@@ -95,27 +111,59 @@ afterEach(() => vi.restoreAllMocks())
 
 // ── GATE 1: APPROVAL ───────────────────────────────────────────────────────
 
-describe('a customer report requires an approved report', () => {
-  it('generates from an approved report', async () => {
+// Approval governs the AUDIENCE, not whether the document exists.
+//
+// These used to assert that an unapproved report produced nothing at all,
+// which put the review the wrong way round: the reviewer was asked to approve
+// a document nobody could open. The invariant that actually matters is not
+// "no PDF" — it is that a PDF which has not been approved can never be
+// mistaken for, or used as, the customer copy. That is what is asserted now:
+// same six pages, watermarked on every page, and no QR whatever the caller
+// passes.
+describe('approval decides who a rendered report is for', () => {
+  it('renders the customer copy from an approved report', async () => {
     seed('approved')
     const r = await generateCustomerReport({ tenantId: 't1', auditRunId: 'run1' })
     expect(r.approvalState).toBe('approved')
+    expect(r.audience).toBe('customer')
     expect(r.revisionNumber).toBe(2)
     expect(r.pdf.bytes.subarray(0, 5).toString()).toBe('%PDF-')
   })
 
-  it.each(APPROVAL_STATES.filter((s) => s !== 'approved'))('refuses a report in state "%s"', async (status) => {
-    seed(status)
-    await expect(generateCustomerReport({ tenantId: 't1', auditRunId: 'run1' })).rejects.toThrow(
-      /may only be produced from a report approved/,
-    )
-  })
+  it.each(APPROVAL_STATES.filter((s) => s !== 'approved'))(
+    'renders a REVIEW copy, never a customer one, in state "%s"',
+    async (status) => {
+      seed(status)
+      const r = await generateCustomerReport({ tenantId: 't1', auditRunId: 'run1' })
+      expect(r.audience, `"${status}" may be reviewed but never sent`).toBe('internal_review')
+      expect(r.approvalState).toBe(status)
+      expect(r.pdf.bytes.subarray(0, 5).toString(), 'the reviewer must be able to open it').toBe('%PDF-')
+    },
+  )
 
-  it('names the offending state and how to resolve it', async () => {
+  it('refuses to put a QR on a review copy even when one is offered', async () => {
+    // A QR is a customer-facing credential. An unapproved document must not be
+    // able to hand one out just because something asked it to.
     seed('changes_requested')
-    await expect(generateCustomerReport({ tenantId: 't1', auditRunId: 'run1' })).rejects.toThrow(
-      /This report is "changes_requested"/,
-    )
+    const review = await generateCustomerReport({
+      tenantId: 't1',
+      auditRunId: 'run1',
+      workbenchUrl: 'https://example.test/workbench/atoken?s=qr',
+    })
+    const approvedSeed = seed('approved')
+    void approvedSeed
+    const customer = await generateCustomerReport({
+      tenantId: 't1',
+      auditRunId: 'run1',
+      workbenchUrl: 'https://example.test/workbench/atoken?s=qr',
+    })
+
+    expect(review.audience).toBe('internal_review')
+    expect(customer.audience).toBe('customer')
+    expect(
+      customer.pdf.bytes.length,
+      'the customer copy carries the QR image, so it is the larger of the two',
+    ).toBeGreaterThan(review.pdf.bytes.length)
   })
 
   it('refuses when there is no report at all', async () => {
@@ -283,3 +331,119 @@ describe('wording when there is only one worked example', () => {
     expect(r.exampleNote).toMatch(/No product page could be identified/)
   })
 })
+
+// ── THE WIRING, NOT THE RENDERER ──────────────────────────────────────────
+//
+// A real gap shipped here, and the reason it shipped is the point of this
+// block. pdpReport.ts accepted and drew the customer's captured website
+// context and the proposal; the pdpReport tests passed because THEY HANDED
+// THE RENDERER THOSE FIELDS THEMSELVES. generateCustomerReport — the only
+// real caller — never passed them, so the live document carried neither, and
+// every test was green.
+//
+// A test that supplies the input it is meant to be checking the supply of
+// proves nothing. These assert the BOUNDARY: that what the Workbench holds is
+// what the renderer is given. They fail if the two lines in the
+// renderPdpReport call are ever removed again.
+
+describe('the report hands the renderer the Workbench’s own representation', () => {
+  /** Captures what generateCustomerReport passes to the renderer. */
+  const renderSpy = vi.fn()
+  const SHELL = {
+    captured: true,
+    siteName: 'A Trading Company',
+    logoUrl: 'https://company.test/logo.png',
+    nav: [{ label: 'Shop', href: 'https://company.test/shop' }],
+    footerLinks: [],
+    footerText: '(c) 2026 A Trading Company',
+    social: [],
+    utility: [],
+    hasSearch: true,
+    notCaptured: [],
+    sourceUrl: 'https://company.test/p/1',
+    logoAlt: null,
+    host: 'company.test',
+    reason: null,
+  }
+  const PROPOSAL = { overview: 'Composed from published values.', bullets: [], openQuestions: [], supportedBy: [], note: 'n' }
+
+  beforeEach(() => {
+    renderSpy.mockClear()
+    renderSpy.mockResolvedValue({ bytes: Buffer.from('%PDF-1.4'), sha256: 'a'.repeat(64), pageCount: 7 })
+  })
+
+  it('passes the view’s websiteShell and proposedContent through', async () => {
+    vi.doMock('../../src/websiteaudit/pdpReport.js', () => ({ renderPdpReport: renderSpy }))
+    vi.doMock('../../src/websiteaudit/customerView.js', () => ({
+      buildCustomerView: async () => ({
+        ...viewStub(),
+        websiteShell: SHELL,
+        proposedContent: PROPOSAL,
+      }),
+      loadSchemaEvidence: async () => ({}),
+    }))
+    vi.resetModules()
+    seed('approved')
+
+    const { generateCustomerReport } = await import('../../src/websiteaudit/customerReport.js')
+    await generateCustomerReport({ tenantId: 't1', auditRunId: 'run_1' })
+
+    expect(renderSpy).toHaveBeenCalledTimes(1)
+    const passed = renderSpy.mock.calls[0]![0] as Record<string, unknown>
+    // THE TWO LINES. Same objects, not equivalent ones — the renderer must be
+    // given what the Workbench holds, never a second capture of it.
+    expect(passed.websiteShell).toBe(SHELL)
+    expect(passed.proposedContent).toBe(PROPOSAL)
+    vi.doUnmock('../../src/websiteaudit/pdpReport.js')
+    vi.doUnmock('../../src/websiteaudit/customerView.js')
+  })
+
+  it('passes null through unchanged rather than substituting anything', async () => {
+    vi.doMock('../../src/websiteaudit/pdpReport.js', () => ({ renderPdpReport: renderSpy }))
+    vi.doMock('../../src/websiteaudit/customerView.js', () => ({
+      buildCustomerView: async () => ({ ...viewStub(), websiteShell: null, proposedContent: null }),
+      loadSchemaEvidence: async () => ({}),
+    }))
+    vi.resetModules()
+    seed('approved')
+
+    const { generateCustomerReport } = await import('../../src/websiteaudit/customerReport.js')
+    await generateCustomerReport({ tenantId: 't1', auditRunId: 'run_1' })
+
+    const passed = renderSpy.mock.calls[0]![0] as Record<string, unknown>
+    // A run that captured no context, or published too little to compose a
+    // proposal from, must reach the renderer as null — never as a stand-in.
+    expect(passed.websiteShell).toBeNull()
+    expect(passed.proposedContent).toBeNull()
+    vi.doUnmock('../../src/websiteaudit/pdpReport.js')
+    vi.doUnmock('../../src/websiteaudit/customerView.js')
+  })
+})
+
+/** The minimum customer view generateCustomerReport reads. */
+function viewStub() {
+  return {
+    crmCompanyId: 'co_1',
+    auditRunId: 'run_1',
+    companyName: 'A Trading Company',
+    website: 'https://company.test/',
+    auditDate: '2026-09-01',
+    pagesInspected: 10,
+    productPagesInspected: 4,
+    categoryPagesInspected: 1,
+    reportStatus: 'approved',
+    approved: true,
+    headline: 'h',
+    summary: 's',
+    scopeNote: 'scope',
+    businessValue: [],
+    nextStep: 'next',
+    ctaLabel: 'cta',
+    priorities: { high: 0, medium: 0, low: 0 },
+    gaps: [],
+    caseStudies: [],
+    productEvidence: { state: 'no_product_evidence', stateCode: 'B', tier: 0, tierLabel: 't', headline: 'h', detail: 'd', entries: [], counts: { linked: 0, named: 0, image_alt: 0 } },
+    sectors: { sectors: [], productPagesInspected: 0, catalogueGaps: [], note: 'n' },
+    recommendedSchema: { determined: false, categoryLabel: 'c', attributes: [] },
+  }
+}

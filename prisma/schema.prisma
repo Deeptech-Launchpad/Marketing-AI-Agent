@@ -497,6 +497,15 @@ model ProspectSearch {
   id                   String    @id
   tenantId             String
   objective            String
+  // How many companies the operator asked for, when they said so explicitly.
+  //
+  // Distinct from the count the parser reads out of the objective's wording,
+  // and it wins over it. "Find a cleaning supplier in Malta" parses as a
+  // request for ONE company, which is a fair reading of the sentence and a
+  // poor answer to the question being asked — so the number is now a control
+  // on the form rather than something inferred from grammar. Null means
+  // nothing was asked for and the parser's reading still applies.
+  requestedCount       Int?
   status               String    @default("queued") // queued | running | completed | failed
   requestedByCrmUserId String
   parsed               Json?
@@ -520,6 +529,99 @@ model ProspectSearch {
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
+}
+
+// ── Stage 1b: open-web company discovery (2026-09-24 restructure) ──────────
+//
+// ProspectSearch above is deliberately CRM-only: every prospect it returns is
+// a row NXT Sales already holds. This is the second, additive way a prospect
+// can enter the pipeline — found on the open web, before (and independent of
+// whether) it is ever matched to or created in the CRM.
+//
+// One search request. Candidates it turns up live in DiscoveredCompany below,
+// the same relationship ProspectSearch has to AudienceMember.
+model CompanyDiscoverySearch {
+  id                   String    @id
+  tenantId             String
+  objective            String
+  // How many companies to return. Bounded by MAX_CANDIDATES_HARD_CAP in
+  // src/prospects/companyWebDiscovery.ts regardless of what is asked for.
+  requestedCount       Int?
+  requestedByCrmUserId String
+  status               String    @default("queued") // queued | running | completed | failed
+  queriesRun           Json?
+  totalCandidatesFound Int       @default(0)
+  totalAssessed        Int       @default(0)
+  costUsd              Decimal   @default(0) @db.Decimal(12, 6)
+  failureReason        String?
+  error                Json?
+  createdAt            DateTime  @default(now())
+  finishedAt           DateTime?
+
+  companies DiscoveredCompany[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+// A company this platform found on the open web, before (and independent of
+// whether) it is ever matched to or created in NXT Sales. Owned entirely by
+// this app — CRM write capability remains exactly as restricted as it is
+// today (src/crmsync/writeGate.ts, src/crm/crmPort.ts are untouched by this).
+//
+// `id` doubles as a placeholder value in the `crmCompanyId` column that Intent
+// Signals, Decision Makers and Outreach already require: those engines keep
+// reading and writing ONE column everywhere, and `discoveredCompanyId` on each
+// of them is purely the disambiguator that says which kind of id it holds. See
+// src/prospects/companyWebDiscovery.ts for how a row here is produced, and
+// never from the model's own prose — discoverySourceUrl is a literal Gemini
+// grounding-chunk URL, checkable by anyone reading the record.
+model DiscoveredCompany {
+  id       String @id
+  tenantId String
+
+  companyName  String
+  domain       String?
+  sourceQuery  String
+  discoveredAt DateTime @default(now())
+
+  // What the site-fetch step actually read. Built only from fetched page
+  // text — never invented, and null when the page could not be fetched.
+  websiteUrl     String?
+  websiteSummary String?
+  fitAssessment  Json?
+
+  // The literal grounding-chunk URL the company's identity came from.
+  discoverySourceUrl   String
+  discoverySourceTitle String?
+
+  // One product page on the company's OWN website, read the way a PDP audit
+  // reads one (prospects/productPageAnalysis.ts). productAnalysis holds what
+  // the page showed, what is missing, and what to do about it; serviceNeed is
+  // the stated rule's verdict over that audit: needed | possible |
+  // not_needed | not_assessed. Null on searches that ran before this existed.
+  productPageUrl  String?
+  productAnalysis Json?
+  serviceNeed     String?
+
+  // Populated only if/when this company is matched to an existing CRM
+  // company, or — in a deferred later phase — actually created in the live
+  // CRM. Null is the common case for a brand-new prospect under this stage.
+  crmCompanyId String?
+
+  status              String @default("candidate") // candidate | matched_to_crm | dismissed
+  createdByCrmUserId  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  searchId String?
+  search   CompanyDiscoverySearch? @relation(fields: [searchId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, searchId, discoverySourceUrl])
+  @@index([tenantId, status])
+  @@index([tenantId, domain])
+  @@index([searchId, serviceNeed])
 }
 
 // ── Stage 2: company enrichment ─────────────────────────────────────────────
@@ -571,6 +673,9 @@ model IntentDetectionRun {
   id                   String    @id
   tenantId             String
   crmCompanyId         String
+  // Set when crmCompanyId above is actually a DiscoveredCompany.id
+  // placeholder (see that model's comment) rather than a real NXT Sales id.
+  discoveredCompanyId  String?
   companyName          String?
   prospectSearchId     String?
   requestedByCrmUserId String
@@ -593,6 +698,7 @@ model IntentDetectionRun {
   @@index([tenantId, crmCompanyId, createdAt])
   @@index([tenantId, status])
   @@index([prospectSearchId])
+  @@index([discoveredCompanyId])
 }
 
 // One piece of evidence that a company MAY have a current need.
@@ -610,12 +716,19 @@ model IntentSignal {
   tenantId              String
   intentRunId           String
   crmCompanyId          String
+  // Denormalised from the run, same reasoning CompanyEnrichment already
+  // applies to crmCompanyId itself — see IntentDetectionRun.discoveredCompanyId.
+  discoveredCompanyId   String?
   eventFingerprint      String
   signalType            String
   signalCategory        String // crm | hiring | technology | website | business | news | catalog
   summary               String
   // WHY this may indicate a need. Never asserts that it does.
   interpretation        String
+  // How a seller could OPEN on this, in one sentence. Nullable because a
+  // signal that suggests no particular approach must not be given an invented
+  // one — an angle is a suggestion about our words, never a claim about them.
+  outreachAngle         String?
   // The literal thing observed: a job title, a meta tag, a CRM row.
   evidence              String
   sourceUrl             String?
@@ -641,6 +754,7 @@ model IntentSignal {
   @@index([tenantId, signalCategory])
   @@index([intentRunId])
   @@index([eventFingerprint])
+  @@index([discoveredCompanyId])
 }
 
 // ── STAGE 4: DECISION-MAKER DISCOVERY ──────────────────────────────────────
@@ -655,6 +769,9 @@ model DecisionMakerRun {
   id                   String    @id
   tenantId             String
   crmCompanyId         String
+  // Set when crmCompanyId above is actually a DiscoveredCompany.id
+  // placeholder (see that model's comment) rather than a real NXT Sales id.
+  discoveredCompanyId  String?
   companyName          String?
   companyDomain        String?
   prospectSearchId     String?
@@ -685,6 +802,7 @@ model DecisionMakerRun {
   @@index([tenantId, crmCompanyId, createdAt])
   @@index([tenantId, status])
   @@index([prospectSearchId])
+  @@index([discoveredCompanyId])
 }
 
 // A person who may own the decision, with the evidence that says so.
@@ -805,6 +923,30 @@ model WebsiteAuditRun {
   // The limit values this run actually used, so a later run with different
   // configuration is comparable rather than silently different.
   limitsApplied Json?
+
+  // THE PAGE'S OWN FURNITURE AND PALETTE, so a demonstration can look like
+  // the customer's website rather than like a card with their data in it.
+  //
+  // Cached on the RUN rather than only on an approved Workbench demo, because
+  // it describes the customer's website and not our demonstration of it — and
+  // because a salesperson opening the Workbench before approval was otherwise
+  // shown a generic page for a company whose site we had already read.
+  //
+  // Null until first needed, then written once. A failed capture is stored as
+  // a failed capture, so a site that cannot be sampled is not re-fetched on
+  // every page view.
+  websiteShell  Json?
+  pageTheme     Json?
+
+  // THE END PDP AUDIT. The audit reads one page — the End PDP link on the
+  // company in NXT Sales. pdpAssessment records which case the link is in
+  // (valid product / link problem / no link) with the recommendation;
+  // pdpEnrichment is the enriched product record built from a valid page; the
+  // two captures are photographs of the original page and the enriched page.
+  pdpAssessment    Json?
+  pdpEnrichment    Json?
+  pdpBeforeCapture Bytes?
+  pdpAfterCapture  Bytes?
 
   retryCount    Int       @default(0)
   failureReason String?
@@ -1150,6 +1292,14 @@ model WorkbenchDemo {
   // neutral default when sampling failed. Validated tokens only, never markup.
   theme Json?
 
+  // The customer's own page furniture — logo, navigation, search, footer,
+  // social links — read from the live product page as TEXT AND URLS, never as
+  // markup. Without it the demonstration could show a product but not whose
+  // page it was on, which is what made it read as a generic mock. Null on
+  // demos built before this was captured, and a shell that failed to capture
+  // records why rather than looking plausible.
+  websiteShell Json?
+
   // Restructured schema.org Product data built from observed fields only.
   structuredData Json?
   // Two to four business-language reasons the improvements matter.
@@ -1308,12 +1458,20 @@ model OutreachCampaign {
   tenantId String
 
   crmCompanyId  String
+  // Set when crmCompanyId above is actually a DiscoveredCompany.id
+  // placeholder (see that model's comment) rather than a real NXT Sales id.
+  discoveredCompanyId String?
   companyName   String?
   companyDomain String?
 
-  // The approved artifacts this campaign is allowed to draw on.
-  auditRunId      String
-  auditReportId   String
+  // The approved artifacts this campaign is allowed to draw on, for the
+  // LEGACY audit-basis path only. Nullable since the 2026-09-24 restructure:
+  // the default path now composes from Decision Makers + Intent Signals
+  // instead (see src/outreach/engine.ts buildIntentBasis()). A campaign
+  // created before that change keeps these set, and behaves exactly as it
+  // always did.
+  auditRunId      String?
+  auditReportId   String?
   // The decision-maker candidate the person-channels target, when one exists.
   decisionMakerId String?
   // The Workbench demo whose link may be included, when one exists.
@@ -1332,9 +1490,28 @@ model OutreachCampaign {
   // When day offsets are measured from.
   startsAt DateTime @default(now())
 
+  // Which outreach flow this campaign runs (2026-09-26).
+  //   legacy             — the channel cadence in src/outreach/engine.ts
+  //   sales_sequence_v1  — the Sales-approved email sequence
+  //                        (src/outreach/salesSequence/), drafted for review
+  //                        and sent by a person, never by the platform.
+  // executeAction refuses any action whose campaign is not legacy.
+  flow           String  @default("legacy")
+  // sales_sequence_v1 only: which approved initial version this prospect gets
+  // (v1 | v2 | v3), and whether it came from the split-test rotation or from
+  // Sales changing it.
+  initialVersion String?
+  versionSource  String?
+  // The address the sequence goes to: the decision maker's stored email, or
+  // one Sales typed in. Never guessed.
+  recipientEmail       String?
+  recipientEmailSource String?
+
   requestedByCrmUserId String
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
+
+  replies OutreachReply[]
 
   // Found while building Task #983: this relation was missing, exactly as
   // WorkbenchDemo.auditRunId was before Task #982 — so deleting an audit run
@@ -1345,7 +1522,12 @@ model OutreachCampaign {
   //
   // EngagementEvent references an action with SetNull, so the history of what a
   // prospect did survives this cascade with its evidence text intact.
-  run WebsiteAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+  //
+  // SetNull, not Cascade: an intent-basis campaign (auditRunId null) has
+  // nothing to cascade from, and a legacy campaign whose audit run is deleted
+  // now survives with auditRunId cleared rather than disappearing with it —
+  // the campaign and its own actions/messages are evidence in their own right.
+  run WebsiteAuditRun? @relation(fields: [auditRunId], references: [id], onDelete: SetNull)
 
   steps   OutreachSequenceStep[]
   actions OutreachAction[]
@@ -1353,6 +1535,75 @@ model OutreachCampaign {
   @@index([tenantId, crmCompanyId, createdAt])
   @@index([tenantId, status])
   @@index([auditRunId])
+  @@index([discoveredCompanyId])
+  @@index([tenantId, flow, status])
+}
+
+// A prospect's reply, pasted in by Sales (2026-09-26 sales sequence).
+//
+// No mailbox is connected, so a reply only exists here because a person put
+// it here. The model's reading is stored apart from what Sales confirmed: a
+// classification changes the sequence only once a person has confirmed it.
+model OutreachReply {
+  id         String @id
+  tenantId   String
+  campaignId String
+
+  receivedAt DateTime
+  text       String
+
+  // What the model read. Its evidence quote and any SKUs must appear verbatim
+  // in `text`; anything that did not is recorded in modelChecks and dropped.
+  modelClassification String?
+  modelEvidenceQuote  String?
+  modelSkus           Json?
+  modelChecks         Json?
+  promptVersion       Int?
+
+  // What Sales confirmed. Null until confirmed.
+  classification       String?
+  classificationSource String? // model | sales_override
+  skus                 Json?
+  confirmedByCrmUserId String?
+  confirmedAt          DateTime?
+
+  enteredByCrmUserId String
+  createdAt          DateTime @default(now())
+
+  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, receivedAt])
+  @@index([tenantId, createdAt])
+}
+
+// A Sales-approved message template for one channel, personalized per company
+// and person by Gemini rather than filled in from a fixed set of blocks (see
+// src/outreach/templates.ts, the earlier deterministic, audit-hook-based
+// content this replaces for the new intent-basis campaign path).
+//
+// Stored as plain text, not parsed from a document: Sales supplies the
+// content directly (via this row, however it gets entered), and the platform
+// never invents or edits the template itself — only personalize.ts's
+// composeFromTemplate() rewords it per recipient, grounded in real facts.
+model OutreachTemplate {
+  id       String @id
+  tenantId String
+
+  channel String // matches OutreachChannel: email | linkedin | whatsapp | call | email_followup
+  key     String // Sales-assigned name, e.g. "email.intro"
+  version String
+
+  purpose    String // one line, Sales-authored: what this template is for
+  subjectRaw String? // raw Sales-supplied subject, where the channel has one
+  bodyRaw    String // raw Sales-supplied body, exactly as provided
+
+  isActive           Boolean  @default(true)
+  createdByCrmUserId String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([tenantId, channel, key, version])
+  @@index([tenantId, channel, isActive])
 }
 
 // The cadence, stored as rows rather than expressed as control flow.
@@ -1443,6 +1694,20 @@ model OutreachAction {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  // sales_sequence_v1 only. Which approved stage this is (initial, 2.1 …
+  // break-up, call points), its due window, and the Sales review trail. A
+  // "sent" action in this flow means a person marked it sent after sending it
+  // from their own mail client; the platform never sends it.
+  stageKey            String?
+  dueStartAt          DateTime?
+  dueEndAt            DateTime?
+  approvedByCrmUserId String?
+  approvedAt          DateTime?
+  // Hash of the subject + body at approval. "Mark as sent" refuses if the copy
+  // changed after it was approved.
+  approvedBodyHash    String?
+  sentByCrmUserId     String?
+
   campaign OutreachCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   step     OutreachSequenceStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
   message  OutreachMessage?
@@ -1452,6 +1717,7 @@ model OutreachAction {
   @@index([tenantId, status, scheduledAt])
   @@index([campaignId, stepNumber])
   @@index([tenantId, crmCompanyId, sentAt])
+  @@index([campaignId, stageKey])
 }
 
 // The composed message, kept apart from the action's workflow state.
@@ -1478,6 +1744,27 @@ model OutreachMessage {
 
   // What each claim in the copy rests on: findings, observations, the Workbench.
   evidence Json?
+
+  // sales_sequence_v1 only.
+  //   draftSubject/draftBody — the copy as generated, kept beside the edited
+  //                            subject/body above so an edit is always visible.
+  //   inputs          — values Sales entered (client company, SKUs, X of 5,
+  //                     product term, recipient …).
+  //   attestations    — [{key, statement, byCrmUserId, at}]: Sales confirming
+  //                     a claim the platform cannot check (the AI-engine test).
+  //   personalization — facts considered (with ids and sources), how each
+  //                     placeholder was resolved, signals considered/used, and
+  //                     the AI line with its checks.
+  //   revisions       — the last few earlier versions of subject/body.
+  draftSubject      String?
+  draftBody         String?
+  inputs            Json?
+  attestations      Json?
+  personalization   Json?
+  revision          Int       @default(1)
+  revisions         Json?
+  editedByCrmUserId String?
+  editedAt          DateTime?
 
   characterCount Int      @default(0)
   createdAt      DateTime @default(now())

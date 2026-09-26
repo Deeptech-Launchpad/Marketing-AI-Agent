@@ -1,0 +1,129 @@
+/* The Human Approval screen's own blocks.
+
+   Only what this screen adds lives here. The workflow steps, the approved
+   callout and the decision history are still engines.css (.steps, .approved,
+   .history), and this file deliberately adds nothing they could collide with.
+
+   Every class is prefixed apv__ so it cannot restyle a shared block by
+   accident: the shell, the sidebar and the engine accents are untouched. */
+
+/* ── WHOSE APPROVAL THIS IS ───────────────────────────────────────────────
+
+   "Human Approval / <Company>" with the run id underneath. This is the line
+   that answers "which run is this screen about?" — the question nobody could
+   answer while this screen and the Audit Report resolved different runs for
+   the same company. Mirrors the Audit Report's identity line so the two read
+   as one platform. */
+.apv__ident {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2) var(--s4);
+  margin-bottom: var(--s4);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--e, var(--line-strong));
+}
+
+.apv__identline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin: 0;
+}
+
+.apv__ident-engine {
+  font-size: var(--fs-sm);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.apv__ident-slash {
+  color: var(--line-strong);
+}
+
+.apv__ident-company {
+  font-size: var(--fs-h2);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.apv__ident-meta {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* ── THE RUN, WHEN THERE IS NOTHING TO APPROVE ────────────────────────────
+
+   The facts of a queued, running or report-less run, laid out as a compact
+   grid under the state that explains them. Numbers here are the run's own
+   counters, drawn only once the state above has said what they mean — a
+   QUEUED run's "0 pages fetched" is a fact about the queue, not the site. */
+.apv__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--s2) var(--s4);
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line-faint);
+}
+
+/* "Following this run": said out loud while the poll is live, so a run left
+   behind a dead worker visibly waits instead of silently sitting at zero. */
+.apv__following {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s3) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.apv__following::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--e, var(--accent));
+  animation: apv-pulse 1.6s var(--ease-in-out) infinite;
+}
+
+@keyframes apv-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .apv__following::before {
+    animation: none;
+  }
+}
+
+/* The reviewer's own words, under the approved callout. */
+.apv__comment {
+  margin: var(--s2) 0 0;
+  font-size: var(--fs-sm);
+  font-style: italic;
+  color: var(--text-soft);
+}
+
+/* The actions the backend offered for this state, wrapping when there are
+   several; the Reason field above them stays full width. */
+.apv__actions {
+  margin-top: var(--s4);
+  flex-wrap: wrap;
+}
+
+/* revision and previous -> next status, beside the actor's name. */
+.apv__transition {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+}

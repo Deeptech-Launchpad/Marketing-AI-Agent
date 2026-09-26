@@ -6,7 +6,7 @@ import { prisma, newId } from '../platform/db.js'
 import { ConflictError, NotFoundError } from '../platform/errors.js'
 import { logger } from '../platform/logger.js'
 import { mintLink } from '../workbench/links.js'
-import { composeMessage } from './personalize.js'
+import { composeFromTemplate, composeMessage } from './personalize.js'
 import { CallTaskProvider } from './providers/callTaskProvider.js'
 import { EmailFollowUpProvider, EmailProvider } from './providers/emailProvider.js'
 import { LinkedInProvider } from './providers/linkedInProvider.js'
@@ -14,8 +14,9 @@ import { runProvider, type OutreachProvider } from './providers/provider.js'
 import { WhatsAppProvider } from './providers/whatsAppProvider.js'
 import { defaultSequence, idempotencyKey, scheduledAtFor, stepIsEligible } from './sequence.js'
 import { assertOutreachReady, verifyEmail } from '../emailverification/service.js'
+import { discoveredWebsiteDomain } from '../prospects/discoveredCompanyAdapter.js'
 import { checkSuppression } from './suppression.js'
-import { validateAction } from './validation.js'
+import { validateAction, type ValidationOutcome } from './validation.js'
 import {
   CHANNEL_LIMITS,
   RETRYABLE_FAILURES,
@@ -68,7 +69,21 @@ export function channelStatus(): Array<{
 
 export interface CreateCampaignInput {
   tenantId: string
-  auditRunId: string
+  /**
+   * Required for the intent-basis path (below). Not required when auditRunId
+   * is given — that path derives it from the audit run itself, exactly as it
+   * always has.
+   */
+  crmCompanyId?: string
+  /** Set when crmCompanyId is a DiscoveredCompany.id placeholder — see that model. */
+  discoveredCompanyId?: string | null
+  /**
+   * The LEGACY basis. When given, campaign creation is built from this
+   * approved audit exactly as it always has been — see createCampaignFromAudit.
+   * When absent (the 2026-09-24 restructure's default), the campaign is built
+   * from Decision Makers + Intent Signals instead — see createCampaignFromIntent.
+   */
+  auditRunId?: string
   requestedByCrmUserId: string
   dryRun?: boolean
   startsAt?: Date
@@ -83,13 +98,19 @@ export interface CreateCampaignResult {
 }
 
 /**
- * Plans a campaign from an APPROVED audit.
+ * Plans a campaign — the LEGACY basis, from an APPROVED audit, unchanged.
+ * See createCampaignFromIntent for the 2026-09-24 restructure's default path.
  *
  * Every action is created up front with its schedule, its composed message and
  * its validation result, so a reviewer can read the whole sequence before any
  * of it is due. Nothing is executed here.
  */
 export async function createCampaign(input: CreateCampaignInput): Promise<CreateCampaignResult> {
+  if (!input.auditRunId) return createCampaignFromIntent(input)
+  return createCampaignFromAudit(input as CreateCampaignInput & { auditRunId: string })
+}
+
+async function createCampaignFromAudit(input: CreateCampaignInput & { auditRunId: string }): Promise<CreateCampaignResult> {
   const log = logger.child({ auditRunId: input.auditRunId })
 
   const report = await prisma.auditReport.findFirst({
@@ -132,10 +153,19 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   // Prefer a shortlisted product-data owner; otherwise there is no verified
   // person for the channels that need one, and that is recorded rather than
   // worked around.
-  const decisionMaker = await prisma.decisionMakerCandidate.findFirst({
-    where: { tenantId: input.tenantId, crmCompanyId: run.crmCompanyId, outcome: 'shortlisted' },
-    orderBy: { rank: 'asc' },
+  // Only from the LATEST completed discovery run: every run has its own rank 1,
+  // so ordering by rank across runs could pick a stale run's person.
+  const latestDmRun = await prisma.decisionMakerRun.findFirst({
+    where: { tenantId: input.tenantId, crmCompanyId: run.crmCompanyId, status: 'completed' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
   })
+  const decisionMaker = latestDmRun
+    ? await prisma.decisionMakerCandidate.findFirst({
+        where: { tenantId: input.tenantId, dmRunId: latestDmRun.id, outcome: 'shortlisted' },
+        orderBy: { rank: 'asc' },
+      })
+    : null
 
   const demo = await prisma.workbenchDemo.findFirst({
     where: { tenantId: input.tenantId, auditRunId: input.auditRunId, status: 'ready' },
@@ -344,6 +374,268 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
 }
 
 /**
+ * Plans a campaign — the DEFAULT basis, from Decision Makers + Intent
+ * Signals, for the 2026-09-24 restructure. Website Audit / Audit Report /
+ * Human Approval / AI Workbench are locked and will not produce new approved
+ * audits, so this is what "Prepare outreach" now runs by default.
+ *
+ * The gate: a completed Decision Maker run AND at least one active Intent
+ * Signal. Neither substitutes for the other — a shortlisted contact with no
+ * signal is not yet a reason to reach out, and a signal with nobody to send it
+ * to cannot be turned into an action.
+ *
+ * Message content comes from a Sales-approved OutreachTemplate, personalized
+ * by composeFromTemplate — never the deterministic, audit-finding blocks
+ * composeMessage builds for the legacy path above.
+ */
+async function createCampaignFromIntent(input: CreateCampaignInput): Promise<CreateCampaignResult> {
+  if (!input.crmCompanyId) {
+    throw new ConflictError('crmCompanyId is required to prepare outreach without an approved audit.', {})
+  }
+  const crmCompanyId = input.crmCompanyId
+  const log = logger.child({ crmCompanyId })
+
+  const dmRun = await prisma.decisionMakerRun.findFirst({
+    where: { tenantId: input.tenantId, crmCompanyId, status: 'completed' },
+    orderBy: { createdAt: 'desc' },
+  })
+  if (!dmRun) {
+    throw new ConflictError(
+      'No completed Decision Maker Discovery run exists for this company. Outreach may only be prepared once ' +
+        'Decision Maker Discovery has run and at least one intent signal has been detected.',
+      { crmCompanyId },
+    )
+  }
+  const decisionMaker = await prisma.decisionMakerCandidate.findFirst({
+    where: { tenantId: input.tenantId, dmRunId: dmRun.id, outcome: 'shortlisted' },
+    orderBy: { rank: 'asc' },
+  })
+
+  const intentSignals = await prisma.intentSignal.findMany({
+    where: { tenantId: input.tenantId, crmCompanyId, status: 'active' },
+    orderBy: { detectedAt: 'desc' },
+    take: 3,
+    select: { id: true, summary: true, sourceUrl: true },
+  })
+  if (intentSignals.length === 0) {
+    throw new ConflictError(
+      'No active intent signal exists for this company. Outreach may only be prepared once at least one ' +
+        'intent signal has been detected.',
+      { crmCompanyId },
+    )
+  }
+
+  // ── Company facts: the CRM when this id resolves there, DiscoveredCompany
+  //    otherwise (see that model's placeholder-id comment). Never invented —
+  //    a CRM company carries no stored "summary" today, so companySummary
+  //    stays null for one rather than being built from industry or name.
+  //    Recognised from the id itself, not only when the caller says so: the
+  //    screen passes the company in context, which for a company found by
+  //    "Find New Company" IS its DiscoveredCompany id.
+  let companyName: string | null
+  let companyDomain: string | null
+  let companySummary: string | null
+  const discovered = await prisma.discoveredCompany.findFirst({
+    where: { id: input.discoveredCompanyId ?? crmCompanyId, tenantId: input.tenantId },
+  })
+  if (input.discoveredCompanyId && !discovered) throw new NotFoundError('That discovered company no longer exists.')
+  if (discovered) {
+    companyName = discovered.companyName
+    companyDomain = discoveredWebsiteDomain(discovered)
+    companySummary = discovered.websiteSummary
+  } else {
+    const company = await getCrm().getCompany(crmCompanyId)
+    if (!company) throw new NotFoundError('That company no longer exists in NXT Sales.')
+    companyName = company.name
+    companyDomain = company.domain
+    companySummary = null
+  }
+
+  const startsAt = input.startsAt ?? new Date()
+  const dryRun = input.dryRun ?? env.OUTREACH_DEFAULT_DRY_RUN
+
+  const campaignId = newId()
+  await prisma.outreachCampaign.create({
+    data: {
+      id: campaignId,
+      tenantId: input.tenantId,
+      crmCompanyId,
+      discoveredCompanyId: discovered?.id ?? null,
+      companyName,
+      companyDomain,
+      decisionMakerId: decisionMaker?.id ?? null,
+      status: 'active',
+      autoSendEnabled: env.OUTREACH_AUTO_SEND,
+      dryRun,
+      startsAt,
+      requestedByCrmUserId: input.requestedByCrmUserId,
+    },
+  })
+
+  const definitions = defaultSequence().slice(0, env.OUTREACH_MAX_ACTIONS_PER_CAMPAIGN)
+  const created: CreateCampaignResult['actions'] = []
+
+  for (const def of definitions) {
+    const step = await prisma.outreachSequenceStep.create({
+      data: {
+        id: newId(),
+        tenantId: input.tenantId,
+        campaignId,
+        stepNumber: def.stepNumber,
+        channel: def.channel,
+        dayOffset: def.dayOffset,
+        purpose: def.purpose,
+        requiresPreviousStatus: (def.requiresPreviousStatus ?? undefined) as never,
+        requiresChannelEnabled: Boolean(def.requiresChannelEnabled),
+      },
+    })
+
+    const target = buildTarget(def.channel, {
+      companyName: companyName ?? crmCompanyId,
+      crmCompanyId,
+      decisionMaker,
+    })
+
+    // The one thing this path needs that the legacy path never did: a
+    // Sales-approved template for this channel. Absent one, the step is
+    // recorded as blocked — content nobody has supplied yet, a fact about
+    // this platform's setup, not about the company or the channel.
+    const template = await prisma.outreachTemplate.findFirst({
+      where: { tenantId: input.tenantId, channel: def.channel, isActive: true },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    const availability = PROVIDERS[def.channel].availability()
+    const limits = CHANNEL_LIMITS[def.channel]
+
+    let status: ActionStatus = 'scheduled'
+    let reason: string | null = null
+    let message: Awaited<ReturnType<typeof composeFromTemplate>> | null = null
+    let validation: ValidationOutcome = {
+      ok: false,
+      passed: [],
+      issues: [{ check: 'template', field: 'template', message: 'No template.' }],
+    }
+
+    if (!template) {
+      status = 'blocked_no_template'
+      reason = `No Sales-approved outreach template is configured yet for the "${def.channel}" channel.`
+    } else {
+      message = await composeFromTemplate({
+        channel: def.channel,
+        target,
+        companyName: companyName ?? crmCompanyId,
+        companySummary,
+        intentSignals,
+        template,
+        senderName: env.OUTREACH_FROM_NAME,
+        senderCompany: env.OUTREACH_COMPANY_NAME,
+        tenantId: input.tenantId,
+      })
+
+      validation = await validateAction({ tenantId: input.tenantId, auditRunId: null, message, target })
+
+      if (limits.requiresDestination && !target.destination) {
+        status = 'blocked_no_target'
+        reason = validation.issues.find((i) => i.check === 'target')?.message ?? 'No verified destination for this channel.'
+      } else if (!validation.ok) {
+        status = 'blocked_validation_failed'
+        reason = validation.issues.map((i) => i.message).join(' ')
+      } else if (availability.status === 'draft_only') {
+        status = 'manual_required'
+        reason = availability.reason ?? null
+      } else if (availability.status !== 'available') {
+        status = 'blocked_provider_unavailable'
+        reason = availability.reason ?? null
+      }
+    }
+
+    const actionId = newId()
+    await prisma.outreachAction.create({
+      data: {
+        id: actionId,
+        tenantId: input.tenantId,
+        campaignId,
+        stepId: step.id,
+        crmCompanyId,
+        companyName,
+        channel: def.channel,
+        stepNumber: def.stepNumber,
+        contactName: target.contactName,
+        contactTitle: target.contactTitle,
+        decisionMakerId: target.decisionMakerId,
+        destination: target.destination,
+        destinationKind: target.destinationKind,
+        status,
+        statusReason: reason,
+        idempotencyKey: idempotencyKey({
+          campaignId,
+          crmCompanyId,
+          channel: def.channel,
+          stepNumber: def.stepNumber,
+          destination: target.destination,
+          templateKey: message?.templateKey ?? `${def.channel}.no_template`,
+          templateVersion: message?.templateVersion ?? '0',
+        }),
+        providerName: PROVIDERS[def.channel].name,
+        providerStatus: availability.status,
+        validation: validation as never,
+        validationOk: validation.ok,
+        scheduledAt: scheduledAtFor(startsAt, def.dayOffset),
+      },
+    })
+
+    if (message) {
+      await prisma.outreachMessage.create({
+        data: {
+          id: newId(),
+          tenantId: input.tenantId,
+          actionId,
+          templateKey: message.templateKey,
+          templateVersion: message.templateVersion,
+          subject: message.subject,
+          body: message.body,
+          blocks: message.blocks as never,
+          ctaUrl: message.ctaUrl,
+          workbenchUrl: message.workbenchUrl,
+          evidence: message.evidence as never,
+          characterCount: message.length,
+        },
+      })
+    }
+
+    created.push({ id: actionId, channel: def.channel, stepNumber: def.stepNumber, status, reason })
+  }
+
+  await audit({
+    tenantId: input.tenantId,
+    actorType: 'user',
+    actorCrmUserId: input.requestedByCrmUserId,
+    action: 'outreach.campaign_created',
+    resourceType: 'OutreachCampaign',
+    resourceId: campaignId,
+    dataClass: 'customer_pii',
+    summary: `${companyName}: ${created.length} action(s) planned across ${new Set(created.map((c) => c.channel)).size} channel(s)`,
+  })
+
+  try {
+    await syncOutreachActions(input.tenantId, { actionIds: created.map((c) => c.id) })
+  } catch (err) {
+    log.error({ err, campaignId }, 'outreach: engagement lifecycle events could not be recorded')
+  }
+
+  log.info({ campaignId, actions: created.length, dryRun }, 'outreach campaign created (intent basis)')
+
+  return {
+    campaignId,
+    companyName,
+    actions: created,
+    decisionMaker: decisionMaker ? { name: decisionMaker.fullName, title: decisionMaker.rawTitle } : null,
+    workbenchUrl: null,
+  }
+}
+
+/**
  * Builds the target for a channel.
  *
  * A destination is only ever a value some source actually stated. Task #978
@@ -406,6 +698,20 @@ export async function executeAction(actionId: string): Promise<ExecuteResult> {
     include: { message: true, campaign: true },
   })
   if (!action) return { actionId, status: 'failed', reason: 'Action not found.', delivered: false, attempt: 0 }
+
+  // ── The Sales sequence is never executed by the platform ───────────────
+  // Its emails are reviewed, approved and sent by a person from their own
+  // mail client (src/outreach/salesSequence/). /release, /execute and the
+  // worker must not touch them — not even to record a provider as missing.
+  if (action.campaign.flow !== 'legacy') {
+    return {
+      actionId,
+      status: action.status as ActionStatus,
+      reason: 'This email belongs to the Sales-approved sequence, which a person sends manually. The platform does not execute it.',
+      delivered: false,
+      attempt: action.retryCount,
+    }
+  }
 
   const log = logger.child({ actionId, channel: action.channel })
 

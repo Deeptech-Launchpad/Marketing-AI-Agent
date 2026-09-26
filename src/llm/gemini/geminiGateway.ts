@@ -11,6 +11,9 @@ import type {
   LlmPort,
   LlmResult,
   LlmUsage,
+  WebSearchOptions,
+  WebSearchReference,
+  WebSearchResult,
 } from '../llmPort.js'
 import { resolvePrompt } from '../promptStore.js'
 import { recordLlmCall } from '../tokenLedger.js'
@@ -37,8 +40,25 @@ interface GeminiUsageMetadata {
   totalTokenCount?: number
 }
 
+/**
+ * What the Search tool attaches to a grounded answer.
+ *
+ * `groundingChunks` is written by the retrieval step, not by the model: it is
+ * the list of documents the index returned. That is exactly why this is the
+ * only part of a grounded response this platform treats as usable — the prose
+ * beside it is a model's account of those documents, and an account is not
+ * evidence.
+ */
+interface GeminiGroundingMetadata {
+  webSearchQueries?: string[]
+  groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>
+}
+
 interface GeminiResponse {
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> }
+    groundingMetadata?: GeminiGroundingMetadata
+  }>
   usageMetadata?: GeminiUsageMetadata
   modelVersion?: string
   error?: { message?: string }
@@ -197,6 +217,132 @@ export class GeminiGateway implements LlmPort {
       `${lastError?.message ?? 'Gemini call failed'} (tried ${candidates.length} model(s))`,
       { retryable: false },
     )
+  }
+
+  /**
+   * Runs one grounded search and returns WHERE THE INDEX POINTED.
+   *
+   * Two deliberate properties:
+   *
+   *   · NO responseSchema. The Search tool and structured output cannot be
+   *     combined on this API, and that restriction happens to enforce the
+   *     right thing — a grounded call here is not allowed to author JSON
+   *     facts about a company. It returns links.
+   *   · The URL list is read from `groundingMetadata.groundingChunks`, which
+   *     the retrieval step writes, and NEVER parsed out of the model's reply.
+   *     A URL the model typed is a URL the model may have invented; a chunk is
+   *     a document the index actually returned.
+   *
+   * The chunk URI is often a provider redirect rather than the destination.
+   * That is fine and is not resolved here: the caller fetches it through the
+   * SSRF-guarded transport, which revalidates every hop and reports the real
+   * `finalUrl`. Resolving it here would mean a second, unguarded request.
+   */
+  async searchWeb(opts: WebSearchOptions): Promise<WebSearchResult> {
+    return limit(() => this.searchWebInner(opts))
+  }
+
+  private async searchWebInner(opts: WebSearchOptions): Promise<WebSearchResult> {
+    const empty = { queriesRun: [], references: [], modelText: '', model: null, costUsd: 0 }
+    const query = opts.query.trim()
+    if (!query) return { ok: false, provider: this.name, ...empty, reason: 'An empty query was not sent.' }
+
+    const candidates = buildCandidates(env.GEMINI_MODEL_CONTENT || undefined, GEMINI_MODEL_PRIORITY)
+    const modelRequested = candidates[0] ?? 'gemini-flash-latest'
+    const body = {
+      // Stated so the reply stays close to the retrieved documents. The reply
+      // is not used as evidence either way; this only keeps the retrieval
+      // honest rather than letting it answer from memory.
+      systemInstruction: {
+        parts: [
+          {
+            text:
+              'Search the public web for the request and summarise only what the retrieved pages state. ' +
+              'Do not answer from prior knowledge. If the search returns nothing relevant, say so plainly.',
+          },
+        ],
+      },
+      contents: [{ role: 'user', parts: [{ text: query }] }],
+      tools: [{ google_search: {} }],
+      generationConfig: { temperature: 0 },
+    }
+
+    const started = Date.now()
+    let lastError: Error | null = null
+
+    for (const model of candidates) {
+      let res
+      try {
+        res = await post(`models/${model}:generateContent`, body)
+      } catch (err) {
+        lastError =
+          (err as Error).name === 'AbortError'
+            ? new Error(`${model} did not respond within ${env.GEMINI_ATTEMPT_TIMEOUT_MS}ms`)
+            : (err as Error)
+        continue
+      }
+
+      if (!res.ok) {
+        const message = res.json.error?.message ?? `Gemini API error (${res.status})`
+        lastError = new Error(message)
+        // A model that does not carry the Search tool is a model to skip, the
+        // same way an unavailable model name is.
+        if (canTryNextModel(res.status, message) || /tool|function|not supported/i.test(message)) continue
+        break
+      }
+
+      const usage = readUsage(res.json.usageMetadata)
+      const actualModel = res.json.modelVersion ?? model
+      const cost = estimateCost('gemini', actualModel, usage.promptTokens, usage.outputTokens)
+
+      await recordLlmCall({
+        tenantId: opts.tenantId,
+        runId: opts.runId,
+        stepId: null,
+        feature: opts.feature,
+        provider: 'gemini',
+        modelRequested,
+        model: actualModel,
+        fellBack: actualModel !== modelRequested,
+        usage,
+        costUsd: cost.totalCost,
+        priced: cost.priced,
+        latencyMs: Date.now() - started,
+        promptKey: 'llm.web_search',
+        promptVersion: 0,
+      })
+
+      const grounding = res.json.candidates?.[0]?.groundingMetadata
+      const seen = new Set<string>()
+      const references: WebSearchReference[] = []
+      for (const chunk of grounding?.groundingChunks ?? []) {
+        const uri = chunk.web?.uri?.trim()
+        if (!uri || seen.has(uri)) continue
+        seen.add(uri)
+        references.push({ url: uri, title: chunk.web?.title?.trim() || null })
+        if (references.length >= (opts.maxReferences ?? 10)) break
+      }
+
+      return {
+        ok: true,
+        provider: this.name,
+        queriesRun: grounding?.webSearchQueries ?? [],
+        references,
+        modelText: firstText(res.json),
+        model: actualModel,
+        costUsd: cost.totalCost,
+        // An answered search that retrieved nothing is a real outcome and is
+        // reported as one, rather than as a failure of the search itself.
+        reason: references.length === 0 ? 'The search returned no indexed pages for that query.' : null,
+      }
+    }
+
+    return {
+      ok: false,
+      provider: this.name,
+      ...empty,
+      reason: `${lastError?.message ?? 'Grounded search failed'} (tried ${candidates.length} model(s))`,
+    }
   }
 
   private parseOrThrow(text: string): unknown {

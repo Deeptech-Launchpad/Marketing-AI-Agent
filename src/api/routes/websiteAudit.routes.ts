@@ -2,11 +2,22 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { audit } from '../../platform/audit.js'
 import { prisma } from '../../platform/db.js'
+import { loadProductEvidence } from '../../websiteaudit/productEvidence.js'
 import { NotFoundError } from '../../platform/errors.js'
 import { enqueue, QUEUE_WEBSITE_AUDIT } from '../../platform/queue.js'
 import { auditLimits, queueWebsiteAudit } from '../../websiteaudit/audit.js'
 import { sortFindingsByPriority } from '../../websiteaudit/findings.js'
 import { generateAuditReport } from '../../websiteaudit/report.js'
+import { buildCustomerView } from '../../websiteaudit/customerView.js'
+import { AssistantTurnSchema, askReportAssistant } from '../../websiteaudit/reportAssistant.js'
+import {
+  generateCustomerReport,
+  planCustomerReportQr,
+  type CustomerReportQrState,
+} from '../../websiteaudit/customerReport.js'
+import { mintLink, workbenchQrUrl } from '../../workbench/links.js'
+import { brandedEnrichedPdpHtml } from '../../workbench/enrichedPdpBrand.js'
+import type { PdpEnrichment } from '../../websiteaudit/pdpEnrichment.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -100,6 +111,63 @@ websiteAuditRoutes.post(
   }),
 )
 
+/**
+ * 1b. The runs this company already has, newest first.
+ *
+ * Added because selecting a company in Shared Context could not reach its own
+ * work. Every run-scoped screen resolves its run from the URL or from a
+ * per-company key in the operator's browser, and a colleague — or the same
+ * person on another machine — has neither. A company with three completed
+ * audits and an approved report therefore read "No audit run open", which is
+ * indistinguishable from never having been audited.
+ *
+ * Scoped by tenant and company, so this can only ever list runs belonging to
+ * the company asked about. It lists; it starts nothing.
+ */
+websiteAuditRoutes.get(
+  '/companies/:crmCompanyId/runs',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const limit = Math.min(Number(req.query.limit ?? 20) || 20, 50)
+
+    const runs = await prisma.websiteAuditRun.findMany({
+      where: { tenantId: p.tenantId, crmCompanyId: req.params.crmCompanyId! },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        crmCompanyId: true,
+        companyName: true,
+        startUrl: true,
+        status: true,
+        pagesFetched: true,
+        productPages: true,
+        categoryPages: true,
+        failureReason: true,
+        createdAt: true,
+        completedAt: true,
+      },
+    })
+
+    // Which run a screen should open: the newest that actually inspected
+    // something. A queued or zero-page run is listed but never preferred —
+    // opening one is what put a zero-valued report on screen as if it were a
+    // finding. Null when this company has no such run, which the screens say
+    // rather than drawing empty counts.
+    const usable = runs.find(
+      (r) => (r.status === 'completed' || r.status === 'partial') && r.pagesFetched > 0,
+    )
+
+    res.json({
+      crmCompanyId: req.params.crmCompanyId,
+      total: runs.length,
+      latestUsableRunId: usable?.id ?? null,
+      runs,
+    })
+  }),
+)
+
 /** 2. Run status. */
 websiteAuditRoutes.get(
   '/runs/:id',
@@ -111,13 +179,95 @@ websiteAuditRoutes.get(
     })
     if (!run) throw new NotFoundError('Website audit run not found.')
 
+    // The page photographs are served by their own endpoints, not inlined here.
+    const { pdpBeforeCapture, pdpAfterCapture, pdpEnrichment, ...fields } = run
     res.json({
-      ...run,
+      ...fields,
+      pdp: {
+        hasBeforeCapture: Boolean(pdpBeforeCapture),
+        hasAfterCapture: Boolean(pdpAfterCapture),
+        enrichmentStatus: (pdpEnrichment as { status?: string } | null)?.status ?? null,
+      },
       summary:
         run.status === 'partial'
           ? `Incomplete: ${run.pagesFetched} page(s) inspected before ${((run.limitsHit ?? []) as string[]).join(', ') || 'errors'} stopped the crawl.`
           : `${run.pagesFetched} page(s) inspected — ${run.productPages} product, ${run.categoryPages} category, ${run.otherPages} other.`,
+      // WHICH OF THE FOUR EVIDENCE STATES THIS RUN REACHED.
+      //
+      // Carried on the RUN, not only on the customer view, because the state
+      // that most needs saying is the one the customer view cannot reach: a
+      // company with no website never gets a report, so /customer-view 404s
+      // and every screen fell back to a generic absence. "This website was
+      // not read, so nothing is known about their catalogue" is a different
+      // statement from "nothing has been built yet", and the first is only
+      // available here.
+      productEvidence: await loadProductEvidence(run.id),
     })
+  }),
+)
+
+/**
+ * The End PDP audit: which case the link is in, and the enriched record.
+ *
+ * `assessment` is null for a run made before the End PDP audit existed.
+ */
+websiteAuditRoutes.get(
+  '/runs/:id/pdp',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const run = await prisma.websiteAuditRun.findFirst({
+      where: { id: req.params.id, tenantId: p.tenantId },
+      select: { id: true, companyName: true, pdpAssessment: true, pdpEnrichment: true, pdpBeforeCapture: true, pdpAfterCapture: true },
+    })
+    if (!run) throw new NotFoundError('Website audit run not found.')
+    res.json({
+      auditRunId: run.id,
+      companyName: run.companyName,
+      assessment: run.pdpAssessment ?? null,
+      enrichment: run.pdpEnrichment ?? null,
+      captures: { before: Boolean(run.pdpBeforeCapture), after: Boolean(run.pdpAfterCapture) },
+    })
+  }),
+)
+
+/** The enriched product page — the Workbench "After" view — as a standalone HTML document. */
+websiteAuditRoutes.get(
+  '/runs/:id/pdp/after.html',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const run = await prisma.websiteAuditRun.findFirst({
+      where: { id: req.params.id, tenantId: p.tenantId },
+      select: { id: true },
+    })
+    if (!run) throw new NotFoundError('Website audit run not found.')
+    // The Workbench After view: the company's own branding around our
+    // enriched product-page structure.
+    const html = await brandedEnrichedPdpHtml(run.id)
+    if (!html) throw new NotFoundError('No enriched product record exists for this run.')
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-store')
+    res.send(html)
+  }),
+)
+
+/** The photograph of the original page (`before`) or the enriched page (`after`). */
+websiteAuditRoutes.get(
+  '/runs/:id/pdp/:which(before|after).jpg',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const run = await prisma.websiteAuditRun.findFirst({
+      where: { id: req.params.id, tenantId: p.tenantId },
+      select: { pdpBeforeCapture: true, pdpAfterCapture: true },
+    })
+    if (!run) throw new NotFoundError('Website audit run not found.')
+    const bytes = req.params.which === 'before' ? run.pdpBeforeCapture : run.pdpAfterCapture
+    if (!bytes) throw new NotFoundError('No capture of that page exists for this run.')
+    res.setHeader('Content-Type', 'image/jpeg')
+    res.setHeader('Cache-Control', 'private, max-age=300')
+    res.send(Buffer.from(bytes))
   }),
 )
 
@@ -360,6 +510,261 @@ websiteAuditRoutes.get(
       nextStage:
         'Task #979 ends at ready_for_approval. Human approval of this report is Task #980 and is not implemented here.',
     })
+  }),
+)
+
+/**
+ * 7b. The CUSTOMER-FACING reading of a run.
+ *
+ * What the Audit Report and AI Workbench screens render: this company's own
+ * products, images, gaps and categories, rather than the audit's internals.
+ * Available before approval so an internal preview can be shown; `approved`
+ * says whether it may be put in front of a customer, and the caller enforces
+ * that.
+ */
+websiteAuditRoutes.get(
+  '/runs/:id/customer-view',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    res.json(await buildCustomerView(p.tenantId, req.params.id!))
+  }),
+)
+
+/**
+ * The Audit Report assistant.
+ *
+ * Grounded in this one audit, and read-only: it answers, drafts, and may
+ * PROPOSE an edit to the report's editable prose. Applying a proposal is a
+ * separate call to the existing /report/revise route, which re-validates and
+ * leaves approval to a reviewer — so this route has no write path of its own.
+ *
+ * `operate` rather than `view`: every call spends model budget.
+ */
+const AssistantBody = z
+  .object({
+    message: z.string().trim().min(1).max(2000),
+    history: z.array(AssistantTurnSchema).max(24).default([]),
+  })
+  .strict()
+
+websiteAuditRoutes.post(
+  '/runs/:id/assistant',
+  requirePermission('operate'),
+  validateBody(AssistantBody),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const body = req.body as z.infer<typeof AssistantBody>
+    const answer = await askReportAssistant({
+      tenantId: p.tenantId,
+      auditRunId: req.params.id!,
+      message: body.message,
+      history: body.history,
+    })
+
+    // Recorded without the conversation text: the audit trail needs to show
+    // that the assistant was used and what it offered, not repeat the chat.
+    await audit({
+      tenantId: p.tenantId,
+      actorType: 'user',
+      actorCrmUserId: p.crmUserId,
+      action: 'website_audit.assistant_asked',
+      resourceType: 'WebsiteAuditRun',
+      resourceId: req.params.id!,
+      summary: `Audit assistant: ${answer.drafts.length} draft(s), ${answer.proposedEdit ? (answer.proposedEdit.blocked ? 'blocked edit proposal' : 'edit proposal') : 'no edit proposal'}`,
+      requestId: req.requestId,
+    })
+
+    res.json(answer)
+  }),
+)
+
+/**
+ * 8b. The 5-6 page CUSTOMER PDF.
+ *
+ * Distinct from /report.pdf, which is the internal document. This one is gated
+ * on approval by generateCustomerReport itself.
+ *
+ * THE QR CODE, AND WHY IT IS NOT ALWAYS THERE
+ *
+ * The QR points at a customer-safe share link for THIS demonstration, and a
+ * share link is a bearer credential. The first version of this handler minted
+ * one on every request. That was survivable while the only caller was a
+ * download button and became link spam the moment the Audit Report screen
+ * embedded the PDF in an inline viewer: one live customer credential per page
+ * view, all against a single demonstration.
+ *
+ * So minting is now the exception rather than the default step:
+ *
+ *   unapproved  mints nothing. A share link is a bearer credential and minting
+ *           one is an act of publication, so it sits on the approved side of
+ *           the gate alongside the QR and the watermark. It did not, and a
+ *           review export therefore spent the one link the approved copy was
+ *           going to carry — leaving the document that actually reaches the
+ *           customer with no QR on it.
+ *   ?qr=0   mints nothing and renders no QR. This is what the inline viewer
+ *           asks for, so that merely LOOKING at the report cannot create a
+ *           credential.
+ *   default at most ONE link per demonstration carries CUSTOMER_REPORT_LABEL.
+ *           When a usable one already exists the PDF is rendered WITHOUT a QR,
+ *           because mintLink returns the plaintext token exactly once and the
+ *           row keeps only its hash — an existing link's URL is genuinely
+ *           unrecoverable, and both ways around that (storing the plaintext,
+ *           or printing a code built from something other than the real token)
+ *           are worse than a page with no QR on it.
+ *
+ * X-Report-QR says which of those the caller got. A fresh QR is therefore an
+ * act rather than a side effect: revoke the labelled link, or let it expire,
+ * and the next export mints its replacement.
+ */
+
+// The marker that makes "the link this endpoint minted" findable on the next
+// request. Label is the only field there is to match on — the token is a hash
+// and nothing else on the row says what the link was for.
+const CUSTOMER_REPORT_LABEL = 'Customer report QR'
+
+websiteAuditRoutes.get(
+  '/runs/:id/customer-report.pdf',
+  requirePermission('operate'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const runId = req.params.id!
+
+    const run = await prisma.websiteAuditRun.findFirst({
+      where: { id: runId, tenantId: p.tenantId },
+      select: { id: true, companyName: true },
+    })
+    if (!run) throw new NotFoundError('Website audit run not found.')
+
+    // Opting out is a value, not the presence of the parameter: a stray ?qr=
+    // must not silently drop the QR from a document somebody is about to hand
+    // to a customer.
+    const qrRequested = req.query.qr !== '0' && req.query.qr !== 'false'
+
+    // A link belongs to a demonstration, which belongs to this run, which
+    // belongs to one company — so the code cannot resolve to another
+    // customer's material.
+    const demo = qrRequested
+      ? await prisma.workbenchDemo.findFirst({
+          where: { auditRunId: runId, tenantId: p.tenantId },
+          select: { id: true, status: true },
+        })
+      : null
+
+    // MINTING IS PUBLICATION, so approval is read BEFORE anything is created.
+    // This endpoint used to mint on the demonstration's readiness alone, which
+    // let a review export spend the one QR the approved copy was going to
+    // carry. The rule itself lives with generateCustomerReport, which applies
+    // the same one to the document.
+    const reportRow = qrRequested
+      ? await prisma.auditReport.findFirst({
+          where: { tenantId: p.tenantId, auditRunId: runId },
+          select: { status: true },
+        })
+      : null
+    const plan = planCustomerReportQr({
+      qrRequested,
+      reportStatus: reportRow?.status ?? null,
+      demoStatus: demo?.status ?? null,
+    })
+
+    let qrTarget: string | null = null
+    let qrState: CustomerReportQrState = plan.state
+
+    if (plan.consider && demo) {
+      // maxViews is checked in JS because comparing it to viewCount is a
+      // column-to-column comparison the query cannot express. This is the same
+      // predicate resolveLink applies when the customer arrives, so a link
+      // treated as usable here is one that would actually open.
+      const existing = await prisma.workbenchLink.findMany({
+        where: {
+          tenantId: p.tenantId,
+          demoId: demo.id,
+          label: CUSTOMER_REPORT_LABEL,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { id: true, maxViews: true, viewCount: true },
+      })
+      const usable = existing.find((l) => l.maxViews === null || l.viewCount < l.maxViews)
+
+      if (usable) {
+        // No QR on purpose: that link is alive and shareable, but its URL
+        // cannot be rebuilt from the stored hash, and a second link for the
+        // same demonstration is exactly what this endpoint stopped doing.
+        qrState = 'existing-link-not-recoverable'
+      } else {
+        const minted = await mintLink({
+          tenantId: p.tenantId,
+          demoId: demo.id,
+          createdByCrmUserId: p.crmUserId,
+          label: CUSTOMER_REPORT_LABEL,
+        })
+        qrTarget = workbenchQrUrl(minted.token)
+        qrState = 'minted'
+
+        // Recorded the way POST /workbench/link records its own mint. A
+        // customer-facing credential created on the side of a PDF export still
+        // has to appear in the one place someone would go looking for it.
+        await audit({
+          tenantId: p.tenantId,
+          actorType: 'user',
+          actorCrmUserId: p.crmUserId,
+          action: 'workbench.link_minted',
+          resourceType: 'WorkbenchLink',
+          resourceId: minted.linkId,
+          dataClass: 'internal',
+          summary: `Share link created for the customer report QR, expires ${minted.expiresAt
+            .toISOString()
+            .slice(0, 10)}`,
+          requestId: req.requestId,
+        })
+      }
+    }
+
+    const result = await generateCustomerReport({
+      tenantId: p.tenantId,
+      auditRunId: runId,
+      workbenchUrl: qrTarget,
+      sampleCount: 2,
+      // The person asking for this copy signs it: the report's "Prepared by"
+      // block names them, so the customer knows who handed it over.
+      requestedBy: { name: p.name, email: p.email },
+    })
+
+    await audit({
+      tenantId: p.tenantId,
+      actorType: 'user',
+      actorCrmUserId: p.crmUserId,
+      action: 'website_audit.customer_report_exported',
+      resourceType: 'AuditReport',
+      resourceId: runId,
+      summary: `Customer report exported: ${result.pdf.pageCount} page(s), audience ${result.audience}, QR ${qrState}`,
+      requestId: req.requestId,
+    })
+
+    // Said in a header as well as in the bytes. The watermark is what a person
+    // sees; this is what the interface reads to decide whether it may call the
+    // document customer-ready, so neither has to infer it from the other.
+    res.setHeader('X-Report-Audience', result.audience)
+    res.setHeader('X-Report-Approval-State', result.approvalState)
+
+    const safeName = (run.companyName ?? 'company')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 60)
+
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}-product-data-health-check.pdf"`)
+    res.setHeader('X-Report-SHA256', result.pdf.sha256)
+    res.setHeader('X-Report-Pages', String(result.pdf.pageCount))
+    // Lets the caller say why a document has no QR on it instead of leaving the
+    // reader to guess whether the code failed to render.
+    res.setHeader('X-Report-QR', qrState)
+    res.send(result.pdf.bytes)
   }),
 )
 

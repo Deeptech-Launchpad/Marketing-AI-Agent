@@ -1,12 +1,19 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Building2, ChevronDown } from 'lucide-react'
+import { Building2, ChevronDown, Search } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync } from '../../lib/hooks'
 import { useCompany } from '../../lib/companyContext'
-import type { EngagementSummary, IntentScore, Qualification } from '../../lib/types'
-import { Chip, StatusBadge, Unset, toUiStatus } from '../ui/primitives'
+import type { CompanySearch, EngagementEvent } from '../../lib/types'
+import { technologySummary } from '../../lib/enrichmentSummary'
+import { Unset } from '../ui/primitives'
 import './shell.css'
+
+/** "workbench_demo_opened" as a person would say it. */
+function humanEvent(eventType: string): string {
+  const words = eventType.replace(/[._-]+/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // The shared company context.
@@ -21,34 +28,87 @@ import './shell.css'
 export function ContextPanel() {
   const { company, companies, select } = useCompany()
   const [picking, setPicking] = useState(false)
+  const [term, setTerm] = useState('')
+  // The typed word settles before the CRM is asked. A request per keystroke
+  // would put avoidable load on the customer's CRM for answers nobody reads.
+  const [settled, setSettled] = useState('')
 
   const id = company?.crmCompanyId
 
-  // Each engine is asked separately, so one slow or empty engine never blanks
-  // the panel. A 404 here means "this engine has nothing for this company",
-  // which is a legitimate answer rather than a failure.
-  const score = useAsync<IntentScore | null>(
-    (signal) => (id ? api.get<IntentScore>(`/intent-score/companies/${id}`, { signal, nullOn404: true }) : Promise.resolve(null)),
-    [id],
-    { enabled: Boolean(id) },
-  )
-  const qualification = useAsync<Qualification | null>(
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(term.trim()), 250)
+    return () => clearTimeout(timer)
+  }, [term])
+
+  // WHAT THE PICKER OFFERS, AND FROM WHERE.
+  //
+  // The register holds the companies this platform has worked on. That is not
+  // the same question as "which companies does the customer have" — the CRM
+  // answers that, and a company sitting in it could not be selected here until
+  // some engine happened to touch it. So the typed word goes to both: the
+  // register is filtered in the browser, and the CRM is asked as well.
+  const found = useAsync<CompanySearch | null>(
     (signal) =>
-      id ? api.get<Qualification>(`/sales-qualification/companies/${id}`, { signal, nullOn404: true }) : Promise.resolve(null),
-    [id],
-    { enabled: Boolean(id) },
+      settled.length >= 2
+        ? api.get<CompanySearch>(`/companies/search?q=${encodeURIComponent(settled)}&limit=20`, { signal })
+        : Promise.resolve(null),
+    [settled],
+    { enabled: picking && settled.length >= 2 },
   )
-  const engagement = useAsync<EngagementSummary | null>(
+
+  // Intent Score and Sales Qualification are not requested at all while their
+  // presentation is locked. Fetching a value in order not to show it is a
+  // request made for nothing, and it would leave the panel able to leak one
+  // through a loading or error state.
+  //
+  // Engagement asks for the EVENTS rather than the summary. The summary is a
+  // set of counts (events by us, events by the prospect, distinct sessions),
+  // and a count was exactly what could not be defended: nothing on the panel
+  // said what one unit of it was, which events were inside it, or over what
+  // period. An act has a name, a channel, a time and a source, and every one
+  // of those can be checked.
+  const activity = useAsync<{ events: EngagementEvent[] } | null>(
     (signal) =>
-      id ? api.get<EngagementSummary>(`/engagement/companies/${id}/summary`, { signal, nullOn404: true }) : Promise.resolve(null),
+      id
+        ? api.get<{ events: EngagementEvent[] }>(`/engagement/companies/${id}/timeline?limit=3`, {
+            signal,
+            nullOn404: true,
+          })
+        : Promise.resolve(null),
     [id],
     { enabled: Boolean(id) },
   )
+
+  // The selected company as the register knows it NOW. `company` is the
+  // reference captured at selection time (and restored from storage), so on
+  // its own it froze whatever was known then — "Website: Not recorded" beside a
+  // company enrichment had since read. The merged entry in `companies` is kept
+  // current by the register, so it wins; `company` is the fallback.
+  const current = useMemo(
+    () => (id ? companies.find((c) => c.crmCompanyId === id) ?? null : null),
+    [companies, id],
+  )
+  const website = current?.sourceUrl || company?.sourceUrl || current?.website || company?.website || null
+  const status = current?.enrichmentStatus ?? company?.enrichmentStatus ?? null
+  const technologies = current?.technologies ?? company?.technologies
+  const techText = technologySummary({ status, technologies: (technologies ?? []).map((name) => ({ name })) })
+  const techNames = status === 'enriched' ? technologies ?? [] : []
 
   const sorted = useMemo(
     () => [...companies].sort((a, b) => (a.companyName ?? '').localeCompare(b.companyName ?? '')),
     [companies],
   )
+
+  const needle = term.trim().toLowerCase()
+  const known = useMemo(
+    () => (needle ? sorted.filter((c) => (c.companyName ?? c.crmCompanyId).toLowerCase().includes(needle)) : sorted),
+    [sorted, needle],
+  )
+  // A company already on the list above is not repeated below.
+  const fromCrm = useMemo(() => {
+    const have = new Set(known.map((c) => c.crmCompanyId))
+    return (found.data?.companies ?? []).filter((c) => !have.has(c.crmCompanyId))
+  }, [found.data, known])
 
   return (
     <aside className="context" aria-label="Company context">
@@ -64,12 +124,24 @@ export function ContextPanel() {
 
         {picking && (
           <div className="context__menu" role="listbox">
-            {sorted.length === 0 && (
+            <div className="context__search">
+              <Search size={13} aria-hidden="true" />
+              <input
+                autoFocus
+                value={term}
+                onChange={(e) => setTerm(e.target.value)}
+                placeholder="Company or industry…"
+                aria-label="Search companies in the CRM"
+              />
+            </div>
+
+            {known.length === 0 && !needle && (
               <p className="context__menu-empty">
-                No company has been through the pipeline yet. Run enrichment to add one.
+                No company has been through the pipeline yet. Run enrichment to add one, or search the CRM above.
               </p>
             )}
-            {sorted.map((c) => (
+
+            {known.map((c) => (
               <button
                 key={c.crmCompanyId}
                 role="option"
@@ -81,9 +153,54 @@ export function ContextPanel() {
                 }}
               >
                 <span>{c.companyName ?? c.crmCompanyId}</span>
-                {c.technologyCount ? <span className="mono context__menu-meta">{c.technologyCount} tech</span> : null}
+                {c.enrichmentStatus === 'enriched' && c.technologies?.length ? (
+                  <span className="mono context__menu-meta">{c.technologies[0]}{c.technologies.length > 1 ? ` +${c.technologies.length - 1}` : ''}</span>
+                ) : null}
               </button>
             ))}
+
+            {/* THE CRM'S OWN ANSWER, kept apart from the platform's own list so
+                nobody has to wonder which is which. */}
+            {needle.length >= 2 && (
+              <>
+                <p className="context__menu-head">In NXT Sales</p>
+                {found.loading && <p className="context__menu-empty">Searching the CRM…</p>}
+                {found.error && (
+                  <p className="context__menu-empty">The CRM could not be searched: {found.error.message}</p>
+                )}
+                {!found.loading && !found.error && fromCrm.length === 0 && (
+                  <p className="context__menu-empty">{found.data?.note ?? 'No company in the CRM matched this.'}</p>
+                )}
+                {fromCrm.map((c) => (
+                  <button
+                    key={c.crmCompanyId}
+                    role="option"
+                    aria-selected={c.crmCompanyId === id}
+                    className="context__menu-item"
+                    onClick={() => {
+                      // Selected straight from the CRM record: the name, the
+                      // site and the industry as NXT Sales holds them, and
+                      // nothing filled in that it does not.
+                      select({
+                        crmCompanyId: c.crmCompanyId,
+                        companyName: c.companyName,
+                        sourceUrl: c.website,
+                        website: c.website,
+                        industry: c.industry,
+                        location: c.country,
+                      })
+                      setPicking(false)
+                      setTerm('')
+                    }}
+                  >
+                    <span>{c.companyName}</span>
+                    <span className="mono context__menu-meta">
+                      {c.matchedOn === 'industry' ? (c.industry ?? 'industry') : (c.country ?? c.industry ?? '')}
+                    </span>
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         )}
       </header>
@@ -102,91 +219,51 @@ export function ContextPanel() {
               <dd>{company.companyName ?? <Unset />}</dd>
               <dt>Website</dt>
               <dd>
-                {company.sourceUrl ? (
-                  <a href={company.sourceUrl} target="_blank" rel="noopener noreferrer">
-                    {company.sourceUrl.replace(/^https?:\/\//, '').slice(0, 30)}
+                {website ? (
+                  <a href={/^https?:\/\//i.test(website) ? website : `https://${website}`} target="_blank" rel="noopener noreferrer">
+                    {website.replace(/^https?:\/\//, '').slice(0, 30)}
                   </a>
                 ) : (
                   <Unset />
                 )}
               </dd>
               <dt>Technologies</dt>
-              <dd className="tnum">{company.technologyCount ?? <Unset what="None detected" />}</dd>
+              {/* Names, not a count, and an empty state that says WHY it is
+                  empty: never enriched, unreachable, or read with nothing
+                  matched are three different facts. */}
+              <dd title={techNames.length ? techNames.join(', ') : undefined}>
+                {techNames.length ? techText : <Unset what={techText} />}
+              </dd>
               <dt>CRM id</dt>
               <dd className="mono context__id">{company.crmCompanyId}</dd>
             </dl>
           </section>
 
-          {/* Intent score — read from #984, never recomputed here. */}
+          {/* Engagement, as acts rather than as arithmetic.
+              Four counters stood here: events by the prospect, events by us,
+              distinct sessions, and a freshness word. None of them answered
+              "what happened, when, and how would I check it?" - and a
+              three-digit total beside a company name reads as interest whether
+              or not anyone can say what a single unit of it was. These are the
+              last acts themselves. */}
           <section className="context__block">
-            <p className="eyebrow">Intent</p>
-            {score.loading ? (
+            <p className="eyebrow">Recent activity</p>
+            {activity.loading ? (
               <div className="skeleton context__skel" />
-            ) : score.data?.scored ? (
-              <div className="context__score">
-                <span className="context__score-num tnum">{score.data.score}</span>
-                <span className="context__score-of">/ {score.data.scoreRange?.max ?? 100}</span>
-                <Chip tone={score.data.level === 'HIGH' ? 'ok' : score.data.level === 'MEDIUM' ? 'warn' : 'neutral'}>
-                  {score.data.level}
-                </Chip>
-              </div>
-            ) : (
-              <Unset what="Not scored yet" />
-            )}
-            {score.data?.policyStatus === 'provisional' && score.data?.scored && (
-              <p className="context__caveat">Provisional weights, not business-approved.</p>
-            )}
-          </section>
-
-          {/* Qualification — read from #985. */}
-          <section className="context__block">
-            <p className="eyebrow">Qualification</p>
-            {qualification.loading ? (
-              <div className="skeleton context__skel" />
-            ) : qualification.data?.evaluated ? (
-              <>
-                <StatusBadge status={toUiStatus(qualification.data.status)} label={formatStatus(qualification.data.status)} />
-                <dl className="context__dl context__dl--tight">
-                  <dt>Owner</dt>
-                  <dd>{qualification.data.owner?.name ?? <Unset what="Unassigned" />}</dd>
-                  <dt>Alert</dt>
-                  <dd>{formatStatus(qualification.data.alert?.status)}</dd>
-                  <dt>Follow-up</dt>
-                  <dd>{formatStatus(qualification.data.followUp?.status)}</dd>
-                </dl>
-              </>
-            ) : (
-              <Unset what="Not evaluated yet" />
-            )}
-          </section>
-
-          {/* Engagement — #983 keeps prospect acts apart from ours, and so
-              does this panel. Merging them would read as interest we caused. */}
-          <section className="context__block">
-            <p className="eyebrow">Engagement</p>
-            {engagement.loading ? (
-              <div className="skeleton context__skel" />
-            ) : engagement.data && engagement.data.totalEvents > 0 ? (
-              <dl className="context__dl context__dl--tight">
-                <dt>By the prospect</dt>
-                <dd className="tnum">{engagement.data.prospectEvents}</dd>
-                <dt>By AltiusNXT</dt>
-                <dd className="tnum">{engagement.data.ourEvents}</dd>
-                <dt>Visits</dt>
-                <dd className="tnum">{engagement.data.distinctSessions}</dd>
-                <dt>Last seen</dt>
-                <dd>
-                  {engagement.data.lastEventAt ? (
-                    <span title={new Date(engagement.data.lastEventAt).toLocaleString()}>
-                      {engagement.data.lastEventFreshness}
+            ) : activity.data?.events?.length ? (
+              <ul className="context__acts">
+                {activity.data.events.slice(0, 3).map((e) => (
+                  <li key={e.id} className="context__act">
+                    <span className="context__act-what">{humanEvent(e.eventType)}</span>
+                    <span className="context__act-meta">
+                      {e.channel} · {new Date(e.occurredAt).toLocaleDateString()}
                     </span>
-                  ) : (
-                    <Unset />
-                  )}
-                </dd>
-              </dl>
+                    <span className="context__act-src">{e.sourceProvider ?? e.source}</span>
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <Unset what="Nothing observed yet" />
+              <p className="context__none">No prospect engagement observed yet.</p>
             )}
           </section>
 
@@ -199,8 +276,3 @@ export function ContextPanel() {
   )
 }
 
-/** Turns a backend status token into something a person reads. */
-function formatStatus(raw: string | null | undefined): string {
-  if (!raw) return '—'
-  return raw.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
-}

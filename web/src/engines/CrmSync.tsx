@@ -19,6 +19,26 @@ import { Play, FileJson } from 'lucide-react'
 // boundary rather than delivering them, the label says "prepared", and the
 // exact blocker is quoted from the provider.
 
+/** Why a handoff is held, said in the terms of the state that held it. */
+const BLOCKED_WHY: Record<string, string> = {
+  blocked_not_qualified:
+    'This lead has not qualified, so nothing is handed to the CRM. Only a qualified lead enters the handoff.',
+  blocked_validation:
+    'The package did not validate, so it was not offered to the CRM. The failed checks are listed under Validation.',
+  blocked_missing_owner: 'The package is prepared but no sales owner is assigned, so there is nobody to hand it to.',
+  blocked_provider_unavailable:
+    'The package is prepared but cannot be synchronised because no approved CRM write adapter is configured.',
+  default: 'The package is prepared and held rather than delivered.',
+}
+
+/** What would actually clear it. */
+const BLOCKED_FIX: Record<string, string> = {
+  blocked_not_qualified: 'Nothing to do here. A handoff is prepared automatically if and when this lead qualifies.',
+  blocked_validation: 'Resolve the failed checks below, then prepare the handoff again.',
+  blocked_missing_owner: 'Assign an account owner on the company record in NXT Sales.',
+  default: 'Approve a CRM write adapter and add the write methods to the CRM port.',
+}
+
 export function CrmSync() {
   const engine = useEngine('crm')
   const { company } = useCompany()
@@ -138,15 +158,22 @@ export function CrmSync() {
 
               {blocked && (
                 <BlockedState
-                  what="CRM write adapter unavailable"
-                  why={
-                    sync.data.lastError?.message ??
-                    'The package is prepared but cannot be synchronised because no approved CRM write adapter is configured.'
+                  // The state says WHY, and they are not the same why: a lead
+                  // that has not qualified is not a missing adapter, and
+                  // naming the wrong blocker sends someone to fix the wrong
+                  // thing. The label comes from the record itself.
+                  what={sync.data.stateLabel}
+                  why={sync.data.lastError?.message ?? BLOCKED_WHY[sync.data.state] ?? BLOCKED_WHY.default!}
+                  affects={
+                    sync.data.state === 'blocked_not_qualified'
+                      ? 'This lead only. Qualified leads are unaffected.'
+                      : 'Every qualified lead. Packages are validated and held in the outbox rather than delivered.'
                   }
-                  affects="Every qualified lead. Packages are validated and held in the outbox rather than delivered."
                   remediation={
-                    providers.data?.providers.find((p) => p.name === 'nxt_sales')?.remediation ??
-                    'Approve a CRM write adapter and add the write methods to the CRM port.'
+                    sync.data.state === 'blocked_provider_unavailable'
+                      ? (providers.data?.providers?.find((p) => p.name === 'nxt_sales')?.remediation ??
+                        'Approve a CRM write adapter and add the write methods to the CRM port.')
+                      : (BLOCKED_FIX[sync.data.state] ?? BLOCKED_FIX.default!)
                   }
                   action={
                     <Button icon={FileJson} onClick={() => setPayloadOpen(true)}>
@@ -209,7 +236,7 @@ export function CrmSync() {
               )}
 
               <Panel title="Providers">
-                {providers.data ? (
+                {providers.data?.providers ? (
                   <div className="stack">
                     {providers.data.providers.map((p) => (
                       <div key={p.name} className="prov">

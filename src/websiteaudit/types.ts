@@ -96,6 +96,15 @@ export const PRODUCT_FIELDS = [
   'product.currency',
   'product.availability',
   'product.imageCount',
+  /**
+   * The primary product image, as an ABSOLUTE url on the company's own site.
+   *
+   * imageCount alone says a page has pictures; it does not let a customer
+   * report show the customer their own product. The url is what makes a
+   * before/after recognisably theirs, and it is only ever read from the page
+   * being audited — never borrowed, never generated.
+   */
+  'product.image',
   'product.documents',
 ] as const
 
@@ -153,11 +162,36 @@ export interface CrawlStats {
   otherPages: number
   duplicates: number
   canonicalDuplicates: number
+  /**
+   * Canonical URLs this site declared on pages whose content differs.
+   *
+   * A real finding about the site, not a crawler statistic: a canonical shared
+   * across genuinely different pages tells search engines to index one of them
+   * and drop the rest. Counted so the audit can report it.
+   */
+  unreliableCanonicals: number
   soft404s: number
   httpErrors: number
   unreachable: number
   totalBytes: number
   structuredDataPages: number
+  /**
+   * Products this crawl found NAMED on the site, however they were named.
+   *
+   * Separate from productPages on purpose: a site can name forty products and
+   * publish no product page at all, and reporting only the second number is
+   * what made a full catalogue read as an empty one.
+   */
+  catalogEntries: number
+  /**
+   * First-party JavaScript assets read because a page was a client-rendered
+   * shell.
+   *
+   * Recorded so a product found only because the site's own bundle named it is
+   * traceable to the file that named it. An empty list is the normal case: a
+   * site that renders on the server needs none of this.
+   */
+  assetsRead: string[]
   limitsHit: string[]
 }
 

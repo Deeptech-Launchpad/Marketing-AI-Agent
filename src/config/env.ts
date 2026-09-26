@@ -77,6 +77,16 @@ const schema = z.object({
   RESEARCH_MAX_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
   RESEARCH_MAX_REDIRECTS: z.coerce.number().int().nonnegative().default(3),
   RESEARCH_CACHE_TTL_HOURS: z.coerce.number().int().positive().default(168),
+  /**
+   * How long a FAILED page read is remembered, in minutes.
+   *
+   * Much shorter than the success TTL on purpose. A page that was read is a
+   * statement about content; a page that could not be read is a statement
+   * about one moment — a reset connection, a rate limit, a certificate this
+   * client could not verify at the time. Remembering that for a week means one
+   * bad minute marks a company unreachable until the following week.
+   */
+  RESEARCH_FAILURE_CACHE_TTL_MINUTES: z.coerce.number().int().positive().default(30),
 
   KNOWLEDGE_MAX_UPLOAD_CHARS: z.coerce.number().int().positive().default(400_000),
   // Minimum cosine similarity for a vector hit to count as a match.
@@ -179,6 +189,78 @@ const schema = z.object({
    * it. Storing personal contact data has consequences that outlive the run.
    */
   DM_STORE_CONTACT_DATA: bool.default('false'),
+  /**
+   * Let a model READ the team pages this engine already fetched.
+   *
+   * Off by default. It never supplies a fact: every name and title it returns
+   * is checked against the fetched bytes and dropped if absent, so the worst a
+   * bad run can do is find nothing. See decisionmakers/modelReader.ts.
+   */
+  DM_MODEL_READER_ENABLED: bool.default('false'),
+  /**
+   * The public web research layer, shared by Decision Makers and Intent.
+   *
+   * Off by default because it spends money and reaches third-party hosts. It
+   * changes what is DISCOVERED, never what is believed: a page found this way
+   * is fetched through the same guarded transport and read by the same
+   * verifier as a page found on the company's own domain, so turning it on
+   * cannot weaken any existing guarantee. See research/publicResearch.ts.
+   */
+  PUBLIC_RESEARCH_ENABLED: bool.default('false'),
+  /** How many discovered URLs one company's research may consider. */
+  PUBLIC_RESEARCH_MAX_SOURCES: z.coerce.number().int().positive().max(10).default(6),
+  /** How many of those may actually be fetched. Bounds third-party traffic. */
+  PUBLIC_RESEARCH_MAX_PAGES: z.coerce.number().int().nonnegative().max(10).default(4),
+  /**
+   * Open-web company discovery (2026-09-24 restructure) — "Find New Company"
+   * in Prospects. Off by default, same reasoning as PUBLIC_RESEARCH_ENABLED:
+   * it spends money and reaches third-party hosts. Every candidate it
+   * produces is still read through the same guarded transport and the same
+   * grounding discipline as everything else this platform fetches. See
+   * prospects/companyWebDiscovery.ts.
+   */
+  COMPANY_WEB_DISCOVERY_ENABLED: bool.default('false'),
+  /**
+   * Start decision-maker discovery automatically for NEW leads.
+   *
+   * The worker checks NXT Sales on a schedule for companies created within the
+   * lookback window and queues one search for each company that has never had
+   * one. Off by default: every search spends provider and model budget. It
+   * reads the CRM only — nothing is written back. See decisionmakers/leadWatch.ts.
+   */
+  DM_AUTO_DISCOVER_ENABLED: bool.default('false'),
+  /**
+   * Photograph product pages with a headless Chrome for the PDP Enrichment
+   * Report. Every request the browser makes is checked against the same
+   * public-address rule as the crawler. See research/pageCapture.ts.
+   */
+  PAGE_CAPTURE_ENABLED: bool.default('false'),
+  /**
+   * What the Website Audit reads. `end_pdp` (the default) audits only the
+   * product page recorded in the company's End PDP field. `website` runs the
+   * earlier whole-site crawl, retained for a future full-website audit.
+   */
+  AUDIT_SCOPE: z.enum(['end_pdp', 'website']).default('end_pdp'),
+  /** Chrome/Chromium binary. Empty means look in the usual install locations. */
+  CHROME_PATH: z.string().default(''),
+  /** Minutes between checks for new leads. */
+  DM_AUTO_DISCOVER_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(59).default(5),
+  /** Only companies created this recently count as new — bounds the first check. */
+  DM_AUTO_DISCOVER_LOOKBACK_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+  /** Most searches one check may start, so a bulk import cannot spend the budget at once. */
+  DM_AUTO_DISCOVER_MAX_PER_CHECK: z.coerce.number().int().min(1).max(25).default(5),
+  /**
+   * Fallback paths to try when a site's own navigation suggests no page that
+   * introduces its people. Comma-separated; empty means use the built-in list.
+   *
+   * Configuration rather than code so the fallback can be tuned without a
+   * deploy. It is the same for every company — nothing here is, or may become,
+   * company-specific.
+   */
+  DM_TEAM_PAGE_PATHS: z
+    .string()
+    .default('')
+    .transform((v) => (v.trim() ? v.split(',') : [])),
 
   // ── Stage 5: website audit ──────────────────────────────────────────────
   //
@@ -229,7 +311,18 @@ const schema = z.object({
   REPORT_CTA_URL: z.string().default(''),
   REPORT_CTA_LABEL: z.string().default('Book a 15-minute walkthrough'),
   REPORT_BRAND_NAME: z.string().default('AltiusNXT'),
-  REPORT_BRAND_LOGO_PATH: z.string().default('assets/altiusnxt-logo.png'),
+  REPORT_BRAND_LOGO_PATH: z.string().default('web/public/altiusnxt-logo.png'),
+  /**
+   * The "Prepared by" sign-off on the PDP Enrichment Report. Configuration, not
+   * code: the report names whoever the business says prepares it, and never a
+   * person this service invented.
+   */
+  REPORT_PREPARED_BY_NAME: z.string().default('AltiusNxt Digital Commerce Team'),
+  REPORT_PREPARED_BY_ROLE: z.string().default(''),
+  REPORT_PREPARED_BY_COMPANY: z.string().default('AltiusNxt Technologies Pvt Ltd'),
+  REPORT_PREPARED_BY_PHONE: z.string().default(''),
+  REPORT_PREPARED_BY_EMAIL: z.string().default(''),
+  REPORT_PREPARED_BY_WEB: z.string().default('www.altiusnxt.com'),
   AUDIT_MAX_PRODUCT_PAGES: z.coerce.number().int().positive().max(100).default(20),
   AUDIT_MAX_CATEGORY_PAGES: z.coerce.number().int().positive().max(50).default(5),
   /** Total downloaded bytes per company. 15MB at the 2MB per-page cap. */
@@ -304,6 +397,11 @@ const schema = z.object({
   // Required on every commercial message.
   OUTREACH_COMPANY_NAME: z.string().default('AltiusNXT'),
   OUTREACH_COMPANY_ADDRESS: z.string().default('address not configured'),
+
+  // The Sales-approved email sequence (2026-09-26). Its day windows ("Day 9–10",
+  // "within 1 business day") are counted in this time zone — the USA sequence
+  // is worked from the US East Coast unless configured otherwise.
+  OUTREACH_SEQUENCE_TIMEZONE: z.string().default('America/New_York'),
 
 
   // ── Task #983: engagement tracking ──────────────────────────────────────
@@ -460,6 +558,18 @@ const schema = z.object({
    */
   CRM_WRITE_ENABLED: bool.default('false'),
   /**
+   * Whether a write may target a NON-LOCAL NXT Sales, i.e. the real CRM.
+   *
+   * Separate from CRM_WRITE_ENABLED on purpose. Enabling writes is a normal
+   * thing to do against a local snapshot — it is how the write path is tested —
+   * and the moment NXT_SALES_BASE_URL points at the live CRM, that same setting
+   * would be aimed at records people depend on. Two independent switches mean
+   * repointing the base URL cannot, on its own, make anything writable.
+   *
+   * Left off, this platform can read the live CRM and change nothing in it.
+   */
+  CRM_WRITE_ALLOW_LIVE: bool.default('false'),
+  /**
    * The NXT Sales Company custom-field keys to write into.
    *
    * Empty because they do not exist yet. This is the exact configuration the
@@ -546,6 +656,46 @@ if (env.CRM_DRIVER === 'real' && !env.NXT_SALES_SERVICE_USER_ID) {
 // The development-only bypass is refused in production rather than merely
 // discouraged. A customer-facing Workbench built from an unreviewed report
 // would defeat Task #980 entirely, so the process will not start with both set.
+// Self-approval defeats the separation the whole human gate rests on: the
+// person who asked for a run must not be the person who signs it off. The flag
+// exists so a solo developer can exercise the flow locally, and it already
+// defaults to false — but a default is not a guarantee, and the two flags below
+// it were guarded here while this one was not.
+if (env.NODE_ENV === 'production' && env.ALLOW_SELF_APPROVAL) {
+  // eslint-disable-next-line no-console
+  console.error(
+    '\nALLOW_SELF_APPROVAL is a development-only flag and cannot be enabled in production.\n' +
+      'An approval is a second person agreeing. With this on, a requester can approve their own\n' +
+      'run, and the audit trail records a review that never happened.\n',
+  )
+  process.exit(1)
+}
+
+// The fake drivers return fabricated CRM records and fabricated model output.
+// They exist so the test suite never touches a real CRM, which is exactly why
+// they must not be reachable in production: the fixtures would flow through the
+// normal UI, the normal reports and the normal CRM package with nothing marking
+// them as invented.
+if (env.NODE_ENV === 'production' && env.CRM_DRIVER === 'fake') {
+  // eslint-disable-next-line no-console
+  console.error(
+    '\nCRM_DRIVER=fake cannot be used in production.\n' +
+      'The fake adapter serves invented companies, deals and users. In production that is\n' +
+      'fabricated business data presented as real.\n',
+  )
+  process.exit(1)
+}
+
+if (env.NODE_ENV === 'production' && env.LLM_DRIVER === 'fake') {
+  // eslint-disable-next-line no-console
+  console.error(
+    '\nLLM_DRIVER=fake cannot be used in production.\n' +
+      'The fake gateway replays canned fixtures. Any narrative built on it would be invented\n' +
+      'text presented as analysis.\n',
+  )
+  process.exit(1)
+}
+
 if (env.NODE_ENV === 'production' && env.WORKBENCH_ALLOW_UNAPPROVED) {
   // eslint-disable-next-line no-console
   console.error(

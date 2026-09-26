@@ -1,0 +1,46 @@
+/* The "what did we learn" band on Website Audit.
+   Its own file rather than engines.css, which is shared by all twelve
+   workspaces. Everything below the band — the crawl visual, the inspected page
+   table, the run panel — keeps the shared styles it already had. */
+
+.learn__verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin: 0 0 var(--s5);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.learn__gapscap {
+  margin: var(--s5) 0 var(--s2);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* The gap labels, named rather than counted: a number on its own never says
+   which part of the catalogue is thin. */
+.learn__gaps {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+}
+
+.learn__next {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  margin: var(--s5) 0 0;
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text-muted);
+}

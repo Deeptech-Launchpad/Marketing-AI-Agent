@@ -1,3 +1,4 @@
+import { env } from '../config/env.js'
 // STAGE 4 — reading people off a company's own leadership/team page.
 //
 // TRUST MODEL: everything passed in here is UNTRUSTED third-party text. It is
@@ -133,11 +134,88 @@ export function extractPeople(text: string, maxPeople = 40): ExtractedPerson[] {
 }
 
 /**
- * Paths worth trying on a company site, most likely first. Kept short and
- * fixed: this is a handful of polite requests to pages a company publishes for
- * exactly this purpose, not a crawl.
+ * FINDS THE PAGES A SITE ACTUALLY PUBLISHES, instead of guessing paths.
+ *
+ * The fallback list below is a guess, and on real sites it mostly misses: two
+ * companies checked in one session returned 404 for every path tried, while
+ * both had a reachable about page — at /about-us/ and /our-story, neither of
+ * which a fixed list can contain. A site that calls its page /meet-the-team is
+ * not unusual, it is just not on anybody's list.
+ *
+ * So the site's own navigation is read first. This is the same principle the
+ * rest of the platform follows: a link the company published is the company
+ * telling us where something is, and it beats any list we could write.
+ *
+ * The vocabulary below is LANGUAGE, not company data — the words businesses
+ * use for the page that introduces their people. It is the same for every
+ * company, and nothing here is specific to any of them.
  */
-export const TEAM_PAGE_PATHS = [
+const PEOPLE_PAGE_WORDS =
+  /\b(about|team|leadership|management|staff|people|who[\s-]?we[\s-]?are|our[\s-]?story|meet[\s-]?the|company|contact|executives?|directors?|founders?)\b/i
+
+/** Paths that are never a page introducing people, whatever they are called. */
+const NOT_A_PEOPLE_PAGE =
+  /\.(?:jpe?g|png|gif|svg|webp|pdf|zip|css|js)(?:\?|#|$)|\/(?:cart|checkout|account|login|signin|basket|wishlist|search|feed|tag|category|product)\b/i
+
+/**
+ * Same-origin pages this site's own markup suggests introduce its people.
+ *
+ * Ordered by how strongly the link reads as a people page, so a bounded caller
+ * spends its requests on the best candidates. Pure string work over HTML the
+ * caller already fetched — nothing here fetches anything.
+ */
+export function discoverPeoplePageUrls(html: string, pageUrl: string, max = 6): string[] {
+  let origin: string
+  try {
+    origin = new URL(pageUrl).origin
+  } catch {
+    return []
+  }
+
+  const scored = new Map<string, number>()
+  const re = /<a\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))[^>]*>([\s\S]{0,200}?)<\/a>/gi
+  let m: RegExpExecArray | null
+
+  while ((m = re.exec(html)) !== null) {
+    const href = (m[1] ?? m[2] ?? m[3] ?? '').trim()
+    if (!href || href.startsWith('#') || /^(javascript|mailto|tel|data):/i.test(href)) continue
+
+    let abs: URL
+    try {
+      abs = new URL(href, pageUrl)
+    } catch {
+      continue
+    }
+    if (abs.origin !== origin) continue
+    if (NOT_A_PEOPLE_PAGE.test(abs.pathname)) continue
+
+    const text = m[4]!.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    // The PATH naming it is stronger evidence than the link text, which is
+    // often an icon or a truncated label.
+    const inPath = PEOPLE_PAGE_WORDS.test(abs.pathname)
+    const inText = PEOPLE_PAGE_WORDS.test(text)
+    if (!inPath && !inText) continue
+
+    const url = `${origin}${abs.pathname.replace(/\/+$/, '') || '/'}`
+    if (url === `${origin}/`) continue
+    const score = (inPath ? 2 : 0) + (inText ? 1 : 0)
+    scored.set(url, Math.max(scored.get(url) ?? 0, score))
+  }
+
+  return [...scored.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)
+    .slice(0, max)
+    .map(([url]) => url)
+}
+
+/**
+ * Conventional paths, tried only when the site's own navigation suggested
+ * nothing — a last resort rather than the strategy.
+ *
+ * Overridable through DM_TEAM_PAGE_PATHS so an operator can adjust the
+ * fallback without a deploy. The default is the same for every company.
+ */
+export const DEFAULT_TEAM_PAGE_PATHS = [
   '/leadership',
   '/team',
   '/about/leadership',
@@ -148,4 +226,13 @@ export const TEAM_PAGE_PATHS = [
   '/about',
   '/company/leadership',
   '/who-we-are',
+  '/about-us',
+  '/contact',
+  '/contact-us',
 ]
+
+/** The fallback list actually in force, configuration first. */
+export function teamPagePaths(): string[] {
+  const configured = env.DM_TEAM_PAGE_PATHS.map((p) => p.trim()).filter(Boolean)
+  return configured.length ? configured : DEFAULT_TEAM_PAGE_PATHS
+}

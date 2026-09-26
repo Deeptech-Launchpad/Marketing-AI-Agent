@@ -50,6 +50,20 @@ describe('buyer policy — the confirmed P1/P2/P3 tiers', () => {
     }
   })
 
+  it('reads the ways About pages write Founder as the founder fallback', () => {
+    for (const title of ['founding entrepreneur', 'Founding Director', 'Co-Founder', 'cofounder', 'Founding Partner']) {
+      const m = matchRole(title)
+      expect(m?.matchedFunction, title).toBe('founder')
+      expect(m?.isFallback, title).toBe(true)
+      expect(m?.seniority, title).toBe('c_level')
+    }
+  })
+
+  it('does not treat a founding member of a team as the company founder', () => {
+    expect(matchRole('Founding Engineer')).toBeNull()
+    expect(matchRole('founding member')).toBeNull()
+  })
+
   it('still refuses a senior title with no relevant function', () => {
     // The rule that survived the retiering: seniority ranks, it never qualifies.
     expect(matchRole('Chief Financial Officer')).toBeNull()
@@ -117,7 +131,13 @@ describe('provider chain — approved order and automatic escalation', () => {
     expect(at('zoominfo')).toBeLessThan(at('rocketreach'))
 
     // "AI-assisted web search as a last resort" — mechanically last.
-    expect(at('web')).toBe(names.length - 1)
+    //
+    // Matched on the exact name rather than a substring: there are now two
+    // web-shaped sources, and `includes('web')` found the first of them. The
+    // company's own site is read before the open web is searched, because a
+    // company is the authority on its own staff and a trade article is not.
+    expect(names.indexOf('company_website')).toBeLessThan(names.indexOf('public_web_research'))
+    expect(names[names.length - 1]).toBe('public_web_research')
   })
 
   const candidate = (over: Partial<ScoredCandidate>): ScoredCandidate =>
@@ -147,30 +167,36 @@ describe('provider chain — approved order and automatic escalation', () => {
       ...over,
     }) as ScoredCandidate
 
-  it('stops escalating once a matched, relevant, reachable specialist is found', () => {
+  // WHAT THIS PREDICATE IS NOW. It used to gate the provider chain, and that
+  // made it a CRM-first-stop: a company whose NXT Sales record named one buyer
+  // never reached Apollo, Hunter or the open web. Every provider runs now, and
+  // this reads the FINISHED result — "did the run find someone worth acting
+  // on" — rather than deciding whether to keep looking.
+  it('is satisfied by a matched, relevant, reachable specialist', () => {
     expect(isSufficient([candidate({})])).toBe(true)
   })
 
-  it('keeps escalating when the person cannot be placed at the company', () => {
+  it('is not satisfied when the person cannot be placed at the company', () => {
     expect(isSufficient([candidate({ companyMatch: 'unverified' })])).toBe(false)
   })
 
-  it('keeps escalating when the only match is the executive fallback', () => {
-    // Falling back is what you do when the sources came back empty. It is not
-    // a reason to stop asking them.
+  it('is not satisfied when the only match is the executive fallback', () => {
+    // Falling back is what you do when the sources came back empty. It does
+    // not make the run a success.
     expect(isSufficient([candidate({ rolePriority: 3, roleIsFallback: true })])).toBe(false)
   })
 
-  it('keeps escalating when there is no way to make contact', () => {
+  it('is not satisfied when there is no way to make contact', () => {
     expect(isSufficient([candidate({ contactability: 'none', email: null })])).toBe(false)
   })
 
-  it('keeps escalating on thin evidence', () => {
+  it('is not satisfied on thin evidence', () => {
     expect(isSufficient([candidate({ confidence: 'low' })])).toBe(false)
   })
 
-  it('does not let seniority alone stop the search', () => {
-    // A senior person with no relevant function must not end the cascade.
+  it('does not let seniority alone count as a result', () => {
+    // A senior person with no relevant function is not a decision maker for
+    // product data, whatever their title says.
     expect(isSufficient([candidate({ rolePriority: null, roleIsFallback: false, seniority: 'c_level' })])).toBe(false)
   })
 

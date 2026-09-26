@@ -1,4 +1,12 @@
-import type { EmbedOptions, EmbedResult, GenerateOptions, LlmPort, LlmResult } from '../llmPort.js'
+import type {
+  EmbedOptions,
+  EmbedResult,
+  GenerateOptions,
+  LlmPort,
+  LlmResult,
+  WebSearchOptions,
+  WebSearchResult,
+} from '../llmPort.js'
 
 // Deterministic LLM. Every orchestration path can be exercised in CI with no
 // API key, no cost and no flakiness.
@@ -130,6 +138,76 @@ const CANNED: Record<string, unknown> = {
     passed: true,
     issues: [],
   },
+
+  // Deterministic PDP enrichment for tests. Generic on purpose: no company or
+  // product is named, so it fits any fixture page. The service's own checks
+  // then decide each attribute's real source.
+  'pdp.enrich': {
+    enrichedTitle: 'Standard Industrial Product, Model A, Grey',
+    brand: null,
+    series: null,
+    manufacturerPartNumber: null,
+    productType: 'Industrial Product',
+    categoryPath: ['Industrial Supplies', 'General Products', 'Standard Products'],
+    industryLabel: 'Industrial & Commercial Supplies',
+    unspsc: null,
+    description: {
+      intro: 'A general-purpose industrial product designed for everyday professional use in commercial settings.',
+      bullets: ['Durable construction for daily use', 'Suitable for commercial environments', 'Easy to install and maintain'],
+    },
+    attributes: [
+      { name: 'Product Type', value: 'Industrial Product', source: 'enriched', sourceRef: null },
+      { name: 'Material', value: 'Stainless Steel', source: 'enriched', sourceRef: null },
+      { name: 'Colour', value: 'Grey', source: 'enriched', sourceRef: null },
+      { name: 'Finish', value: 'Brushed', source: 'enriched', sourceRef: null },
+      { name: 'Width', value: '300 mm', source: 'enriched', sourceRef: null },
+      { name: 'Height', value: '200 mm', source: 'enriched', sourceRef: null },
+      { name: 'Weight', value: '2.4 kg', source: 'enriched', sourceRef: null },
+      { name: 'Pack Quantity', value: '1 Piece', source: 'enriched', sourceRef: null },
+      { name: 'Price', value: '99.00', source: 'enriched', sourceRef: null },
+    ],
+    recommendedDocuments: ['Technical Data Sheet', 'Declaration of Conformity'],
+    attributeHighlights: [
+      { heading: 'Physical Specification', detail: 'Material, finish, width, height and weight stated as separate values with units.' },
+      { heading: 'Identification', detail: 'Product type and pack quantity mapped to discrete attributes.' },
+      { heading: 'Documentation', detail: 'Technical data sheet and declaration of conformity associated with the record.' },
+    ],
+    beforeNarrative: ['The original listing publishes the product name and little else; structured specifications are absent.'],
+    afterNarrative: ['The enriched record surfaces structured attributes in a technical specification matrix with tabbed documentation.'],
+    keyTransformation: 'The listing evolves from a basic catalogue entry into a structured, filterable product master record.',
+    introParagraph: 'This report presents an objective Before & After audit of a single product detail page, showing how a sparse listing becomes an attribute-rich product record.',
+    executiveSummary: 'Professional buyers need structured specifications before purchase. Converting a basic page into a technical record reduces pre-sales questions.',
+    normalizationNotes: [
+      { heading: 'Unit Normalisation', detail: 'Dimensions and weights are stated in metric units as separate attributes.' },
+      { heading: 'Parameter Disaggregation', detail: 'Combined description text is split into discrete, filterable properties.' },
+    ],
+    auditSummary: 'This single-product comparison shows how a sparse listing can be converted into a structured technical record.',
+    keyImprovements: [
+      { heading: 'Structured Specification Data', detail: 'Attributes exposed in a technical specification matrix.' },
+      { heading: 'Standardised Naming', detail: 'Product titles follow a consistent naming convention.' },
+      { heading: 'Faceted-Filtering Readiness', detail: 'Key attributes indexed for category filters.' },
+    ],
+    nextSteps: [
+      { heading: 'Catalog Data Health Audit', detail: 'Benchmark attribute completeness across existing SKUs.' },
+      { heading: 'Taxonomy Mapping', detail: 'Map legacy categories to a standard B2B classification.' },
+      { heading: 'Pilot Batch', detail: 'Enrich a pilot batch of products to validate the approach.' },
+    ],
+  },
+
+  // Deterministic assistant answer for tests: a grounded reply, one draft that
+  // uses a bracketed placeholder, and no proposed edit.
+  'report.assistant': {
+    reply: 'The audit found that the hero product page does not publish a manufacturer part number or a GTIN.',
+    drafts: [
+      {
+        kind: 'spec_table',
+        title: 'Specification table',
+        content: 'Manufacturer part number: [Manufacturer part number] (example)\nGTIN: [13-digit GTIN / EAN barcode] (example)',
+      },
+    ],
+    proposedEdit: null,
+    citations: ['A4'],
+  },
 }
 
 export class FakeLlm implements LlmPort {
@@ -175,6 +253,27 @@ export class FakeLlm implements LlmPort {
       vectors,
       model: 'fake-embedding',
       usage: { promptTokens: 0, outputTokens: 0, totalTokens: 0, hasUsageData: false },
+    }
+  }
+
+  /**
+   * The fake driver has no search capability, and says so.
+   *
+   * Returning an empty success would be worse than useless: the public
+   * research layer distinguishes "searched, found nothing" from "cannot
+   * search", and a fake that blurred the two would let a test pass on a
+   * behaviour the real driver does not have.
+   */
+  async searchWeb(_opts: WebSearchOptions): Promise<WebSearchResult> {
+    return {
+      ok: false,
+      provider: this.name,
+      queriesRun: [],
+      references: [],
+      modelText: '',
+      model: null,
+      costUsd: 0,
+      reason: 'LLM_DRIVER=fake has no web search capability, so no public research was attempted.',
     }
   }
 

@@ -47,6 +47,56 @@ export interface GenerateOptions<T> {
   stepId?: string | null
 }
 
+// ── PUBLIC WEB SEARCH ─────────────────────────────────────────────────────
+//
+// A search returns REFERENCES, never facts.
+//
+// This is the whole reason it is a separate method rather than a `generate`
+// with a clever prompt. `generate` returns what a model SAYS; this returns
+// where a search engine POINTED. The distinction is load-bearing: the model's
+// prose about a company is an answer that exists whether or not it is true,
+// and nothing in this platform is allowed to treat it as evidence. The URL
+// list is different — it is produced by the search index, carried in the
+// response's grounding metadata rather than composed in the reply, and it is
+// checkable, because the caller then fetches those pages itself and reads them
+// with its own guarded transport.
+//
+// So implementations MUST populate `references` from provider metadata, and
+// MUST NOT parse URLs out of the model's prose. A caller is expected to ignore
+// `modelText` for anything factual; it is returned only so a run can be
+// audited, and callers that record evidence must quote the fetched page.
+
+export interface WebSearchReference {
+  /** The URL the index pointed at. May be a provider redirect that resolves on fetch. */
+  url: string
+  /** The title the index carried for it. Never the model's paraphrase. */
+  title: string | null
+}
+
+export interface WebSearchOptions {
+  /** What to search for. Composed by the caller from facts it already holds. */
+  query: string
+  tenantId: string
+  feature: string
+  maxReferences?: number
+  runId?: string | null
+}
+
+export interface WebSearchResult {
+  /** False when no search capability is configured, or the provider refused. */
+  ok: boolean
+  provider: string
+  /** The queries the provider actually ran, when it reports them. */
+  queriesRun: string[]
+  references: WebSearchReference[]
+  /** The model's prose. NOT evidence. Kept for audit only. */
+  modelText: string
+  model: string | null
+  costUsd: number
+  /** Why there is nothing here, when there is nothing here. */
+  reason: string | null
+}
+
 export interface EmbedOptions {
   texts: string[]
   tenantId: string
@@ -63,5 +113,14 @@ export interface LlmPort {
   readonly name: string
   generate<T = string>(opts: GenerateOptions<T>): Promise<LlmResult<T>>
   embed(opts: EmbedOptions): Promise<EmbedResult>
+  /**
+   * Searches the public web and returns where the index pointed.
+   *
+   * Required rather than optional so a driver cannot quietly lack it and leave
+   * a caller guessing; a driver with no search capability returns
+   * `ok: false` with a reason, the same way every unconfigured provider in
+   * this platform reports itself.
+   */
+  searchWeb(opts: WebSearchOptions): Promise<WebSearchResult>
   health(): Promise<{ ok: boolean; detail?: string }>
 }

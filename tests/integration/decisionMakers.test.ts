@@ -65,8 +65,19 @@ describeIfReady('Stage 4 — decision-maker discovery against real NXT Sales', (
       // Every claim carries the literal CRM row that produced it.
       expect(c.evidence[0]!.snippet).toMatch(/contactPersons entry/)
       expect(c.evidence[0]!.sourceType).toBe('crm_record')
-      // Contact details are never taken from the company-level fields.
-      expect(c.email).toBeNull()
+      // An address reaches a candidate ONLY from a stored value that names
+      // them. The rule is no longer "never carry an email" — that threw away
+      // real per-person addresses NXT Sales already held — but "never carry
+      // one this person's name does not appear in", which is what the local
+      // part is checked against.
+      if (c.email) {
+        const local = c.email.split('@')[0]!.toLowerCase().replace(/[^a-z]/g, '')
+        const surname = c.fullName.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(Boolean).pop()!
+        expect(local, `${c.email} must name ${c.fullName}`).toContain(surname)
+        // And a shared mailbox is nobody's, however real it is.
+        expect(local).not.toMatch(/^(info|sales|admin|accounts|enquiries|contact|office|support)$/)
+      }
+      // The company switchboard is still never attributed to a person.
       expect(c.phone).toBeNull()
     })
   }, 120_000)
@@ -123,8 +134,13 @@ describeIfReady('Stage 4 — decision-maker discovery against real NXT Sales', (
       expect(['high', 'medium', 'low']).toContain(c.confidence)
       expect(['contactable', 'withheld_by_policy', 'profile_only', 'none']).toContain(c.contactability)
       expect(['shortlisted', 'excluded']).toContain(c.outcome)
-      // Contact data is off by default and must not be written.
-      expect(c.email).toBeNull()
+      // A stored address that names the candidate may be carried; anything
+      // that does not name them, and the company phone number, may not.
+      if (c.email) {
+        const local = c.email.split('@')[0]!.toLowerCase().replace(/[^a-z]/g, '')
+        const surname = c.fullName.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(Boolean).pop()!
+        expect(local, `${c.email} must name ${c.fullName}`).toContain(surname)
+      }
       expect(c.phone).toBeNull()
       // A shortlisted candidate always has a matched role and a rank.
       if (c.outcome === 'shortlisted') {

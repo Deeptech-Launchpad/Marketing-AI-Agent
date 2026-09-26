@@ -83,6 +83,12 @@ export function normalizeTitle(raw: string): string {
     .replace(/\bgeneral manager\b/g, 'general manager')
     .replace(/\bg\.?m\.?\b/g, 'general manager')
     .replace(/\bceo\b/g, 'chief executive officer')
+    // "Founding entrepreneur", "founding director" and "co-founder" are how
+    // company About pages actually write Founder. Only the founding-PERSON
+    // forms are collapsed: a "founding engineer" or "founding member" of a team
+    // is not the company's founder, and stays unmatched.
+    .replace(/\bco[\s-]?founder\b/g, 'founder')
+    .replace(/\bfounding (entrepreneur|director|partner|owner|chair(man|woman|person)?|president|chief executive officer|principal)\b/g, 'founder')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

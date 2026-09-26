@@ -25,13 +25,22 @@ export const outreachRoutes = Router()
 
 const CreateBody = z
   .object({
-    auditRunId: z.string().min(1),
+    // Primary since the 2026-09-24 restructure: the default path builds from
+    // Decision Makers + Intent Signals for this company, not an audit.
+    crmCompanyId: z.string().min(1).optional(),
+    discoveredCompanyId: z.string().min(1).optional(),
+    // LEGACY: when given, the campaign is built from this approved audit
+    // exactly as it always has been.
+    auditRunId: z.string().min(1).optional(),
     dryRun: z.boolean().optional(),
     startsAt: z.string().datetime().optional(),
   })
   .strict()
+  .refine((b) => Boolean(b.crmCompanyId || b.auditRunId), {
+    message: 'Either crmCompanyId or auditRunId is required.',
+  })
 
-/** 1. Plan a campaign from an approved audit. */
+/** 1. Plan a campaign — from Decision Makers + Intent Signals, or (legacy) from an approved audit. */
 outreachRoutes.post(
   '/campaigns',
   requirePermission('operate'),
@@ -42,6 +51,8 @@ outreachRoutes.post(
 
     const result = await createCampaign({
       tenantId: p.tenantId,
+      crmCompanyId: body.crmCompanyId,
+      discoveredCompanyId: body.discoveredCompanyId ?? null,
       auditRunId: body.auditRunId,
       requestedByCrmUserId: p.crmUserId,
       dryRun: body.dryRun,
@@ -360,5 +371,94 @@ outreachRoutes.get(
       channel: 'email',
     })
     res.json(result)
+  }),
+)
+
+// ── SALES-APPROVED TEMPLATES (2026-09-24 restructure) ───────────────────────
+//
+// Plain CRUD over what Sales supplies. The platform never authors or edits a
+// template's own words — composeFromTemplate (personalize.ts) is the only
+// thing that ever rewrites one, and only per recipient, grounded in facts.
+
+const TemplateBody = z
+  .object({
+    channel: z.enum(['email', 'linkedin', 'call', 'email_followup', 'whatsapp']),
+    key: z.string().min(1).max(200),
+    version: z.string().min(1).max(50),
+    purpose: z.string().min(1).max(500),
+    subjectRaw: z.string().max(2000).nullable().optional(),
+    bodyRaw: z.string().min(1).max(20_000),
+  })
+  .strict()
+
+outreachRoutes.post(
+  '/templates',
+  requirePermission('operate'),
+  validateBody(TemplateBody),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const body = req.body as z.infer<typeof TemplateBody>
+
+    const template = await prisma.outreachTemplate.upsert({
+      where: { tenantId_channel_key_version: { tenantId: p.tenantId, channel: body.channel, key: body.key, version: body.version } },
+      create: {
+        id: newId(),
+        tenantId: p.tenantId,
+        channel: body.channel,
+        key: body.key,
+        version: body.version,
+        purpose: body.purpose,
+        subjectRaw: body.subjectRaw ?? null,
+        bodyRaw: body.bodyRaw,
+        createdByCrmUserId: p.crmUserId,
+      },
+      update: {
+        purpose: body.purpose,
+        subjectRaw: body.subjectRaw ?? null,
+        bodyRaw: body.bodyRaw,
+      },
+    })
+
+    await audit({
+      tenantId: p.tenantId,
+      actorType: 'user',
+      actorCrmUserId: p.crmUserId,
+      action: 'outreach.template_saved',
+      resourceType: 'OutreachTemplate',
+      resourceId: template.id,
+      summary: `${body.channel} "${body.key}@${body.version}"`,
+      requestId: req.requestId,
+    })
+
+    res.status(201).json(template)
+  }),
+)
+
+outreachRoutes.get(
+  '/templates',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const channel = typeof req.query.channel === 'string' ? req.query.channel : undefined
+    const templates = await prisma.outreachTemplate.findMany({
+      where: { tenantId: p.tenantId, ...(channel ? { channel } : {}) },
+      orderBy: [{ channel: 'asc' }, { createdAt: 'desc' }],
+    })
+    res.json({ templates })
+  }),
+)
+
+outreachRoutes.patch(
+  '/templates/:id',
+  requirePermission('operate'),
+  validateBody(z.object({ isActive: z.boolean() }).strict()),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const existing = await prisma.outreachTemplate.findFirst({ where: { id: req.params.id!, tenantId: p.tenantId } })
+    if (!existing) throw new NotFoundError('Template not found.')
+
+    const { isActive } = req.body as { isActive: boolean }
+    const template = await prisma.outreachTemplate.update({ where: { id: existing.id }, data: { isActive } })
+    res.json(template)
   }),
 )

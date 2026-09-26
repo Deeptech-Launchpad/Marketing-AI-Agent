@@ -1,0 +1,523 @@
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Copy, Mail, RotateCcw, Save, ThumbsUp, XCircle } from 'lucide-react'
+import { api } from '../../lib/api'
+import { Button, Chip, Field, StatusBadge, Unset, toUiStatus } from '../../components/ui/primitives'
+import { Drawer } from '../../components/ui/Evidence'
+import { asPlainText, buildMailto } from './mailto'
+import { useCall } from './useCall'
+import { fmtDateTime, fmtWindow, type CompanySequence, type Draft, type Version } from './types'
+
+// THE REVIEW SCREEN FOR ONE EMAIL.
+//
+// Everything Sales needs to decide on it, in one place: who it goes to, the
+// words (editable), which approved template and version it came from, what
+// was personalised and from which verified fact, the intent signals that were
+// considered and the one (if any) that was used, the values only Sales can
+// supply, and the checklist that decides whether it may be approved.
+//
+// There is no send control. An approved email is copied or opened in the
+// person's own mail client, sent from there, and then marked sent here.
+
+const STATUS_WORD: Record<string, string> = {
+  draft: 'Draft — awaiting review',
+  ready_to_send: 'Approved — send it from your mail client',
+  sent: 'Sent',
+  cancelled: 'Cancelled',
+  skipped: 'Skipped',
+}
+
+const SKU_SLOTS = [0, 1, 2, 3, 4]
+
+export function DraftEditor({
+  draft,
+  view,
+  open,
+  onClose,
+  onChanged,
+  canOperate,
+  canApprove,
+}: {
+  draft: Draft | null
+  view: CompanySequence
+  open: boolean
+  onClose: () => void
+  onChanged: () => void
+  canOperate: boolean
+  canApprove: boolean
+}) {
+  const call = useCall(onChanged)
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [client, setClient] = useState('')
+  const [skus, setSkus] = useState<string[]>(['', '', '', '', ''])
+  const [x, setX] = useState<string>('')
+  const [recipient, setRecipient] = useState('')
+  const [product, setProduct] = useState('')
+  const [category, setCategory] = useState('')
+  const [rejectReason, setRejectReason] = useState('')
+  const [sentAt, setSentAt] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  // Reset the form whenever a different draft, or a new revision of it, opens.
+  useEffect(() => {
+    if (!draft) return
+    setSubject(draft.subject ?? '')
+    setBody(draft.body ?? '')
+    setClient(draft.inputs?.clientCompanyName ?? '')
+    const s = draft.inputs?.skus ?? []
+    setSkus(SKU_SLOTS.map((i) => s[i] ?? ''))
+    setX(typeof draft.inputs?.xOf5 === 'number' ? String(draft.inputs.xOf5) : '')
+    setRecipient(draft.recipient ?? '')
+    setProduct(draft.inputs?.product ?? '')
+    setCategory(draft.inputs?.productCategory ?? '')
+    setRejectReason('')
+    setSentAt('')
+    setCopied(false)
+    call.clearError()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.actionId, draft?.revision, draft?.status])
+
+  const p = draft?.personalization ?? null
+  const unresolved = useMemo(() => p?.unresolved ?? [], [p])
+
+  if (!draft) return null
+
+  const id = draft.actionId
+  const isDraft = draft.status === 'draft'
+  const isApproved = draft.status === 'ready_to_send'
+  const editable = canOperate && (isDraft || isApproved)
+  const dirty = subject !== (draft.subject ?? '') || body !== (draft.body ?? '')
+  const gates = draft.gates
+  const signals = view.facts.signals ?? []
+  const used = new Set(p?.signalsUsed ?? [])
+  const considered = new Set(p?.signalsConsidered ?? [])
+  const aiLine = p?.aiLine ?? null
+  const post = (path: string, payload?: unknown) => api.post(`/outreach/sequence${path}`, payload ?? {})
+
+  const saveInputs = () => {
+    const patch: Record<string, unknown> = {}
+    if (draft.requiredInputs.includes('clientCompanyName')) patch.clientCompanyName = client.trim() || null
+    if (draft.requiredInputs.includes('skus')) {
+      const list = skus.map((s) => s.trim())
+      patch.skus = list.every((s) => !s) ? null : list
+    }
+    if (draft.requiredInputs.includes('xOf5')) patch.xOf5 = x === '' ? null : Number(x)
+    if (unresolved.includes('product') || draft.inputs?.product) patch.product = product.trim() || null
+    if (unresolved.includes('productCategory') || draft.inputs?.productCategory) patch.productCategory = category.trim() || null
+    if (recipient.trim() !== (draft.recipient ?? '')) patch.recipientEmail = recipient.trim() || null
+    return call.run('inputs', () => post(`/actions/${id}/inputs`, patch))
+  }
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard?.writeText(asPlainText(draft.recipient, draft.subject, draft.body))
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  const attested = (key: string) => draft.attestations.find((a) => a.key === key) ?? null
+  const needsValues = draft.requiredInputs.length > 0 || unresolved.includes('product') || unresolved.includes('productCategory') || !draft.recipient
+
+  return (
+    <Drawer
+      open={open}
+      onClose={onClose}
+      width={720}
+      title={`${draft.pdfRef} ${draft.label}`}
+      subtitle={
+        <span className="row">
+          <StatusBadge status={toUiStatus(draft.status)} label={STATUS_WORD[draft.status] ?? draft.status.replace(/_/g, ' ')} size="sm" />
+          {draft.edited && <Chip tone="info">Edited by Sales</Chip>}
+          <Chip>Revision {draft.revision}</Chip>
+        </span>
+      }
+    >
+      <div className="otr-ed">
+        {call.error && (
+          <p className="otr-err" role="alert">
+            <AlertTriangle size={13} aria-hidden="true" /> {call.error}
+          </p>
+        )}
+
+        {/* ── Who and where ─────────────────────────────────────────── */}
+        <section className="otr-ed__block">
+          <Field label="Company" value={view.facts.companyName} />
+          <Field
+            label="Decision maker"
+            value={draft.contactName ? `${draft.contactName}${draft.contactTitle ? ` · ${draft.contactTitle}` : ''}` : <Unset />}
+          />
+          <Field
+            label="Recipient"
+            value={
+              draft.recipient ? (
+                <span>
+                  {draft.recipient}{' '}
+                  <span className="cell-dim">({draft.recipientSource === 'sales_entered' ? 'entered by Sales' : 'from Decision Makers'})</span>
+                </span>
+              ) : (
+                <Unset what="No email address on record — enter one below" />
+              )
+            }
+          />
+          <Field
+            label="Approved template"
+            value={`${draft.pdfRef} ${draft.label}${draft.version ? ` · ${draft.version.toUpperCase()}` : ''}${p?.templateSet ? ` · ${p.templateSet}` : ''}`}
+          />
+          {(draft.dueStartAt || draft.dueEndAt) && (
+            <Field label="Due" value={fmtWindow({ start: draft.dueStartAt ?? draft.dueEndAt!, end: draft.dueEndAt ?? draft.dueStartAt! })} />
+          )}
+          {draft.approvedAt && <Field label="Approved" value={fmtDateTime(draft.approvedAt)} />}
+          {draft.sentAt && <Field label="Marked sent" value={fmtDateTime(draft.sentAt)} />}
+          {draft.statusReason && draft.status !== 'draft' && <p className="note">{draft.statusReason}</p>}
+        </section>
+
+        {/* ── Version (initial email only) ──────────────────────────── */}
+        {draft.stageKey === 'initial' && draft.version && editable && (
+          <section className="otr-ed__block">
+            <p className="eyebrow">Version</p>
+            <div className="otr-seg" role="group" aria-label="Initial email version">
+              {(['v1', 'v2', 'v3'] as Version[]).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  className="otr-seg__btn"
+                  aria-pressed={draft.version === v}
+                  disabled={Boolean(call.busy) || draft.version === v}
+                  onClick={() => void call.run('version', () => post(`/actions/${id}/version`, { version: v }))}
+                >
+                  {v.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <p className="note">
+              {view.campaign?.versionSource === 'sales_override' ? 'Chosen by Sales.' : 'Assigned by rotation across prospects.'} Switching
+              regenerates the draft from that version and clears the test confirmation, because each version states it differently.
+            </p>
+          </section>
+        )}
+
+        {/* ── The email ─────────────────────────────────────────────── */}
+        <section className="otr-ed__block">
+          <label className="field-label" htmlFor={`subj-${id}`}>
+            Subject
+          </label>
+          {draft.subject === null && !editable ? (
+            <Unset what="Sent in the same thread as the initial email" />
+          ) : (
+            <input
+              id={`subj-${id}`}
+              className="otr-input"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              readOnly={!editable}
+            />
+          )}
+          <label className="field-label" htmlFor={`body-${id}`} style={{ marginTop: 'var(--s3)' }}>
+            Body
+          </label>
+          <textarea
+            id={`body-${id}`}
+            className="textarea otr-body"
+            rows={18}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            readOnly={!editable}
+          />
+          {editable && (
+            <div className="row" style={{ marginTop: 'var(--s2)' }}>
+              <Button
+                icon={Save}
+                size="sm"
+                disabled={!dirty}
+                busy={call.busy === 'edit'}
+                onClick={() => void call.run('edit', () => post(`/actions/${id}/edit`, { subject: subject || null, body }))}
+              >
+                Save changes
+              </Button>
+              {dirty && (
+                <Button size="sm" variant="quiet" onClick={() => { setSubject(draft.subject ?? ''); setBody(draft.body) }}>
+                  Discard changes
+                </Button>
+              )}
+              {isApproved && <span className="cell-dim">Saving a change returns the email to review.</span>}
+            </div>
+          )}
+          {unresolved.length > 0 && (
+            <p className="otr-warn">
+              <AlertTriangle size={12} aria-hidden="true" /> Not filled yet: {unresolved.map((u) => `[${u}]`).join(', ')}. The email cannot be
+              approved while a placeholder remains.
+            </p>
+          )}
+          {draft.mentionsExpo && editable && (gates?.warnings ?? []).some((w) => /expo/i.test(w)) && (
+            <Button size="sm" variant="quiet" busy={call.busy === 'expo'} onClick={() => void call.run('expo', () => post(`/actions/${id}/remove-expo`))}>
+              Remove the expo paragraph
+            </Button>
+          )}
+        </section>
+
+        {/* ── What was personalised, and from what ──────────────────── */}
+        <section className="otr-ed__block">
+          <p className="eyebrow">Personalisation</p>
+          {aiLine?.status === 'added' && aiLine.text ? (
+            <div className="otr-ai">
+              <Chip tone="accent">AI-added line</Chip>
+              <p className="otr-ai__text">{aiLine.text}</p>
+              <p className="cell-dim">Based on: {aiLine.factIds.join(', ')}. Every other sentence is the approved copy.</p>
+            </div>
+          ) : (
+            <p className="note">
+              No AI-written line in this email{aiLine?.reason ? ` — ${aiLine.reason}` : ''}. Every sentence is the approved copy.
+            </p>
+          )}
+          {(p?.resolution ?? []).length > 0 && (
+            <table className="otr-table">
+              <thead>
+                <tr>
+                  <th>Placeholder</th>
+                  <th>Filled with</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(p?.resolution ?? []).map((r) => (
+                  <tr key={r.placeholder}>
+                    <td className="mono">{r.placeholder}</td>
+                    <td>{r.value ?? <Unset what="Not filled" />}</td>
+                    <td className="cell-dim">{r.source}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        {/* ── Intent signals ────────────────────────────────────────── */}
+        <section className="otr-ed__block">
+          <p className="eyebrow">Intent signals</p>
+          {signals.length === 0 ? (
+            <p className="note">No active, verified intent signal for this company. None was used, and none was assumed.</p>
+          ) : (
+            <ul className="otr-list">
+              {signals.map((s) => {
+                const sid = `signal.${s.id}`
+                return (
+                  <li key={s.id}>
+                    <span className="row">
+                      <Chip tone={used.has(sid) ? 'accent' : 'neutral'}>{used.has(sid) ? 'Used' : considered.has(sid) ? 'Considered' : 'Available'}</Chip>
+                      <span className="cell-dim">
+                        {s.category.replace(/_/g, ' ')}
+                        {s.observedAt ? ` · ${s.observedAt.slice(0, 10)}` : ''}
+                      </span>
+                    </span>
+                    <span>{s.summary}</span>
+                    {s.sourceUrl && (
+                      <a className="cell-link" href={s.sourceUrl} target="_blank" rel="noreferrer noopener">
+                        Source
+                      </a>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
+
+        {/* ── Values only Sales can supply ──────────────────────────── */}
+        {editable && needsValues && (
+          <section className="otr-ed__block">
+            <p className="eyebrow">Values from Sales</p>
+            <p className="note">These are never filled by the AI — they come from your own test, report or records.</p>
+            <div className="otr-grid">
+              {!draft.recipient && (
+                <label>
+                  <span className="field-label">Recipient email</span>
+                  <input className="otr-input" type="email" value={recipient} onChange={(e) => setRecipient(e.target.value)} />
+                </label>
+              )}
+              {draft.requiredInputs.includes('clientCompanyName') && (
+                <label>
+                  <span className="field-label">Client Company Name</span>
+                  <input className="otr-input" value={client} onChange={(e) => setClient(e.target.value)} />
+                </label>
+              )}
+              {(unresolved.includes('product') || draft.inputs?.product) && (
+                <label>
+                  <span className="field-label">Product</span>
+                  <input className="otr-input" value={product} onChange={(e) => setProduct(e.target.value)} />
+                </label>
+              )}
+              {(unresolved.includes('productCategory') || draft.inputs?.productCategory) && (
+                <label>
+                  <span className="field-label">Product category</span>
+                  <input className="otr-input" value={category} onChange={(e) => setCategory(e.target.value)} />
+                </label>
+              )}
+              {draft.requiredInputs.includes('xOf5') && (
+                <label>
+                  <span className="field-label">X of 5 (from your report)</span>
+                  <select className="otr-input" value={x} onChange={(e) => setX(e.target.value)}>
+                    <option value="">Not entered</option>
+                    {[0, 1, 2, 3, 4, 5].map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            {draft.requiredInputs.includes('skus') && (
+              <div className="otr-grid" style={{ marginTop: 'var(--s3)' }}>
+                {SKU_SLOTS.map((i) => (
+                  <label key={i}>
+                    <span className="field-label">SKU {i + 1}</span>
+                    <input
+                      className="otr-input"
+                      value={skus[i]}
+                      onChange={(e) => setSkus((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="row" style={{ marginTop: 'var(--s3)' }}>
+              <Button icon={Save} size="sm" busy={call.busy === 'inputs'} onClick={() => void saveInputs()}>
+                Save values
+              </Button>
+            </div>
+          </section>
+        )}
+
+        {/* ── Confirmations only Sales can make ─────────────────────── */}
+        {draft.attestationDefs.length > 0 && (
+          <section className="otr-ed__block">
+            <p className="eyebrow">Sales confirmation</p>
+            {draft.attestationDefs.map((d) => {
+              const a = attested(d.key)
+              return (
+                <label key={d.key} className="otr-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(a)}
+                    disabled={!editable || Boolean(call.busy)}
+                    onChange={(e) => void call.run(`attest-${d.key}`, () => post(`/actions/${id}/attest`, { key: d.key, confirmed: e.target.checked }))}
+                  />
+                  <span>
+                    {d.statement}
+                    {d.maxAgeDays ? <span className="cell-dim"> (valid for {d.maxAgeDays} days)</span> : null}
+                    {a && <span className="cell-dim"> — confirmed {fmtDateTime(a.at)}</span>}
+                  </span>
+                </label>
+              )
+            })}
+          </section>
+        )}
+
+        {/* ── The checklist ─────────────────────────────────────────── */}
+        {gates && (
+          <section className="otr-ed__block">
+            <p className="eyebrow">Before approval</p>
+            <ul className="otr-gates">
+              {gates.items.map((g) => (
+                <li key={g.key} className={g.ok ? 'is-ok' : 'is-bad'}>
+                  {g.ok ? <CheckCircle2 size={13} aria-hidden="true" /> : <XCircle size={13} aria-hidden="true" />}
+                  <span>
+                    {g.label}
+                    {g.detail && !g.ok ? <span className="cell-dim"> — {g.detail}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {gates.warnings.map((w, i) => (
+              <p key={i} className="otr-warn">
+                <AlertTriangle size={12} aria-hidden="true" /> {w}
+              </p>
+            ))}
+          </section>
+        )}
+
+        {/* ── Decisions ─────────────────────────────────────────────── */}
+        {isDraft && canApprove && (
+          <section className="otr-ed__block">
+            <div className="row">
+              <Button
+                icon={ThumbsUp}
+                variant="primary"
+                disabled={!gates?.ok || dirty}
+                title={dirty ? 'Save your changes first' : gates?.ok ? undefined : 'Complete the checklist first'}
+                busy={call.busy === 'approve'}
+                onClick={() => void call.run('approve', () => post(`/actions/${id}/approve`))}
+              >
+                Approve
+              </Button>
+            </div>
+            <label className="field-label" htmlFor={`rej-${id}`} style={{ marginTop: 'var(--s3)' }}>
+              Reason for rejecting (optional)
+            </label>
+            <textarea id={`rej-${id}`} className="textarea" rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+            <div className="row" style={{ marginTop: 'var(--s2)' }}>
+              <Button
+                icon={RotateCcw}
+                size="sm"
+                busy={call.busy === 'regen'}
+                onClick={() => void call.run('regen', () => post(`/actions/${id}/reject`, { reason: rejectReason, regenerate: true }))}
+              >
+                Reject &amp; regenerate
+              </Button>
+              <Button
+                icon={XCircle}
+                size="sm"
+                variant="danger"
+                busy={call.busy === 'reject'}
+                onClick={() => void call.run('reject', () => post(`/actions/${id}/reject`, { reason: rejectReason, regenerate: false }))}
+              >
+                Reject
+              </Button>
+            </div>
+          </section>
+        )}
+        {isDraft && !canApprove && <p className="note">Approval is made by someone with approval permission.</p>}
+
+        {isApproved && (
+          <section className="otr-ed__block otr-ed__send">
+            <p className="note">
+              Approved. Send it yourself from your own mail program — this platform does not send email — then mark it sent here so the
+              sequence can move on.
+            </p>
+            <div className="row">
+              <Button icon={Copy} size="sm" onClick={() => void copy()}>
+                {copied ? 'Copied' : 'Copy email'}
+              </Button>
+              <a className="btn btn--ghost btn--sm" href={buildMailto(draft.recipient, draft.subject, draft.body)}>
+                <Mail size={14} aria-hidden="true" /> Open in mail app
+              </a>
+            </div>
+            {canOperate && (
+              <>
+                <label className="field-label" htmlFor={`sent-${id}`} style={{ marginTop: 'var(--s3)' }}>
+                  Sent on (leave empty for now)
+                </label>
+                <input id={`sent-${id}`} className="otr-input" type="datetime-local" value={sentAt} onChange={(e) => setSentAt(e.target.value)} />
+                <div className="row" style={{ marginTop: 'var(--s2)' }}>
+                  <Button
+                    icon={CheckCircle2}
+                    variant="primary"
+                    disabled={dirty}
+                    busy={call.busy === 'sent'}
+                    onClick={() =>
+                      void call.run('sent', () => post(`/actions/${id}/mark-sent`, { sentAt: sentAt ? new Date(sentAt).toISOString() : null }))
+                    }
+                  >
+                    Mark as sent
+                  </Button>
+                </div>
+              </>
+            )}
+          </section>
+        )}
+      </div>
+    </Drawer>
+  )
+}

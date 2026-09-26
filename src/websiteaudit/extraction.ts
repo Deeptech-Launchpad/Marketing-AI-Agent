@@ -155,6 +155,84 @@ const DIMENSION_KEY = /\b(dimension|size|width|height|length|depth|diameter|bore
 const WEIGHT_KEY = /\b(weight|mass|nett?\s*weight|gross\s*weight)\b/i
 const UNIT_TOKEN = /\b(mm|cm|m|km|in(ch(es)?)?|ft|yd|kg|g|lb|lbs|oz|t|tonnes?|ml|l|litres?|liters?|bar|psi|°?[cf])\b/i
 
+/**
+ * The primary product image, as an absolute URL on the company's own site.
+ *
+ * Tried in order of how much the page is ASSERTING the image is the product:
+ * a schema.org `image` is a declaration, `og:image` is what the site tells
+ * social platforms to show, and only then a plain `<img>`. Data URIs, SVG
+ * icons, spacers and obvious logo/sprite assets are skipped — a customer report
+ * showing a company's own logo where their product should be is worse than
+ * showing nothing.
+ *
+ * Returns null rather than a guess. "No image published" is a real finding.
+ */
+function extractProductImage(html: string, pageUrl: string, ld: Record<string, unknown> | null): Observation | null {
+  const absolute = (raw: string): string | null => {
+    const v = decode(raw).trim()
+    if (!v || v.startsWith('data:')) return null
+    try {
+      return new URL(v, pageUrl).toString()
+    } catch {
+      return null
+    }
+  }
+
+  const usable = (u: string): boolean => {
+    const low = u.toLowerCase()
+    if (low.endsWith('.svg')) return false
+    return !/(logo|sprite|icon|placeholder|blank|spacer|pixel|favicon)/.test(low)
+  }
+
+  // 1. schema.org image — a declaration by the page itself.
+  if (ld) {
+    const raw = ld.image
+    const first = Array.isArray(raw) ? raw[0] : raw
+    const candidate =
+      typeof first === 'string'
+        ? first
+        : first && typeof first === 'object'
+          ? ((first as Record<string, unknown>).url as string | undefined) ?? null
+          : null
+    if (candidate) {
+      const abs = absolute(candidate)
+      if (abs) return observed('product.image', abs, 'json_ld', 'Product.image', abs.slice(0, 300))
+    }
+  }
+
+  // 2. og:image — what the site nominates as its own representative picture.
+  const og = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+  if (og?.[1]) {
+    const abs = absolute(og[1])
+    // Filtered like any other candidate. A homepage's og:image is very often
+    // the company logo, and a "product image" that is really a logo is worse
+    // than an honest blank: it looks like evidence and is not.
+    if (abs && usable(abs)) return observed('product.image', abs, 'meta_tag', 'meta[property=og:image]', abs.slice(0, 300))
+  }
+
+  // 3. The first <img> that is not obviously furniture.
+  //
+  // Lazy-loading is the norm on catalogue pages, so the real URL frequently
+  // lives in data-src / data-lazy-src / srcset rather than src. Reading src
+  // alone found nothing on a page that plainly had product photographs.
+  const ATTRS = ['src', 'data-src', 'data-original', 'data-lazy-src', 'data-srcset', 'srcset']
+  for (const tag of html.match(/<img\b[^>]*>/gi) ?? []) {
+    for (const attr of ATTRS) {
+      const m = tag.match(new RegExp(attr + '=["' + "'" + ']([^"' + "'" + ']+)["' + "'" + ']', 'i'))
+      if (!m?.[1]) continue
+      // srcset is a comma-separated candidate list; the first URL is enough.
+      const raw = m[1].split(',')[0]!.trim().split(/\s+/)[0]!
+      const abs = absolute(raw)
+      if (abs && usable(abs)) {
+        return observed('product.image', abs, 'dom_heuristic', `product <img> [${attr}]`, abs.slice(0, 300))
+      }
+    }
+  }
+
+  return null
+}
+
 export function extractProductObservations(html: string, url: string): Observation[] {
   const found: Observation[] = []
   const nodes = jsonLdNodes(extractJsonLd(html))
@@ -302,6 +380,10 @@ export function extractProductObservations(html: string, url: string): Observati
 
   const images = countImages(html)
   found.push(observed('product.imageCount', String(images), 'dom_heuristic', '<img> elements', `${images} <img> elements`))
+
+  // The image ITSELF, not just how many there are. Absent is left absent.
+  const image = extractProductImage(html, url, product ? (product.node as Record<string, unknown>) : null)
+  if (image) found.push(image)
 
   const docs = extractDocumentLinks(extractLinks(html))
   if (docs.length) {

@@ -9,15 +9,10 @@ import { ProspectDiscovery } from './engines/ProspectDiscovery'
 import { Enrichment } from './engines/Enrichment'
 import { IntentSignals } from './engines/IntentSignals'
 import { DecisionMakers } from './engines/DecisionMakers'
-import { WebsiteAudit } from './engines/WebsiteAudit'
-import { AuditReport } from './engines/AuditReport'
-import { Approval } from './engines/Approval'
-import { Workbench } from './engines/Workbench'
 import { Outreach } from './engines/Outreach'
 import { Engagement } from './engines/Engagement'
-import { IntentScoring } from './engines/IntentScoring'
-import { Qualification } from './engines/Qualification'
 import { CrmSync } from './engines/CrmSync'
+import { Settings } from './engines/Settings'
 
 export default function App() {
   return (
@@ -56,15 +51,11 @@ function Gate() {
           <Route path="/enrichment" element={<Enrichment />} />
           <Route path="/intent" element={<IntentSignals />} />
           <Route path="/decision-makers" element={<DecisionMakers />} />
-          <Route path="/audit" element={<WebsiteAudit />} />
-          <Route path="/report" element={<AuditReport />} />
-          <Route path="/approval" element={<Approval />} />
-          <Route path="/workbench" element={<Workbench />} />
           <Route path="/outreach" element={<Outreach />} />
           <Route path="/engagement" element={<Engagement />} />
-          <Route path="/scoring" element={<IntentScoring />} />
-          <Route path="/qualification" element={<Qualification />} />
-          <Route path="/crm" element={<CrmSync />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/crm-sync" element={<CrmSync />} />
+          <Route path="/crm" element={<Navigate to="/settings/crm-sync" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

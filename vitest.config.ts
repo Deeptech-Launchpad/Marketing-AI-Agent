@@ -8,6 +8,23 @@ import { defineConfig } from 'vitest/config'
 
 const USE_REAL = process.env.TEST_USE_REAL === '1'
 
+/**
+ * The CRM the TEST SUITE talks to. Always local unless deliberately overridden.
+ *
+ * NXT_SALES_BASE_URL in .env is the PLATFORM's target, and that is now the live
+ * host. This file imports dotenv, so reading `process.env.NXT_SALES_BASE_URL`
+ * here silently pointed the entire integration suite at production the moment
+ * the platform was repointed — TEST_USE_REAL=1 would have sent real traffic to
+ * a live CRM, and nothing asserted otherwise.
+ *
+ * The override is a SEPARATE variable that nothing else writes and .env does
+ * not define, so aiming tests elsewhere has to be a deliberate act rather than
+ * a side effect of configuring the platform. Live verification is not this
+ * suite's job: it has its own command (npm run verify:live-crm), reading its
+ * own LIVE_NXT_SALES_* variables, and it is GET-only.
+ */
+const TEST_CRM_BASE_URL = process.env.TEST_NXT_SALES_BASE_URL ?? 'http://localhost:4000'
+
 /** Adds a Prisma pool bound to a connection string, preserving what is there. */
 function withPoolLimit(url: string, limit: number): string {
   const parsed = new URL(url)
@@ -70,7 +87,7 @@ export default defineConfig({
           'postgresql://postgres:marketing_dev_pw@127.0.0.1:5434/marketing_agent_dev?schema=marketing',
         5,
       ),
-      NXT_SALES_BASE_URL: process.env.NXT_SALES_BASE_URL ?? 'http://localhost:4000',
+      NXT_SALES_BASE_URL: TEST_CRM_BASE_URL,
       NXT_SALES_SERVICE_USER_ID: process.env.NXT_SALES_SERVICE_USER_ID ?? '',
       GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? '',
       // Same reasoning as JWT_SECRET: unit tests are happy with a dummy, but

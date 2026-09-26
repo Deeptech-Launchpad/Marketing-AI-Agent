@@ -77,7 +77,9 @@ export async function mapConceptToIndustries(opts: MapConceptOptions): Promise<C
       status: 'unmapped',
       applied: [],
       requiresApproval: true,
-      note: 'The CRM returned no industry vocabulary, so the concept could not be mapped to anything.',
+      note:
+        'The CRM returned no industry vocabulary, so the concept could not be mapped to anything. ' +
+        'There is no industry value to filter on — do not run the audience without one.',
       interpretation: '',
       rejected: [],
       vocabularySize: 0,
@@ -142,7 +144,8 @@ export async function mapConceptToIndustries(opts: MapConceptOptions): Promise<C
     applied = []
     note =
       `"${concept}" could not be mapped to any of the ${vocabulary.length} industry values in the CRM. ` +
-      `No industry filter was applied. Supply explicit industry values, or confirm a different targeting axis.`
+      `There is no industry value to filter on — do not run the audience without one, as that would include every industry. ` +
+      `Supply explicit industry values, or confirm a different targeting axis.`
   }
 
   return {

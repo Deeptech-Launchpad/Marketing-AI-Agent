@@ -1,4 +1,15 @@
+import { createHash } from 'node:crypto'
 import { Prisma } from '@prisma/client'
+import { captureAvailable, captureHtml, captureUrl, renderUrlHtml } from '../research/pageCapture.js'
+import { fetchPageRaw, type RawPageResult } from '../research/pageFetch.js'
+import { AFTER_PAGE_RECIPE, brandedEnrichedPdpHtml } from '../workbench/enrichedPdpBrand.js'
+import { extractCategoryObservations, extractPageObservations, extractProductObservations } from './extraction.js'
+import { wordCount } from './htmlStructure.js'
+import { enrichPdp } from './pdpEnrichment.js'
+import { assessPdpPage, readEndPdpValue, type PdpAssessment } from './pdpTarget.js'
+import type { Observation } from './types.js'
+import { resolveCompanySource } from '../crm/companySource.js'
+import type { CrmCompany } from '../crm/types.js'
 import { env } from '../config/env.js'
 import { getCrm } from '../crm/index.js'
 import { audit as auditLog } from '../platform/audit.js'
@@ -62,11 +73,17 @@ export async function queueWebsiteAudit(input: {
  * column is whatever someone typed. Nothing is invented: a company with neither
  * yields null and the run reports that rather than guessing a domain from the
  * company name.
+ *
+ * The CRM field is read through resolveCompanySource rather than directly. A
+ * record whose website column holds "facebook.com" has no website, and used to
+ * send this crawler to a social platform's front door — which then failed, and
+ * was reported as the customer's site being unreadable. A platform is not a
+ * website, and that judgement is made in exactly one place now.
  */
 export async function resolveStartUrl(
   tenantId: string,
   crmCompanyId: string,
-  crmDomain: string | null,
+  company: CrmCompany | string | null,
 ): Promise<{ url: string | null; source: string }> {
   const enrichment = await prisma.companyEnrichment.findFirst({
     where: { tenantId, crmCompanyId, status: 'enriched' },
@@ -78,10 +95,19 @@ export async function resolveStartUrl(
     return { url: enrichment.sourceUrl, source: 'Stage 2 enrichment (a URL that responded)' }
   }
 
-  const host = hostOf(crmDomain?.startsWith('http') ? crmDomain : `https://${crmDomain ?? ''}`)
-  if (host) return { url: `https://${host}`, source: 'NXT Sales company website field' }
+  // A bare string is still accepted so existing callers and tests that pass a
+  // domain keep working; it is classified by the same rules either way.
+  const source =
+    typeof company === 'string' || company === null
+      ? resolveCompanySource({ domain: company, emails: [], linkedProfiles: [] } as unknown as CrmCompany)
+      : resolveCompanySource(company)
 
-  return { url: null, source: 'no website on record' }
+  if (source.websiteUrl) {
+    const host = hostOf(source.websiteUrl)
+    if (host) return { url: `https://${host}`, source: 'NXT Sales company website field' }
+  }
+
+  return { url: null, source: source.reason ?? 'no website on record' }
 }
 
 /** Queue handler. Never throws: failures are recorded on the run row. */
@@ -111,7 +137,15 @@ export async function runWebsiteAudit(runId: string): Promise<void> {
       return
     }
 
-    const { url: startUrl, source } = await resolveStartUrl(run.tenantId, run.crmCompanyId, company.domain)
+    // THE END PDP AUDIT. Only the product page recorded in NXT Sales is read.
+    // The whole-site crawl below is retained for a future full-website audit
+    // and is not reached from here.
+    if (env.AUDIT_SCOPE === 'end_pdp') {
+      await auditEndPdp(run, company, log)
+      return
+    }
+
+    const { url: startUrl, source } = await resolveStartUrl(run.tenantId, run.crmCompanyId, company)
     if (!startUrl) {
       // A company with no website is a normal, reportable outcome — not a
       // failure, and certainly not a reason to guess a domain from its name.
@@ -154,7 +188,25 @@ export async function runWebsiteAudit(runId: string): Promise<void> {
       structuredDataPages: result.stats.structuredDataPages,
       totalBytes: result.stats.totalBytes,
       limitsHit: result.stats.limitsHit as never,
-      limitsApplied: { ...limits, startUrlSource: source } as never,
+      // How the crawl was steered, kept with the run so a later run under
+      // different configuration is comparable rather than silently different.
+      // The sitemap note belongs here for the same reason: "this site
+      // publishes no sitemap" is a finding, and a run that looked and found
+      // none must be distinguishable from one that never looked.
+      limitsApplied: {
+        ...limits,
+        startUrlSource: source,
+        sitemap: {
+          sourcesRead: result.sitemap.sourcesRead,
+          urlsQueued: result.sitemap.urls.length,
+          note: result.sitemap.note,
+        },
+        // First-party JavaScript read because a page was a client-rendered
+        // shell. Empty for a site that renders on the server, which is most of
+        // them — and the fact that it was needed is itself worth knowing about
+        // a site whose markup names none of its own pages.
+        assetsRead: result.stats.assetsRead,
+      } as never,
       failureReason: result.failureReason,
     })
 
@@ -209,6 +261,222 @@ export async function runWebsiteAudit(runId: string): Promise<void> {
       })
       .catch(() => undefined)
   }
+}
+
+/**
+ * Audits the End PDP link, and only that page.
+ *
+ * Three outcomes, all recorded as a completed run with a pdpAssessment:
+ *   valid product page → page stored, enriched record built, both pages
+ *                        photographed, report generated
+ *   link problem       → the issue and the next step for the marketing agent
+ *   no link            → a recommendation for how to get one
+ */
+async function auditEndPdp(
+  run: { id: string; tenantId: string; crmCompanyId: string },
+  company: CrmCompany,
+  log: typeof logger,
+): Promise<void> {
+  const runId = run.id
+  const website = resolveCompanySource(company).websiteUrl
+  const read = readEndPdpValue(company.endPdpUrl, website)
+
+  let assessment: PdpAssessment
+  let fetched: RawPageResult | null = null
+  if ('assessment' in read) {
+    assessment = read.assessment
+  } else {
+    fetched = await fetchPageRaw(read.fetchUrl)
+    assessment = assessPdpPage({ endPdpValue: company.endPdpUrl, companyWebsite: website, fetched, fetchUrl: read.fetchUrl })
+
+    // The served HTML showed no product, but the page loaded. Many shops build
+    // the product view with JavaScript, so read the page as a browser renders
+    // it and decide again. Only the rendered DOM changes; every rule is the same.
+    if (
+      fetched.ok &&
+      (assessment.issue === 'not_a_product_page' || assessment.issue === 'javascript_only') &&
+      captureAvailable().ok
+    ) {
+      const rendered = await renderUrlHtml(fetched.finalUrl ?? read.fetchUrl)
+      if (rendered.ok && rendered.html) {
+        const renderedFetch: RawPageResult = {
+          ...fetched,
+          html: rendered.html,
+          finalUrl: rendered.finalUrl || fetched.finalUrl,
+          bytes: Buffer.byteLength(rendered.html),
+        }
+        const second = assessPdpPage({
+          endPdpValue: company.endPdpUrl,
+          companyWebsite: website,
+          fetched: renderedFetch,
+          fetchUrl: read.fetchUrl,
+        })
+        if (second.case === 'valid_product') {
+          fetched = renderedFetch
+          assessment = { ...second, signals: ['Read from the page as rendered by a browser.', ...second.signals] }
+        }
+      }
+    }
+
+    await persistPdpPage(run.tenantId, runId, run.crmCompanyId, fetched, assessment)
+  }
+
+  const valid = assessment.case === 'valid_product'
+  const pageUrl = assessment.finalUrl ?? assessment.url
+  // The page facts are written now so the screens can show which case this is.
+  // A valid product page stays "running" until its enriched record, captures
+  // and report exist — a run marked completed with none of them would read as
+  // an audit that produced nothing.
+  const recordPage = valid
+    ? (data: Record<string, unknown>) => prisma.websiteAuditRun.update({ where: { id: runId }, data: data as never })
+    : (data: Record<string, unknown>) => finish(runId, 'completed', data)
+  await recordPage({
+    companyName: company.name,
+    startUrl: pageUrl,
+    rootHost: pageUrl ? hostOf(pageUrl) : null,
+    pagesFetched: fetched?.ok ? 1 : 0,
+    productPages: valid ? 1 : 0,
+    categoryPages: assessment.issue === 'category_page' ? 1 : 0,
+    otherPages: fetched?.ok && !valid && assessment.issue !== 'category_page' ? 1 : 0,
+    httpErrors: assessment.issue === 'http_error' ? 1 : 0,
+    unreachablePages: assessment.issue === 'unreachable' ? 1 : 0,
+    totalBytes: fetched?.bytes ?? 0,
+    limitsApplied: { scope: 'end_pdp', startUrlSource: 'NXT Sales Company.endPdpUrl' } as never,
+    pdpAssessment: assessment as never,
+    failureReason: valid ? null : `${assessment.headline}. ${assessment.explanation}`.slice(0, 500),
+  })
+
+  if (valid && fetched) {
+    const enrichment = await enrichPdp({
+      tenantId: run.tenantId,
+      runId,
+      companyName: company.name,
+      html: fetched.html,
+      url: pageUrl!,
+      productName: assessment.productName ?? '',
+    })
+    await prisma.websiteAuditRun.update({ where: { id: runId }, data: { pdpEnrichment: enrichment as never } })
+
+    const before = await captureUrl(pageUrl!)
+    // The SAME After page the Workbench shows: the company's own branding
+    // around the enriched structure. One page, photographed for the report.
+    const afterHtml = enrichment.status === 'ready' ? await brandedEnrichedPdpHtml(runId, { forCapture: true }) : null
+    const after = afterHtml ? await captureHtml(afterHtml, { baseUrl: pageUrl }) : null
+    // Rendering the After page may have found the company's logo and read
+    // their pictures, and kept both on the run — so the row is read back
+    // rather than written over with the copy held here.
+    const rendered = await prisma.websiteAuditRun.findUnique({
+      where: { id: runId },
+      select: { pdpEnrichment: true },
+    })
+    await prisma.websiteAuditRun.update({
+      where: { id: runId },
+      data: {
+        pdpBeforeCapture: before.image ?? null,
+        pdpAfterCapture: after?.image ?? null,
+        // Records that the stored photograph is the BRANDED After page, and
+        // how that page was drawn, so a report built from an older run knows
+        // to take a fresh one.
+        pdpEnrichment: {
+          ...((rendered?.pdpEnrichment as object) ?? enrichment),
+          afterCaptureBranded: Boolean(after?.image),
+          afterCaptureRecipe: AFTER_PAGE_RECIPE,
+        } as never,
+      },
+    })
+    if (!before.ok) log.info({ reason: before.reason }, 'original page not captured')
+
+    try {
+      await generateAuditReport(runId)
+    } catch (err) {
+      log.error({ err }, 'audit report generation failed; the PDP evidence is retained')
+      await prisma.websiteAuditRun
+        .update({
+          where: { id: runId },
+          data: { failureReason: `PDP audited; report generation failed: ${(err as Error).message?.slice(0, 300)}` },
+        })
+        .catch(() => undefined)
+    }
+    await finish(runId, 'completed', {})
+  }
+
+  await auditLog({
+    tenantId: run.tenantId,
+    actorType: 'agent',
+    action: 'website.pdp_audited',
+    resourceType: 'WebsiteAuditRun',
+    resourceId: runId,
+    dataClass: 'internal',
+    summary: `${company.name}: End PDP ${assessment.case.replace('_', ' ')}${assessment.issue ? ` (${assessment.issue})` : ''}`,
+  })
+  log.info({ case: assessment.case, issue: assessment.issue }, 'end pdp audit finished')
+}
+
+/** Stores the one page the End PDP audit read, with its observations. */
+async function persistPdpPage(
+  tenantId: string,
+  runId: string,
+  crmCompanyId: string,
+  fetched: RawPageResult,
+  assessment: PdpAssessment,
+): Promise<void> {
+  const html = fetched.html ?? ''
+  const url = fetched.finalUrl ?? fetched.requestedUrl
+  const pageType = assessment.pageType ?? 'unknown'
+  const outcome = fetched.ok ? 'fetched' : fetched.status ? 'http_error' : 'unreachable'
+  const observations: Observation[] = html
+    ? [
+        ...extractPageObservations(html, url),
+        ...(assessment.case === 'valid_product'
+          ? extractProductObservations(html, url)
+          : pageType === 'category' || pageType === 'listing'
+            ? extractCategoryObservations(html, url)
+            : []),
+      ]
+    : []
+
+  const pageId = newId()
+  await prisma.auditedPage.create({
+    data: {
+      id: pageId,
+      tenantId,
+      auditRunId: runId,
+      crmCompanyId,
+      requestedUrl: fetched.requestedUrl.slice(0, 2000),
+      finalUrl: fetched.finalUrl?.slice(0, 2000) ?? null,
+      httpStatus: fetched.status,
+      contentType: fetched.contentType?.slice(0, 200) ?? null,
+      outcome,
+      pageType,
+      typeSignals: assessment.signals as never,
+      depth: 0,
+      bytes: fetched.bytes,
+      wordCount: html ? wordCount(html) : 0,
+      contentHash: html ? createHash('sha256').update(html).digest('hex') : null,
+      canonicalUrl: null,
+      duplicateOfUrl: null,
+      redirectChain: fetched.redirectChain as never,
+      truncated: fetched.truncated,
+      failureReason: fetched.reason?.slice(0, 500) ?? null,
+      durationMs: fetched.durationMs,
+      fetchedAt: new Date(),
+    },
+  })
+  if (!observations.length) return
+  await prisma.pageObservation.createMany({
+    data: observations.map((o) => ({
+      id: newId(),
+      tenantId,
+      auditRunId: runId,
+      pageId,
+      field: o.field,
+      status: o.status,
+      value: o.value,
+      method: o.method,
+      sourcePath: o.sourcePath,
+      fragment: o.fragment,
+    })),
+  })
 }
 
 /** Bounds a run's wall clock so one slow site cannot hold a worker forever. */

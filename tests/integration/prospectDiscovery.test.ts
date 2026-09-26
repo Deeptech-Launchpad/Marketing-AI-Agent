@@ -149,4 +149,73 @@ describeIfReady('Stage 1 — prospect discovery against real NXT Sales', () => {
     })
     expect(page.items).toHaveLength(0)
   }, 60_000)
+
+  // ── How many companies a run is asked for ───────────────────────────────
+  //
+  // The count had one source: whatever the parser read out of the objective's
+  // wording. "Find a cleaning supplier in Malta" reads as a request for ONE,
+  // which is how a discovery run came to return a single company with no way
+  // to say otherwise. The operator's number is now recorded on the search row
+  // and wins over that reading — so it has to survive the round trip, and
+  // absence has to stay distinguishable from a request for one.
+
+  it('records the count the operator asked for on the search row', async () => {
+    const { prisma } = await import('../../src/platform/db.js')
+    const { startProspectSearch } = await import('../../src/prospects/prospectDiscovery.js')
+    const tid = await tenant()
+
+    const { id } = await startProspectSearch({
+      tenantId: tid,
+      objective: 'test: cleaning suppliers in Malta',
+      requestedCount: 25,
+      requestedByCrmUserId: 'test-user',
+    })
+    const row = await prisma.prospectSearch.findUniqueOrThrow({ where: { id } })
+    expect(row.requestedCount).toBe(25)
+
+    await prisma.prospectSearch.delete({ where: { id } })
+  }, 60_000)
+
+  it('leaves the count null when none was stated, so the wording still decides', async () => {
+    const { prisma } = await import('../../src/platform/db.js')
+    const { startProspectSearch } = await import('../../src/prospects/prospectDiscovery.js')
+    const tid = await tenant()
+
+    const { id } = await startProspectSearch({
+      tenantId: tid,
+      objective: 'test: no count stated',
+      requestedByCrmUserId: 'test-user',
+    })
+    const row = await prisma.prospectSearch.findUniqueOrThrow({ where: { id } })
+    // Null, not 1. A search that asked for nothing and a search that asked for
+    // one company must not resolve to the same audience.
+    expect(row.requestedCount).toBeNull()
+
+    await prisma.prospectSearch.delete({ where: { id } })
+  }, 60_000)
+
+  it('returns the number asked for, not one, when the CRM holds more', async () => {
+    const { getCrm } = await import('../../src/crm/index.js')
+    const { resolveAudience } = await import('../../src/campaign/audienceResolver.js')
+    const { prisma, newId } = await import('../../src/platform/db.js')
+
+    const tid = await tenant()
+    const segmentId = newId()
+    await prisma.segment.create({
+      data: { id: segmentId, tenantId: tid, name: 'test: shortlist of five', definition: {} as never },
+    })
+
+    const resolved = await resolveAudience({
+      tenantId: tid,
+      segmentId,
+      query: { industries: ['Construction, Building Materials'], hasDeal: false } as never,
+      crm: getCrm(),
+      limit: 5,
+    })
+
+    expect(resolved.capApplied).toBe(5)
+    expect(resolved.totalIncluded).toBe(5)
+
+    await prisma.segment.delete({ where: { id: segmentId } })
+  }, 240_000)
 })

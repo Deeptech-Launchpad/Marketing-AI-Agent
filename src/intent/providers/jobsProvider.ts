@@ -190,7 +190,9 @@ export class ApifyJobsProvider implements IntentProvider {
           `No job board could be collected for ${company.name} (${country ?? 'country not stated'}). ` +
           boardOutcomes.map((b) => `${b.board}: ${b.status}`).join('; '),
         durationMs: Date.now() - started,
-        metadata: { country, boards: boardOutcomes },
+        // No board serving this country is configured or permitted. That is a
+        // configuration fact, not a failure of this run.
+        metadata: { country, boards: boardOutcomes, notConfigured: true },
       }
     }
 

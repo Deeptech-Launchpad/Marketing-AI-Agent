@@ -75,3 +75,52 @@ export function depthOf(url: string): number {
     return 0
   }
 }
+
+/**
+ * Whether a canonical URL points at a variant of the SAME page.
+ *
+ * Canonical exists to collapse `?utm=`, trailing slashes, `www.` and http/https
+ * into one address. Those all share a path. A canonical naming a DIFFERENT path
+ * is making a claim about a different page — usually because a CMS template
+ * hard-codes one value across a whole section — and that claim loses to the
+ * observed fact that the two pages carry different content.
+ */
+export function samePath(canonical: string | null, pageUrl: string): boolean {
+  if (!canonical) return false
+  try {
+    const a = new URL(canonical)
+    const b = new URL(pageUrl)
+    const norm = (u: URL) => u.pathname.replace(/\/+$/, '').toLowerCase() || '/'
+    return norm(a) === norm(b)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Is `child` a strictly deeper path on the same host as `parent`?
+ *
+ * Used to steer a bounded crawl DOWN rather than sideways. On a catalogue
+ * every category page links to every other category page, so a breadth-first
+ * crawl exhausts its page budget on one level and never reaches the detail
+ * pages beneath — which is how a site with a full catalogue was audited as
+ * having no products. Descending is the only move that can reach a product.
+ *
+ * Ordering only. Nothing is excluded on the strength of this.
+ */
+export function isDescendantPath(parent: string, child: string): boolean {
+  try {
+    const a = new URL(parent)
+    const b = new URL(child)
+    if (a.hostname.replace(/^www\./i, '').toLowerCase() !== b.hostname.replace(/^www\./i, '').toLowerCase()) {
+      return false
+    }
+    const seg = (u: URL) => u.pathname.split('/').filter(Boolean).map((s) => s.toLowerCase())
+    const pa = seg(a)
+    const pb = seg(b)
+    if (pb.length <= pa.length) return false
+    return pa.every((s, i) => pb[i] === s)
+  } catch {
+    return false
+  }
+}

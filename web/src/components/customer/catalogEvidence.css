@@ -1,0 +1,81 @@
+/* ── Catalogue evidence: what the Workbench shows without a product page ──
+   The panel a customer sees when their site names products but publishes no
+   product page. It has to read as THEIR catalogue, so the cards carry their
+   own images at a generous size and the missing-field list sits underneath as
+   the consequence rather than as the headline. */
+
+.cate { display: flex; flex-direction: column; gap: var(--s4); }
+
+.cate__head { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.cate__tier { font-size: var(--fs-sm); color: var(--text-muted); }
+
+.cate__detail { margin: 0; font-size: var(--fs-body); line-height: 1.6; color: var(--text); max-width: 74ch; }
+
+.cate__h {
+  margin: 0 0 var(--s2);
+  font-family: var(--font-display);
+  font-size: var(--fs-h3);
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* auto-fill rather than auto-fit: a single observed product keeps a card's
+   width instead of stretching across the panel and reading as a hero. */
+.cate__grid {
+  list-style: none; margin: 0; padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--s3);
+}
+
+.cate__card {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.cate__thumb {
+  aspect-ratio: 4 / 3;
+  display: grid; place-items: center;
+  background: var(--bg-sunken, var(--bg-panel));
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+.cate__thumb img { width: 100%; height: 100%; object-fit: contain; }
+.cate__noimg { font-size: var(--fs-micro); color: var(--text-dim); text-align: center; padding: var(--s3); }
+
+.cate__body { padding: var(--s3); display: flex; flex-direction: column; gap: var(--s2); }
+.cate__name { margin: 0; font-size: var(--fs-sm); font-weight: 650; color: var(--text); overflow-wrap: anywhere; }
+.cate__how { margin: 0; font-size: var(--fs-micro); color: var(--text-dim); }
+.cate__file { margin: 0; font-size: var(--fs-micro); color: var(--text-muted); overflow-wrap: anywhere; }
+.cate__file code { font-family: var(--font-mono); }
+/* The caveat is never allowed to be smaller or fainter than the file name it
+   qualifies: a code shown without it reads as a SKU, which the site does not
+   publish. */
+.cate__caveat { color: var(--text-muted); }
+.cate__link { font-size: var(--fs-micro); }
+
+.cate__more { margin: 0; }
+
+.cate__gap { display: flex; flex-direction: column; gap: var(--s2); }
+.cate__missing { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.cate__missing li {
+  display: grid;
+  grid-template-columns: minmax(120px, 40%) minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: baseline;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.cate__mfield {
+  font-family: var(--font-mono); font-size: var(--fs-micro);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim);
+}
+.cate__mstate { font-size: var(--fs-sm); color: var(--text-muted); font-style: italic; }
+
+@media (max-width: 560px) {
+  .cate__missing li { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
+}

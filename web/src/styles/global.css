@@ -18,8 +18,14 @@ body {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--fs-body);
-  line-height: 1.5;
+  font-weight: var(--fw-body);
+  line-height: var(--lh-body);
+  /* Both smoothing hints, not just the WebKit one. On the light theme the
+     stroke is the thing being read; leaving the Firefox/macOS side on its
+     default rendered the same weight noticeably heavier and muddier there. */
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
   text-rendering: optimizeLegibility;
 }
 
@@ -29,7 +35,7 @@ h3,
 h4 {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
   letter-spacing: -0.01em;
   text-wrap: balance;
 }
@@ -110,8 +116,11 @@ a:hover {
 .eyebrow {
   font-family: var(--font-mono);
   font-size: var(--fs-micro);
-  letter-spacing: 0.12em;
+  /* Loosened tracking is what makes an all-caps label readable; past a point
+     it just makes it wide. 0.12em at 10px was past that point. */
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  font-weight: var(--fw-eyebrow);
   color: var(--text-dim);
 }
 

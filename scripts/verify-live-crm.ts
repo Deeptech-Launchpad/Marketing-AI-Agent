@@ -33,10 +33,20 @@ import jwt from 'jsonwebtoken'
 //   LIVE_NXT_SALES_SERVICE_USER_EMAIL=... \
 //   npx tsx scripts/verify-live-crm.ts
 
+// The IDENTITY falls back to the platform's configured service account, which is
+// the dedicated marketingagent@ user. Only the SECRET has to be supplied for a
+// run, so a verification cannot fail because a 25-character user id was retyped
+// by hand, and cannot silently verify under the wrong identity either.
+//
+// The secret has no fallback and never will: a verification that invents its own
+// credential proves nothing about the one production uses.
 const BASE = process.env.LIVE_NXT_SALES_BASE_URL ?? 'https://nxtsales.altiusnxt.tech'
 const SECRET = process.env.LIVE_NXT_SALES_JWT_SECRET ?? ''
-const USER_ID = process.env.LIVE_NXT_SALES_SERVICE_USER_ID ?? ''
-const USER_EMAIL = process.env.LIVE_NXT_SALES_SERVICE_USER_EMAIL ?? 'marketing-agent@service.local'
+const USER_ID = process.env.LIVE_NXT_SALES_SERVICE_USER_ID ?? process.env.NXT_SALES_SERVICE_USER_ID ?? ''
+const USER_EMAIL =
+  process.env.LIVE_NXT_SALES_SERVICE_USER_EMAIL ??
+  process.env.NXT_SALES_SERVICE_USER_EMAIL ??
+  'marketing-agent@service.local'
 
 let failures = 0
 const ok = (label: string, cond: boolean, detail = '') => {
@@ -53,6 +63,8 @@ if (String(process.env.CRM_WRITE_ENABLED).toLowerCase() === 'true') {
 
 console.log('LIVE NXT SALES — READ-ONLY VERIFICATION')
 console.log(`  host                ${BASE}`)
+console.log(`  service identity    ${USER_EMAIL}`)
+console.log(`  service user id     ${USER_ID || '(not configured)'}`)
 console.log(`  writes enabled      ${process.env.CRM_WRITE_ENABLED ?? 'false'}`)
 console.log('')
 

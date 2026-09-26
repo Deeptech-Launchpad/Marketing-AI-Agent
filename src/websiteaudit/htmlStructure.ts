@@ -161,15 +161,33 @@ export interface ExtractedLink {
   text: string
 }
 
-/** Every <a href>, decoded, with its anchor text. Resolution happens later. */
+/**
+ * Every <a href>, decoded, with its anchor text. Resolution happens later.
+ *
+ * UNQUOTED ATTRIBUTE VALUES ARE LEGAL HTML, and this used to require quotes.
+ * unicaremalta.com is a Squarespace store that emits
+ *
+ *   <a class="product-list-item-link" href=/products/p/bath-board-steel>
+ *
+ * for every product on every catalogue page. Requiring quotes meant the
+ * crawler never saw a single product link on that site: it read fifteen
+ * category pages, found nothing to descend into, and the audit reported that a
+ * company with a full catalogue publishes no products. The diagnosis at the
+ * time was "the product grid is rendered by JavaScript" — it was not. The
+ * markup was there, and this regex could not read it.
+ *
+ * All three HTML5 forms are accepted now: double-quoted, single-quoted, and
+ * unquoted up to the first whitespace or tag delimiter.
+ */
 export function extractLinks(html: string, limit = 800): ExtractedLink[] {
   const out: ExtractedLink[] = []
-  const re = /<a\b[^>]*href\s*=\s*["']([^"'#][^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi
+  const re = /<a\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))[^>]*>([\s\S]*?)<\/a>/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(html)) !== null && out.length < limit) {
-    const href = (m[1] ?? '').trim()
-    if (!href || /^(javascript|mailto|tel|data):/i.test(href)) continue
-    out.push({ href, text: decode(m[2] ?? '').slice(0, 200) })
+    const href = (m[1] ?? m[2] ?? m[3] ?? '').trim()
+    // A bare fragment is a jump within this page, not another page.
+    if (!href || href.startsWith('#') || /^(javascript|mailto|tel|data):/i.test(href)) continue
+    out.push({ href, text: decode(m[4] ?? '').slice(0, 200) })
   }
   return out
 }
@@ -308,9 +326,17 @@ export function extractProductTileLinks(html: string, limit = 60): string[] {
   while ((m = re.exec(html)) !== null && out.length < limit) {
     // The tile's own anchor is the first href shortly after the class attribute.
     const window = html.slice(m.index, m.index + 500)
-    const href = window.match(/<a\b[^>]*href\s*=\s*["']([^"'#][^"']*)["']/i)
-    const value = href?.[1]?.trim()
-    if (value && !/^(javascript|mailto|tel|data):/i.test(value) && !out.includes(value)) out.push(value)
+    // Unquoted values accepted for the reason given on extractLinks.
+    const href = window.match(/<a\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i)
+    const value = (href?.[1] ?? href?.[2] ?? href?.[3])?.trim()
+    if (
+      value &&
+      !value.startsWith('#') &&
+      !/^(javascript|mailto|tel|data):/i.test(value) &&
+      !out.includes(value)
+    ) {
+      out.push(value)
+    }
   }
   return out
 }

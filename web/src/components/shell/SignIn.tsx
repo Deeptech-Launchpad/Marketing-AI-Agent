@@ -3,6 +3,7 @@ import { useAuth } from '../../lib/auth'
 import { AgentMark } from '../agent/AgentMark'
 import { Logo } from './Logo'
 import { Button } from '../ui/primitives'
+import { PIPELINE, numberWord } from '../../lib/engines'
 import './signin.css'
 
 // Sign in.
@@ -43,7 +44,7 @@ export function SignIn() {
           <AgentMark state={busy ? 'running' : 'idle'} size={32} />
           <div>
             <h1 className="signin__title">Marketing AI</h1>
-            <p className="signin__sub">One platform, twelve specialised engines.</p>
+            <p className="signin__sub">One platform, {numberWord(PIPELINE.length)} specialised engines.</p>
           </div>
         </div>
 

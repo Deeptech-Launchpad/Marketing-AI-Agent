@@ -1,0 +1,57 @@
+/* The audit assistant. Uses the shell's own tokens so it reads as part of the
+   Audit Report screen rather than a widget dropped onto it. */
+
+.rasst { display: flex; flex-direction: column; gap: var(--s3); }
+.rasst__title { display: inline-flex; align-items: center; gap: 8px; }
+.rasst__locked { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
+
+.rasst__intro p { margin: 0 0 var(--s3); color: var(--text-soft); font-size: var(--fs-sm); line-height: 1.6; max-width: 72ch; }
+.rasst__suggest { display: flex; flex-wrap: wrap; gap: 8px; }
+.rasst__chip {
+  border: 1px solid var(--line-strong); background: var(--surface-2, transparent); color: var(--text-soft);
+  border-radius: 999px; padding: 6px 12px; font-size: var(--fs-xs); cursor: pointer; text-align: left;
+}
+.rasst__chip:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.rasst__chip:disabled { opacity: 0.55; cursor: default; }
+
+.rasst__log { display: flex; flex-direction: column; gap: var(--s3); max-height: 640px; overflow-y: auto; padding-right: 4px; }
+.rasst__log:empty { display: none; }
+
+.rasst__msg { border-radius: 10px; padding: 10px 14px; font-size: var(--fs-sm); line-height: 1.6; }
+.rasst__msg--user { align-self: flex-end; max-width: 80%; background: var(--accent-soft, #eef2ff); color: var(--text); white-space: pre-wrap; }
+.rasst__msg--assistant { align-self: stretch; border: 1px solid var(--line); background: var(--surface); }
+.rasst__msg--error { display: flex; gap: 8px; align-items: center; border: 1px solid #f3c7c2; background: #fdf3f2; color: #9b2c1f; }
+.rasst__msg--thinking { align-self: flex-start; color: var(--text-muted); font-style: italic; }
+
+.rasst__reply { margin: 0; white-space: pre-wrap; }
+.rasst__cites { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: var(--s2); }
+
+.rasst__warn { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; font-size: var(--fs-xs); color: #9a6212; }
+.rasst__ok { margin: 6px 0 0; font-size: var(--fs-xs); color: #0b7a3b; }
+.rasst__note { font-size: var(--fs-xs); color: var(--text-muted); }
+
+.rasst__draft, .rasst__edit { margin-top: var(--s3); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface-2, #fafbfc); }
+.rasst__draft.is-flagged { border-color: #e8c98f; }
+.rasst__edit { border-left: 3px solid var(--accent); }
+.rasst__edit.is-blocked { border-left-color: #c8102e; }
+.rasst__drafthead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rasst__drafthead strong { flex: 1; font-size: var(--fs-sm); }
+.rasst__draftbody { margin: 0; white-space: pre-wrap; font-family: inherit; font-size: var(--fs-sm); line-height: 1.6; }
+
+.rasst__diff { margin-top: 8px; }
+.rasst__difffield { font-size: var(--fs-xs); font-weight: 600; color: var(--text-soft); }
+.rasst__diffcols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.rasst__diffcols p { margin: 2px 0 0; font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; }
+.rasst__diffold { padding: 8px; border-radius: 6px; background: #fdf3f4; }
+.rasst__diffnew { padding: 8px; border-radius: 6px; background: #f2fbf5; }
+@media (max-width: 760px) { .rasst__diffcols { grid-template-columns: 1fr; } }
+
+.rasst__blocked ul { margin: 4px 0 0; padding-left: 18px; font-size: var(--fs-xs); color: #7a4a0a; }
+.rasst__editactions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: var(--s3); }
+
+.rasst__input { display: flex; gap: 10px; align-items: flex-end; }
+.rasst__input textarea {
+  flex: 1; resize: vertical; min-height: 44px; border: 1px solid var(--line-strong); border-radius: 8px;
+  padding: 8px 10px; font: inherit; font-size: var(--fs-sm); background: var(--surface); color: var(--text);
+}
+.rasst__input textarea:focus { outline: none; border-color: var(--accent); }

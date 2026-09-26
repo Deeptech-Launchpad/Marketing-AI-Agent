@@ -29,7 +29,8 @@ export interface ValidationOutcome {
 
 export interface ValidationInput {
   tenantId: string
-  auditRunId: string
+  /** Null for an intent-basis campaign (2026-09-24 restructure) — see checks 4 and 5 below. */
+  auditRunId: string | null
   message: ComposedMessage
   target: OutreachTarget
 }
@@ -94,9 +95,18 @@ export async function validateAction(input: ValidationInput): Promise<Validation
     })
   } else {
     const findingIds = message.evidence.filter((e) => e.kind === 'catalog_finding' && e.referenceId).map((e) => e.referenceId!)
-    if (findingIds.length) {
+    if (findingIds.length && !input.auditRunId) {
+      // Cannot happen from either path today — a catalog_finding citation is
+      // only ever produced by the audit-basis path, which always carries an
+      // auditRunId — but a claim that cannot be checked is treated as unproven.
+      issues.push({
+        check: 'evidence',
+        field: 'evidence',
+        message: 'The message cites a catalog finding, but no audit run was given to verify it against.',
+      })
+    } else if (findingIds.length) {
       const found = await prisma.catalogFinding.count({
-        where: { id: { in: findingIds }, auditRunId: input.auditRunId },
+        where: { id: { in: findingIds }, auditRunId: input.auditRunId! },
       })
       if (found !== findingIds.length) {
         issues.push({

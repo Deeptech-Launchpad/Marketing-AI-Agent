@@ -186,7 +186,17 @@ export function linkPriority(href: string, anchorText: string): number {
   const h = href.toLowerCase()
   const t = anchorText.toLowerCase()
 
-  if (/\/(products?|item|sku|pd|pdp)\/[^/]+/.test(h) || /\/p\/[^/]+/.test(h)) score += 60
+  if (/\/(products?|item|sku|pd|pdp)\/[^/]+/.test(h)) score += 60
+  // A `/p/<slug>` SEGMENT is a much stronger tell than a /products/ prefix,
+  // and it is scored on top rather than instead. The two together are what a
+  // Squarespace, Shopify or BigCommerce product URL looks like —
+  // /products/p/bath-board-steel — while the category beside it is only
+  // /products/bathroom. Without this separation both scored the same, every
+  // category page linked from the homepage outranked every product link found
+  // one level down, and a fifteen-page budget was spent entirely on
+  // categories: fifteen pages fetched, zero products, on a site with three
+  // hundred of them.
+  if (/\/p\/[^/]+/.test(h)) score += 70
   if (/\/(category|categories|collections?|range|shop|catalog(ue)?)\b/.test(h)) score += 50
   if (/\b(shop|products|catalogue|catalog|browse|range)\b/.test(t)) score += 20
   if (/\/(datasheet|spec|specification|technical)/.test(h)) score += 25

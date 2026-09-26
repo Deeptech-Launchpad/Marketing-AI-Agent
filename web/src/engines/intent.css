@@ -1,0 +1,188 @@
+/* ── Intent signals ──────────────────────────────────────────────────────
+   The centre of this screen answers, in order: how many signals were found,
+   what each one is, and what proves it.
+
+   The old table put the count in a metric tile beside two others and gave the
+   summary a column of a row — a manager reading it could not tell whether the
+   engine had found ten things or ten columns. A card per signal carries the
+   one sentence that matters at full width, with its source, its date and the
+   way into its evidence underneath.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.sig-lead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  font-size: var(--fs-h2);
+  font-weight: 600;
+  color: var(--text);
+  margin-top: var(--s4);
+}
+
+.sig-lead__count {
+  font-family: var(--font-display);
+  font-size: var(--fs-display);
+  line-height: 1;
+  color: var(--e);
+}
+
+.sig-lead__note {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin-top: var(--s2);
+  max-width: 68ch;
+}
+
+/* ── One signal ─────────────────────────────────────────────────────────── */
+
+/* `.sig` belongs to components/motion/motion.css, which sets
+   pointer-events: none on it for the signature canvases. Naming the signal
+   list the same thing made every Evidence button on this screen inert. */
+.siglist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+
+.sig__card {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--e);
+  border-radius: var(--r-md);
+  padding: var(--s4);
+  background: var(--bg-inset);
+}
+
+.sig__head { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s2); }
+.sig__name { font-size: var(--fs-h3); font-weight: 600; color: var(--text); margin-right: var(--s1); }
+
+/* The sentence a manager is meant to read. Everything else on the card is
+   provenance for it. */
+.sig__summary { font-size: var(--fs-sm); line-height: 1.55; color: var(--text-soft); }
+
+.sig__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line-faint);
+}
+
+.sig__where { font-size: var(--fs-xs); color: var(--text-muted); }
+.sig__where a { color: var(--text-muted); text-decoration: underline; text-underline-offset: 2px; }
+.sig__where a:hover { color: var(--text); }
+
+/* Pushed against the evidence button so the date reads as part of the record
+   rather than as a heading for it. */
+.sig__when { font-size: var(--fs-xs); color: var(--text-dim); margin-right: auto; }
+
+/* ── The caveats the API itself returns ─────────────────────────────────── */
+
+.sig-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+.sig-notes li {
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text-muted);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--line);
+}
+
+/* ── Why it matters ─────────────────────────────────────────────────────
+   On the card face, not only inside the drawer. A list of findings with no
+   "so what" makes a reader open every card in turn to decide whether any of
+   them is worth acting on. */
+
+.sig__why {
+  margin-top: var(--s2);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.sig__whylabel {
+  display: inline-block;
+  margin-right: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--e);
+}
+
+/* Which platform a social signal was collected from. Its own chip because
+   "LinkedIn" and "the company's website" are different provenance, and the
+   source label alone does not separate them. */
+.sig__platform {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid color-mix(in srgb, var(--e) 34%, var(--line));
+  background: color-mix(in srgb, var(--e) 9%, transparent);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  color: var(--e);
+}
+
+/* What overtook an expired signal, on the card. Dimmed and italic: it is the
+   correction to the claim above it, not a claim of its own. */
+.sig__superseded {
+  display: block;
+  width: 100%;
+  margin-top: var(--s1);
+  font-size: var(--fs-micro);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* One platform's answer: who it was, what it served, and the link to check.
+   Laid out as a row so a column of them reads as a source list rather than as
+   prose. */
+.sig-src {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+}
+.sig-src:last-child { border-bottom: none; }
+.sig-src__platform { font-size: var(--fs-sm); font-weight: 650; color: var(--text); }
+.sig-src__link { margin-left: auto; font-size: var(--fs-micro); }
+
+/* ── Run panel and run sentence ───────────────────────────────────────────
+   None of the sig-run* classes had rules, so adjacent inline spans ran
+   together ("CRM0 signals", "Apify jobsdid not run — …"). Each provider row
+   is a wrapping flex line with a gap; the JSX also puts real spaces between
+   the name and its outcome so copied text reads correctly. */
+.sig-run { gap: var(--s2); }
+.sig-run__sentence { font-size: var(--fs-sm); line-height: 1.55; color: var(--text-soft); margin: 0 0 var(--s3); }
+.sig-run__sentence > p { margin: 0 0 var(--s2); }
+.sig-run__sentence > p:last-child { margin-bottom: 0; }
+.sig-run__wait {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.sig-run__wait svg { flex: none; margin-top: 2px; }
+.sig-run__fail { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); }
+.sig-run__quote { font-style: italic; color: var(--text-soft); overflow-wrap: anywhere; }
+.sig-run__providers { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s2); }
+.sig-run__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.sig-run__provider {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--s2);
+  row-gap: 2px;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.sig-run__provider:last-child { border-bottom: none; padding-bottom: 0; }
+.sig-run__pname { font-weight: 650; color: var(--text); }
+.sig-run__pcount { color: var(--text-soft); }
+.sig-run__preason { color: var(--text-muted); overflow-wrap: anywhere; }
+.sig-run__provider--down .sig-run__preason { color: var(--danger, var(--text-soft)); }
+.sig-run__provider--notConfigured .sig-run__preason,
+.sig-run__provider--notApplicable .sig-run__preason { color: var(--text-dim); }
+.sig-run__note { font-size: var(--fs-xs); color: var(--text-muted); margin: 0; }

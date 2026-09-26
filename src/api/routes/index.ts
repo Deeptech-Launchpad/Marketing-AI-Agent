@@ -4,6 +4,7 @@ import { adminRoutes } from './admin.routes.js'
 import { approvalRoutes } from './approvals.routes.js'
 import { auditApprovalRoutes } from './auditApproval.routes.js'
 import { campaignRoutes } from './campaigns.routes.js'
+import { companyRoutes } from './companies.routes.js'
 import { decisionMakerRoutes } from './decisionMakers.routes.js'
 import { enrichmentRoutes } from './enrichment.routes.js'
 import { intentRoutes } from './intent.routes.js'
@@ -13,7 +14,10 @@ import { intentScoreRoutes } from './intentScore.routes.js'
 import { crmSyncRoutes } from './crmSync.routes.js'
 import { salesQualificationRoutes } from './salesQualification.routes.js'
 import { outreachRoutes } from './outreach.routes.js'
+import { outreachSequenceRoutes } from './outreachSequence.routes.js'
 import { prospectRoutes } from './prospects.routes.js'
+import { companyDiscoveryRoutes } from './companyDiscovery.routes.js'
+import { usageRoutes } from './usage.routes.js'
 import { runRoutes } from './runs.routes.js'
 import { segmentRoutes } from './segments.routes.js'
 import { websiteAuditRoutes } from './websiteAudit.routes.js'
@@ -39,9 +43,16 @@ apiRoutes.get('/me', (req, res) => {
 })
 
 apiRoutes.use('/campaigns', campaignRoutes)
+// Read-only company lookup against the customer's own CRM, for the picker.
+apiRoutes.use('/companies', companyRoutes)
 apiRoutes.use('/runs', runRoutes)
 apiRoutes.use('/approvals', approvalRoutes)
 apiRoutes.use('/prospects', prospectRoutes)
+// Stage 1b — open-web company discovery ("Find New Company"). Additive to
+// /prospects, which stays CRM-only by design.
+apiRoutes.use('/company-discovery', companyDiscoveryRoutes)
+// Read-only reporting on what this platform spent against its own API keys.
+apiRoutes.use('/usage', usageRoutes)
 apiRoutes.use('/enrichment', enrichmentRoutes)
 apiRoutes.use('/intent', intentRoutes)
 apiRoutes.use('/decision-makers', decisionMakerRoutes)
@@ -51,6 +62,8 @@ apiRoutes.use('/website-audit', websiteAuditRoutes)
 apiRoutes.use('/website-audit', auditApprovalRoutes)
 // Task #981 shares the prefix too: a Workbench is addressed by its audit run.
 apiRoutes.use('/website-audit', workbenchRoutes)
+// The Sales-approved sequence, mounted before the legacy routes it sits beside.
+apiRoutes.use('/outreach/sequence', outreachSequenceRoutes)
 apiRoutes.use('/outreach', outreachRoutes)
 apiRoutes.use('/engagement', engagementRoutes)
 apiRoutes.use('/intent-score', intentScoreRoutes)

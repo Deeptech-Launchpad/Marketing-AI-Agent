@@ -29,6 +29,14 @@ storage/
 *.log
 logs/
 
+# One-off outputs from the demo/pipeline scripts in scripts/ — customer
+# report PDFs and cohort/result snapshots pulled from the local CRM. These
+# are run output, not source, and the cohort snapshots name real company
+# records, so they must never enter git history (see REAL CUSTOMER DATA above).
+scripts/.demo-*.json
+scripts/.customer-report-*.pdf
+scripts/.pipeline-*.pdf
+
 # Editor / OS
 .DS_Store
 Thumbs.db

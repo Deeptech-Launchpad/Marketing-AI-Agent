@@ -646,3 +646,36 @@
   animation: threshold-halo 1.4s var(--ease-out) 1;
   pointer-events: none;
 }
+
+/* ── A locked engine ─────────────────────────────────────────────────────
+   Intent Scoring, Sales Qualification and CRM Handoff are held back for the
+   current demo phase. This is deliberately CALM rather than alarming: nothing
+   is broken and nothing failed, so it must not borrow the warning or error
+   treatment. It is also generous with space — a locked screen that looks like
+   a small empty box reads as a page that failed to load. */
+.locked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--s3);
+  padding: var(--s10) var(--s5);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md, 10px);
+  background: var(--bg-panel);
+}
+.locked__icon { color: var(--text-dim); }
+.locked__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-h2);
+  font-weight: 700;
+  color: var(--text);
+}
+.locked__detail {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+  max-width: 62ch;
+  line-height: 1.6;
+}

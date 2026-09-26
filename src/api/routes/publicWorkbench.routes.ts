@@ -1,3 +1,5 @@
+import { brandedEnrichedPdpHtml } from '../../workbench/enrichedPdpBrand.js'
+import type { PdpEnrichment } from '../../websiteaudit/pdpEnrichment.js'
 import { Router, type Request, type Response } from 'express'
 import rateLimit from 'express-rate-limit'
 import { z } from 'zod'
@@ -320,6 +322,25 @@ publicWorkbenchRoutes.get(
         // and the second switch would disappear from the record.
         dedupeDiscriminator: panel,
       })
+    }
+
+    // THE END PDP AUDIT: the enriched product page is the demonstration. The
+    // same HTML the Workbench After view and the report's "Enriched Result"
+    // page show. "?panel=before" still serves the original comparison.
+    const pdpRun = await prisma.websiteAuditRun.findUnique({
+      where: { id: demo.auditRunId },
+      select: { pdpEnrichment: true },
+    })
+    const enrichment = pdpRun?.pdpEnrichment as unknown as PdpEnrichment | null
+    const branded = enrichment?.status === 'ready' && panel !== 'before' ? await brandedEnrichedPdpHtml(demo.auditRunId) : null
+    if (branded) {
+      res.status(200)
+      res.setHeader('Content-Type', 'text/html; charset=utf-8')
+      // Product images and the logo are served from the customer's own website.
+      res.setHeader('Content-Security-Policy', PUBLIC_CSP.replace("img-src 'self' data:", "img-src 'self' data: https:"))
+      res.setHeader('Cache-Control', 'no-store, private')
+      res.send(branded)
+      return
     }
 
     sendHtml(

@@ -1,0 +1,171 @@
+/* The PDF viewer.
+
+   Only the viewer lives here. It is a shared UI primitive rather than an
+   engine screen, so it borrows the platform tokens and adds nothing an engine
+   stylesheet could collide with — every class is prefixed `pdfv`.
+
+   The page itself is deliberately WHITE in both themes. A PDF page is paper:
+   tinting it to match a dark interface would misrepresent the document the
+   customer receives, which is the one thing this viewer exists to show. The
+   chrome around it follows the theme; the paper does not. */
+
+.pdfv {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+/* ── Toolbar ────────────────────────────────────────────────────────────── */
+
+.pdfv__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex: none;
+  padding: var(--s2) var(--s3);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.pdfv__where {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.pdfv__name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Reserves its own width so the toolbar does not shuffle sideways every time
+   the reader scrolls from page 9 to page 10. */
+.pdfv__pages {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 9ch;
+}
+
+.pdfv__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  flex: none;
+}
+
+.pdfv__zoom {
+  min-width: 5ch;
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* Fit-width is a MODE, not an action: while it is on it stays lit, so the
+   reader can tell at a glance whether a resize will re-fit the page or leave
+   it at the zoom they chose. */
+.pdfv__toggle--on .btn {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+/* ── The scrolling stack of pages ───────────────────────────────────────── */
+
+.pdfv__scroll {
+  position: relative; /* page boxes measure their offsetTop against this */
+  flex: 1 1 auto;
+  min-height: 0;
+  height: clamp(520px, 78vh, 1040px);
+  overflow: auto;
+  /* Reserved rather than discovered. Without this, the first page rendering
+     tall enough to need a scrollbar narrows the container, which shrinks
+     fit-width, which removes the scrollbar — a loop that oscillates. */
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  /* NOT `align-items: center`. A centred flex item that is wider than its
+     container — which is exactly what zooming past fit-width produces —
+     overflows equally in both directions, and the overflow on the START side
+     is unreachable: the reader can never scroll to the left edge of the page.
+     Auto inline margins centre a page that fits and collapse to zero on one
+     that does not, so a zoomed page stays scrollable end to end. */
+  align-items: flex-start;
+  gap: var(--s4);
+  padding: var(--s4);
+  background: var(--bg-void);
+}
+
+.pdfv__scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* One page. Sized in the component from the real page dimensions, so the box
+   holds its place before the canvas has drawn anything into it. */
+.pdfv__page {
+  position: relative;
+  flex: none;
+  /* Deliberately no max-width: clamping the box while the inline height stays
+     at the rendered height would squash the page out of its own aspect ratio.
+     A page wider than the viewer is meant to be scrolled to, not squeezed. */
+  margin-inline: auto;
+  background: #ffffff;
+  box-shadow: var(--shadow-md);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.pdfv__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Loading, blocked and failed all sit here: centred in the empty stage rather
+   than stretched to a full page's height, because a full-height skeleton reads
+   as a page that has rendered blank. */
+.pdfv__notice {
+  width: 100%;
+  max-width: 680px;
+  /* Auto on all four sides: centred in the empty stage, horizontally and
+     vertically, without stretching to a page's height. */
+  margin: auto;
+}
+
+/* ── Full screen ────────────────────────────────────────────────────────── */
+
+.pdfv--full {
+  border: 0;
+  border-radius: 0;
+  height: 100vh;
+}
+
+/* The clamp above is right inside a page column and wrong when the viewer owns
+   the whole screen — there it should simply take what is left under the bar. */
+.pdfv--full .pdfv__scroll {
+  height: auto;
+}
+
+/* ── Narrow columns ─────────────────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .pdfv__bar {
+    flex-wrap: wrap;
+  }
+  /* The file name is the first thing to go: the page indicator and the
+     controls are what the reader is reaching for. */
+  .pdfv__name {
+    display: none;
+  }
+}

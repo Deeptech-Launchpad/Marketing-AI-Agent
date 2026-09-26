@@ -50,12 +50,14 @@ describe('known CMS / platform detection', () => {
     // The bug this guards: /mage\// also matches "i-mage/", so every
     // "image/jpeg" tag used to tag plain WordPress sites as Magento.
     const wp = detectSignals(page('<img src="/uploads/image/logo.png"><link href="/wp-content/x.css">'))
-    expect(wp.platforms).toContain('WooCommerce / WordPress')
+    expect(wp.platforms).toContain('WordPress')
     expect(wp.platforms).not.toContain('Magento')
   })
 
   it('detects a PIM and an ERP with the right category', () => {
-    const s = detectSignals(page('<script src="https://cdn.salsify.com/p.js"></script><div>hybris</div>'))
+    // Fixture updated: a bare "hybris" in body copy used to count as proof of
+    // SAP Commerce. The storefront's /_ui/ asset path is the real trace.
+    const s = detectSignals(page('<script src="https://cdn.salsify.com/p.js"></script><link href="/_ui/responsive/common/css/style.css">'))
     expect(s.technologies.find((t) => t.name === 'Salsify (PIM)')?.category).toBe('pim')
     expect(s.technologies.find((t) => t.name === 'SAP Commerce (Hybris)')?.category).toBe('erp')
   })
@@ -64,10 +66,12 @@ describe('known CMS / platform detection', () => {
 describe('multiple and duplicate signals', () => {
   it('reports several distinct technologies from one page', () => {
     const s = detectSignals(
-      page('<link href="/wp-content/a.css"><script src="https://cdn.salsify.com/p.js"></script><div>epicor</div>'),
+      // Fixture updated: bare "epicor" prose is no longer evidence; an Epicor
+      // SaaS host is.
+      page('<link href="/wp-content/a.css"><script src="https://cdn.salsify.com/p.js"></script><script src="https://shop1.epicorsaas.com/x.js"></script>'),
     )
     const names = s.technologies.map((t) => t.name)
-    expect(names).toContain('WooCommerce / WordPress')
+    expect(names).toContain('WordPress')
     expect(names).toContain('Salsify (PIM)')
     expect(names).toContain('Epicor')
     expect(s.technologies.every((t) => t.evidence.length > 0)).toBe(true)
@@ -83,7 +87,7 @@ describe('multiple and duplicate signals', () => {
 
   it('reports the same technology once when its pattern matches repeatedly', () => {
     const s = detectSignals(page('<a href="/wp-content/1">a</a><a href="/wp-content/2">b</a><a href="/wp-includes/3">c</a>'))
-    expect(s.technologies.filter((t) => t.name === 'WooCommerce / WordPress')).toHaveLength(1)
+    expect(s.technologies.filter((t) => t.name === 'WordPress')).toHaveLength(1)
   })
 })
 
@@ -167,5 +171,89 @@ describe('self-declared platform (meta generator)', () => {
 
   it('reports nothing when the page declares no generator', () => {
     expect(detectSignals('<html><head></head><body>plain</body></html>').technologies).toEqual([])
+  })
+
+  it('folds a site-builder generator into the matching fingerprint', () => {
+    const s = detectSignals(
+      '<html><head><meta name="generator" content="Wix.com Website Builder"><script src="https://static.parastorage.com/x.js"></script></head><body><img src="https://static.wixstatic.com/media/a.jpg"></body></html>',
+    )
+    expect(s.technologies.map((t) => t.name)).toEqual(['Wix'])
+  })
+
+  it('strips the version and does not list WordPress twice', () => {
+    const s = detectSignals(
+      '<html><head><meta name="generator" content="WordPress 7.0.4"><link href="/wp-content/themes/t/style.css"></head><body></body></html>',
+    )
+    expect(s.technologies.map((t) => t.name)).toEqual(['WordPress'])
+    expect(s.generator).toBe('WordPress 7.0.4')
+  })
+
+  it('does not count plugin generators as technologies', () => {
+    const s = detectSignals(
+      '<html><head><meta name="generator" content="Site Kit by Google 1.187.0">' +
+        '<meta name="generator" content="Powered by WPBakery Page Builder - drag and drop page builder for WordPress.">' +
+        '<meta name="generator" content="WordPress 6.5"><link href="/wp-content/a.css"></head><body></body></html>',
+    )
+    expect(s.technologies.map((t) => t.name)).toEqual(['WordPress'])
+    expect(s.generators).toHaveLength(3)
+  })
+
+  it('reads generator tags in either attribute order', () => {
+    const s = detectSignals('<html><head><meta content="Acme Commerce Suite 4.2" name="generator"></head><body></body></html>')
+    expect(s.technologies).toEqual([expect.objectContaining({ name: 'Acme Commerce Suite', category: 'declared' })])
+  })
+
+  it('a declared platform generator is recorded under its canonical name', () => {
+    const s = detectSignals('<html><head><meta name="generator" content="Drupal 10 (https://www.drupal.org)"></head><body></body></html>')
+    expect(s.technologies).toEqual([expect.objectContaining({ name: 'Drupal', category: 'cms' })])
+  })
+})
+
+describe('WordPress vs WooCommerce', () => {
+  it('labels a plain wp-content site WordPress, not WooCommerce', () => {
+    const names = detectSignals(page('<link href="/wp-content/themes/x/style.css">')).technologies.map((t) => t.name)
+    expect(names).toEqual(['WordPress'])
+  })
+
+  it('reports WooCommerce only with WooCommerce evidence', () => {
+    const names = detectSignals(
+      page('<link href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css"><body class="home woocommerce-page">'),
+    ).technologies.map((t) => t.name)
+    expect(names).toContain('WordPress')
+    expect(names).toContain('WooCommerce')
+  })
+
+  it('does not treat the word WooCommerce in prose as a shop', () => {
+    const names = detectSignals(page('<p>We build WooCommerce and Shopify stores for clients.</p>')).technologies.map((t) => t.name)
+    expect(names).toEqual([])
+  })
+})
+
+describe('vendor words in ordinary prose are not detections', () => {
+  const prose = [
+    'We integrate with Salesforce and Epicor ERP.',
+    'Migrated from Hybris to a new platform.',
+    'Our PIM partner is Pimcore; we also evaluated PrestaShop, Shopware, OpenCart and nopCommerce.',
+    '<a href="https://www.squarespace.com">Squarespace</a> was our old host.',
+  ]
+  it.each(prose)('%s', (text) => {
+    expect(detectSignals(page(`<p>${text}</p>`)).technologies).toEqual([])
+  })
+
+  it('still detects the anchored true positives', () => {
+    const cases: Array<[string, string]> = [
+      ['<img src="https://static1.squarespace.com/static/a.png">', 'Squarespace'],
+      ['<script src="/on/demandware.static/Sites-x/js/main.js"></script>', 'Salesforce Commerce Cloud'],
+      ['<script>var prestashop = {"cart":{}}</script>', 'PrestaShop'],
+      ['<link href="/bundles/storefront/assets/css/app.css">', 'Shopware'],
+      ['<link href="/catalog/view/theme/default/stylesheet.css">', 'OpenCart'],
+      ['<script src="/js/public.common.js"></script>', 'nopCommerce'],
+      ['<script src="/bundles/pimcoreadmin/js/x.js"></script>', 'Pimcore (PIM)'],
+      ['<img src="/medias/abc.jpg?context=bWFzdGVy">', 'SAP Commerce (Hybris)'],
+      ['<script src="https://acme.epicorsaas.com/app.js"></script>', 'Epicor'],
+    ]
+    for (const [markup, name] of cases) {
+      expect(detectSignals(page(markup)).technologies.map((t) => t.name)).toContain(name)
+    }
   })
 })

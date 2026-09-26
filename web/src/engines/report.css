@@ -1,0 +1,160 @@
+/* The Audit Report screen's own blocks.
+
+   Only what this screen adds lives here. Every other block on it — the story
+   sections, the findings list, the sector cards — is still engines.css, and
+   this file deliberately adds nothing they could collide with.
+
+   The PDF stage that used to be here is gone with the <iframe> it framed. The
+   pages are drawn by PdfViewer now, which brings its own pdfviewer.css and
+   sizes itself to the box this screen used to reserve. */
+
+/* ── WHOSE REPORT THIS IS ─────────────────────────────────────────────────
+
+   "Audit Report / <Company>" together, in one line, above the document. The
+   engine header names the engine and the shared sidebar names the selected
+   company; neither says them as a pair, and the pair is what a reader checks
+   before believing a figure on the page. */
+.rep__ident {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2) var(--s4);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--e, var(--line-strong));
+}
+
+.rep__identline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin: 0;
+}
+
+.rep__ident-engine {
+  font-size: var(--fs-sm);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.rep__ident-slash {
+  color: var(--line-strong);
+}
+
+.rep__ident-company {
+  font-size: var(--fs-h2);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rep__ident-meta {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* ── THE RUN, WHEN THERE IS NO REPORT TO SHOW ─────────────────────────────
+
+   Shown under the "no completed website audit" state. The facts of the run
+   are what makes that state actionable: a queued run with 0 pages fetched
+   tells an operator to start the crawl, and it is the evidence that the empty
+   screen is honest rather than broken. */
+.rep__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--s3) var(--s5);
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+/* ── THE CUSTOMER DOCUMENT ────────────────────────────────────────────── */
+.cdoc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+/* The wait sits in a shorter box than the document itself: a full-height
+   skeleton reads as a page that has rendered blank. Failure is NOT wrapped in
+   this — ErrorState carries its own frame, and nesting the two draws a box
+   inside a box. */
+.cdoc__wait {
+  display: grid;
+  align-content: center;
+  padding: var(--s5);
+  min-height: 260px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.cdoc__meta {
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.cdoc__meta .eyebrow {
+  margin-right: 7px;
+}
+
+/* Marks the boundary between the document that leaves the building and the
+   same story rendered on screen, so nobody mistakes the sections below for a
+   second, differing report. */
+.cdoc__handoff {
+  padding-left: var(--s3);
+  border-left: 2px solid var(--e, var(--line-strong));
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* The run's state chip sits inline with the run's own facts; the meta line
+   is monospace and the chip is not, so it aligns on the baseline rather than
+   floating above the id beside it. */
+.rep__ident-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+/* "Following this run" — said in the incomplete state while the screen polls
+   the run. Plain text rather than a spinner: a run behind a dead worker is
+   not making progress, and nothing here may suggest it is. */
+.rep__following {
+  color: var(--text-dim);
+}
+
+/* The statement that stands where the product picture would be, when the
+   audit found no product page. Left-bordered like the identity line so it
+   reads as a statement about this run rather than as an empty frame. */
+.rep__noproduct {
+  padding-left: var(--s3);
+  border-left: 2px solid var(--line-strong);
+}
+
+/* Which copy is on screen. Stated above the pages, because "a PDF exists" and
+   "this PDF may be sent" are different facts and the reviewer needs the
+   second one settled before they read the first. */
+.cdoc__audience {
+  margin: 0 0 var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+}
+.cdoc__audience--review {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.cdoc__audience--ready {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+}

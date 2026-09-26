@@ -3,6 +3,9 @@ import { z } from 'zod'
 import { confirmManualAct, CONFIRMABLE_ACTS } from '../../engagement/adapters/manualAdapter.js'
 import { syncOutreachActions } from '../../engagement/adapters/outreachAdapter.js'
 import { companyTimeline, demoTimeline, engagementSummary, getEvent } from '../../engagement/timeline.js'
+import { buildUnderstanding } from '../../understanding/service.js'
+import { currentScore } from '../../intentscore/service.js'
+import { getQualification } from '../../salesqualification/service.js'
 import { prisma } from '../../platform/db.js'
 import { NotFoundError } from '../../platform/errors.js'
 import { ENGAGEMENT_CHANNELS, ENGAGEMENT_EVENT_TYPES } from '../../engagement/types.js'
@@ -215,5 +218,32 @@ engagementRoutes.get(
       take: limit,
     })
     res.json({ runs })
+  }),
+)
+
+/**
+ * 8. UNDERSTANDING (2026-09-24 restructure) — Intent Source, Engagement and
+ * Qualification, side by side, for one company. See understanding/service.ts
+ * for why this is the one deliberate exception to this file's own "no score,
+ * no ranking, no qualification verdict" rule, and what it still withholds.
+ */
+engagementRoutes.get(
+  '/companies/:crmCompanyId/understanding',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const crmCompanyId = req.params.crmCompanyId!
+
+    const [signalRows, score, qualification] = await Promise.all([
+      prisma.intentSignal.findMany({
+        where: { tenantId: p.tenantId, crmCompanyId, status: 'active' },
+        orderBy: { detectedAt: 'desc' },
+        take: 20,
+      }),
+      currentScore(p.tenantId, crmCompanyId),
+      getQualification(p.tenantId, crmCompanyId),
+    ])
+
+    res.json(buildUnderstanding(crmCompanyId, signalRows, score, qualification))
   }),
 )

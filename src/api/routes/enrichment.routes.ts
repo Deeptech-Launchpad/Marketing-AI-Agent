@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { queueCompanyEnrichment } from '../../enrichment/companyEnrichment.js'
+import { failStaleEnrichments, requestCompanyEnrichments } from '../../enrichment/companyEnrichment.js'
 import { audit } from '../../platform/audit.js'
 import { prisma } from '../../platform/db.js'
 import { NotFoundError } from '../../platform/errors.js'
@@ -17,6 +17,11 @@ export const enrichmentRoutes = Router()
 // company, so a large batch is both slow and a lot of traffic aimed at other
 // people's servers. Raising it is a decision, not a default.
 const MAX_BATCH = 25
+
+/** How many attempts are scanned to find each company's latest run. */
+const MAX_INDEXED_RUNS = 10_000
+/** How many companies the register returns. */
+const MAX_COMPANIES_LISTED = 500
 
 const EnrichBody = z
   .object({
@@ -59,17 +64,18 @@ enrichmentRoutes.post(
 
     if (!ids.length) return res.status(400).json({ error: { code: 'bad_request', message: 'No companies to enrich.' } })
 
-    const queued: Array<{ id: string; crmCompanyId: string }> = []
-    for (const crmCompanyId of ids.slice(0, MAX_BATCH)) {
-      const { id } = await queueCompanyEnrichment({
-        tenantId: p.tenantId,
-        crmCompanyId,
-        requestedByCrmUserId: p.crmUserId,
-        prospectSearchId: body.prospectSearchId ?? null,
-      })
-      await enqueue(QUEUE_COMPANY_ENRICH, { enrichmentId: id })
-      queued.push({ id, crmCompanyId })
-    }
+    // De-duplicated, in-flight runs reused, stranded rows failed, enqueue
+    // failures recorded — see requestCompanyEnrichments.
+    const results = await requestCompanyEnrichments({
+      tenantId: p.tenantId,
+      crmCompanyIds: [...new Set(ids)].slice(0, MAX_BATCH),
+      requestedByCrmUserId: p.crmUserId,
+      prospectSearchId: body.prospectSearchId ?? null,
+      enqueueJob: (enrichmentId) => enqueue(QUEUE_COMPANY_ENRICH, { enrichmentId }),
+    })
+    const queued = results.filter((r) => !r.existing && r.status === 'queued')
+    const alreadyRunning = results.filter((r) => r.existing)
+    const failed = results.filter((r) => r.status === 'failed')
 
     await audit({
       tenantId: p.tenantId,
@@ -77,12 +83,17 @@ enrichmentRoutes.post(
       actorCrmUserId: p.crmUserId,
       action: 'enrichment.queued',
       resourceType: 'CompanyEnrichment',
-      summary: `${queued.length} company/companies queued for enrichment`,
+      summary: `${queued.length} company/companies queued for enrichment; ${alreadyRunning.length} already in progress; ${failed.length} could not be queued`,
       requestId: req.requestId,
     })
 
     // 202: each company involves an outbound fetch, run in the worker.
-    res.status(202).json({ queued: queued.length, enrichments: queued })
+    res.status(202).json({
+      queued: queued.length,
+      alreadyInProgress: alreadyRunning.length,
+      failedToQueue: failed.length,
+      enrichments: results,
+    })
   }),
 )
 
@@ -91,6 +102,9 @@ enrichmentRoutes.get(
   requirePermission('view'),
   asyncHandler(async (req, res) => {
     const p = req.principal!
+    // A row stranded in queued/running past the in-flight window is failed on
+    // read, so the screen never follows a run nothing is working on.
+    await failStaleEnrichments(p.tenantId, [req.params.crmCompanyId!])
     // Most recent attempt wins; earlier attempts are retained, not overwritten.
     const row = await prisma.companyEnrichment.findFirst({
       where: { tenantId: p.tenantId, crmCompanyId: req.params.crmCompanyId },
@@ -145,29 +159,69 @@ enrichmentRoutes.get(
         : {}),
     }
 
-    const rows = await prisma.companyEnrichment.findMany({
+    const select = {
+      id: true,
+      crmCompanyId: true,
+      companyName: true,
+      status: true,
+      sourceUrl: true,
+      technologies: true,
+      technologyCount: true,
+      failureReason: true,
+      fetchedAt: true,
+      createdAt: true,
+      finishedAt: true,
+    } as const
+
+    // `?view=runs` keeps the old shape: every attempt, newest first, capped.
+    if (req.query.view === 'runs') {
+      const runs = await prisma.companyEnrichment.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, select })
+      const byStatus: Record<string, number> = {}
+      runs.forEach((r) => (byStatus[r.status] = (byStatus[r.status] ?? 0) + 1))
+      return res.json({
+        view: 'runs',
+        total: runs.length,
+        byStatus,
+        totalTechnologiesDetected: runs.reduce((s, r) => s + r.technologyCount, 0),
+        enrichments: runs,
+      })
+    }
+
+    // DEFAULT: the LATEST run per company. The register answers "which
+    // companies has enrichment worked on", and counting attempts as companies
+    // (three runs = "3 companies") — or capping attempts so that companies
+    // enriched earlier dropped out of the picker — both answered it wrongly.
+    const index = await prisma.companyEnrichment.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      take: 200,
-      select: {
-        id: true,
-        crmCompanyId: true,
-        companyName: true,
-        status: true,
-        sourceUrl: true,
-        technologies: true,
-        technologyCount: true,
-        failureReason: true,
-        createdAt: true,
-        finishedAt: true,
-      },
+      take: MAX_INDEXED_RUNS,
+      select: { id: true, crmCompanyId: true },
     })
+    const latestIds: string[] = []
+    const seen = new Set<string>()
+    for (const r of index) {
+      if (seen.has(r.crmCompanyId)) continue
+      seen.add(r.crmCompanyId)
+      latestIds.push(r.id)
+      if (latestIds.length >= MAX_COMPANIES_LISTED) break
+    }
+
+    const rows = latestIds.length
+      ? await prisma.companyEnrichment.findMany({
+          where: { tenantId: p.tenantId, id: { in: latestIds } },
+          orderBy: { createdAt: 'desc' },
+          select,
+        })
+      : []
 
     const byStatus: Record<string, number> = {}
     rows.forEach((r) => (byStatus[r.status] = (byStatus[r.status] ?? 0) + 1))
 
     res.json({
+      view: 'latest_per_company',
       total: rows.length,
+      companies: rows.length,
+      runsConsidered: index.length,
       byStatus,
       totalTechnologiesDetected: rows.reduce((s, r) => s + r.technologyCount, 0),
       enrichments: rows,

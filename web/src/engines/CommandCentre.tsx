@@ -1,20 +1,21 @@
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { PIPELINE, rgbTriple } from '../lib/engines'
+import { PIPELINE, numberWord, rgbTriple } from '../lib/engines'
 import { useAsync } from '../lib/hooks'
 import { useCompany } from '../lib/companyContext'
 import { useAuth } from '../lib/auth'
-import type { EngagementSummary, IntentScore, Qualification, CrmSyncRecord } from '../lib/types'
+import type { EngagementEvent } from '../lib/types'
 import { AgentMark } from '../components/agent/AgentMark'
 import { StatusDot, Unset } from '../components/ui/primitives'
 import { EmptyState } from '../components/ui/states'
+import { LOCKED_HEADLINE } from '../components/ui/LockedEngine'
 import type { UiStatus } from '../lib/types'
 import './command.css'
 
 // ─────────────────────────────────────────────────────────────────────────
 // The Command Centre.
 //
-// The pipeline is the story, not a wall of counters. Twelve nodes in flow
+// The pipeline is the story, not a wall of counters. One node per engine, in flow
 // order, each showing whether that stage has actually run for the company in
 // context — so the first thing anyone sees is where the work has reached and
 // where it stopped.
@@ -22,6 +23,20 @@ import './command.css'
 // A node's state is read from the engine that owns it. Where an engine has no
 // record for this company the node reads "Not started", which is the truth,
 // rather than a zero that looks like a measurement.
+//
+// THREE NODES ARE LOCKED FOR THE CURRENT PHASE.
+//
+// Intent Score, Sales Qualification and CRM Handoff are withheld on their own
+// screens while their weights and threshold are unapproved. This board is the
+// first screen of the demo and it was reporting the same values in miniature —
+// "100 / 100 · HIGH", "Qualified", "Prepared, held" — which would have made
+// the lock on the other screens pointless. Those three nodes now read the same
+// sentence as everywhere else, and their endpoints are not called from here.
+//
+// Engagement is NOT locked: the timeline is real, checkable and still linked.
+// What is withheld is its AGGREGATE — this board printed "19 prospect acts"
+// from the summary endpoint, and a bare count of acts is the number that could
+// not be defended. The node links to the acts themselves instead.
 // ─────────────────────────────────────────────────────────────────────────
 
 interface StageState {
@@ -34,32 +49,25 @@ export function CommandCentre() {
   const { principal } = useAuth()
   const id = company?.crmCompanyId
 
-  // Four reads cover the stages that can report per-company progress. Each is
-  // optional: a company that has not reached a stage simply has no record.
-  const score = useAsync<IntentScore | null>(
-    (signal) => (id ? api.get<IntentScore>(`/intent-score/companies/${id}`, { signal, nullOn404: true }) : Promise.resolve(null)),
-    [id],
-    { enabled: Boolean(id) },
-  )
-  const qual = useAsync<Qualification | null>(
+  // ONE read. The score, qualification and CRM reads are gone rather than
+  // conditioned, for the same reason they are gone from their own screens: a
+  // value fetched in order not to draw it can still surface through a loading
+  // state, an error quoting the response, or a network tab open on a
+  // projector.
+  //
+  // Engagement asks for the EVENTS, not the summary. The board needs to know
+  // whether anything has been observed; it does not need — and could not
+  // defend — a count.
+  const engagement = useAsync<{ events: EngagementEvent[] } | null>(
     (signal) =>
-      id ? api.get<Qualification>(`/sales-qualification/companies/${id}`, { signal, nullOn404: true }) : Promise.resolve(null),
-    [id],
-    { enabled: Boolean(id) },
-  )
-  const engagement = useAsync<EngagementSummary | null>(
-    (signal) =>
-      id ? api.get<EngagementSummary>(`/engagement/companies/${id}/summary`, { signal, nullOn404: true }) : Promise.resolve(null),
-    [id],
-    { enabled: Boolean(id) },
-  )
-  const crm = useAsync<CrmSyncRecord | null>(
-    (signal) =>
-      qual.data?.id
-        ? api.get<CrmSyncRecord>(`/crm-sync/qualifications/${qual.data.id}`, { signal, nullOn404: true })
+      id
+        ? api.get<{ events: EngagementEvent[] }>(`/engagement/companies/${id}/timeline?limit=1`, {
+            signal,
+            nullOn404: true,
+          })
         : Promise.resolve(null),
-    [qual.data?.id],
-    { enabled: Boolean(qual.data?.id) },
+    [id],
+    { enabled: Boolean(id) },
   )
 
   const stageState = (engineId: string): StageState => {
@@ -69,39 +77,23 @@ export function CommandCentre() {
           ? { status: 'complete', detail: `${company.technologyCount ?? 0} detected` }
           : { status: 'idle', detail: null }
       case 'engagement': {
-        const s = engagement.data
-        if (!s || s.totalEvents === 0) return { status: 'idle', detail: null }
-        return { status: 'complete', detail: `${s.prospectEvents} prospect acts` }
+        // Whether anything was observed, never how much.
+        const observed = (engagement.data?.events?.length ?? 0) > 0
+        return observed ? { status: 'complete', detail: 'Acts recorded' } : { status: 'idle', detail: null }
       }
-      case 'scoring': {
-        const s = score.data
-        if (!s?.scored) return { status: 'idle', detail: null }
-        return { status: 'complete', detail: `${s.score} / 100 · ${s.level}` }
-      }
-      case 'qualification': {
-        const q = qual.data
-        if (!q?.evaluated) return { status: 'idle', detail: null }
-        if (q.status === 'qualified') return { status: 'complete', detail: 'Qualified' }
-        if (q.status === 'qualified_unassigned') return { status: 'review', detail: 'Qualified, unassigned' }
-        if (q.status === 'de_qualified') return { status: 'error', detail: 'De-qualified' }
-        return { status: 'ready', detail: 'Below threshold' }
-      }
-      case 'crm': {
-        const c = crm.data
-        if (!c?.prepared) return { status: 'idle', detail: null }
-        if (c.state === 'synced') return { status: 'complete', detail: 'Synchronised' }
-        if (c.state.startsWith('blocked')) return { status: 'blocked', detail: 'Prepared, held' }
-        return { status: 'ready', detail: c.stateLabel }
-      }
+      // Locked: the node says so rather than reporting a withheld value as
+      // "Not started", which would be a different and untrue claim.
+      case 'crm':
+        return { status: 'idle', detail: LOCKED_HEADLINE }
       default:
-        // Prospect, intent, decision makers, audit, report, approval,
-        // workbench and outreach are per-run rather than per-company: the
-        // command centre links to them rather than inventing a state.
+        // Prospect, intent, decision makers and outreach are per-run rather
+        // than per-company: the command centre links to them rather than
+        // inventing a state.
         return { status: 'idle', detail: null }
     }
   }
 
-  const loading = score.loading || qual.loading || engagement.loading
+  const loading = engagement.loading
 
   return (
     <div className="cc">
@@ -111,7 +103,7 @@ export function CommandCentre() {
           <h1 className="cc__title">
             One platform.
             <br />
-            Twelve specialised engines.
+            {numberWord(PIPELINE.length).replace(/^./, (c) => c.toUpperCase())} specialised engines.
           </h1>
           <p className="cc__sub">
             {principal ? `Signed in as ${principal.name}. ` : ''}
@@ -132,7 +124,7 @@ export function CommandCentre() {
       {/* ── The pipeline ────────────────────────────────────────────── */}
       <section className="cc__pipeline" aria-label="Pipeline">
         <div className="cc__rail" aria-hidden="true" />
-        <ol className="cc__nodes">
+        <ol className="cc__nodes" style={{ ['--nodes' as string]: PIPELINE.length }}>
           {PIPELINE.map((engine, i) => {
             const st = stageState(engine.id)
             const Icon = engine.icon
@@ -178,38 +170,17 @@ export function CommandCentre() {
             <dl className="cc__dl">
               <dt>Engagement</dt>
               <dd>
-                {engagement.data && engagement.data.totalEvents > 0 ? (
-                  <>
-                    <strong className="tnum">{engagement.data.prospectEvents}</strong> prospect actions across{' '}
-                    <strong className="tnum">{engagement.data.distinctSessions}</strong> visit(s)
-                  </>
+                {(engagement.data?.events?.length ?? 0) > 0 ? (
+                  // What was observed, not how much of it. The count that
+                  // stood here came from the summary endpoint and is the
+                  // number this phase withholds.
+                  <Link to="/engagement">Acts recorded — open the timeline</Link>
                 ) : (
                   <Unset what="Nothing observed yet" />
                 )}
               </dd>
-              <dt>Intent score</dt>
-              <dd>
-                {score.data?.scored ? (
-                  <>
-                    <strong className="tnum">{score.data.score}</strong> / 100 — {score.data.level}
-                  </>
-                ) : (
-                  <Unset what="Not scored yet" />
-                )}
-              </dd>
-              <dt>Qualification</dt>
-              <dd>
-                {qual.data?.evaluated ? (
-                  <>
-                    {qual.data.status?.replace(/_/g, ' ')} against a threshold of{' '}
-                    <strong className="tnum">{qual.data.threshold}</strong>
-                  </>
-                ) : (
-                  <Unset what="Not evaluated yet" />
-                )}
-              </dd>
               <dt>CRM handoff</dt>
-              <dd>{crm.data?.prepared ? crm.data.stateLabel : <Unset what="Not prepared yet" />}</dd>
+              <dd className="cc__locked">{LOCKED_HEADLINE}</dd>
             </dl>
           )}
         </article>

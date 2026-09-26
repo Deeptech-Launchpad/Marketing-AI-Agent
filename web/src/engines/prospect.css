@@ -1,0 +1,872 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Prospect Discovery — the discovered lead.
+
+   The screen used to open on searches, totals and rows, so the one thing a
+   run actually produces — a named company — had to be reconstructed by
+   reading a table. This card is the answer to "which lead did it find", and
+   it is deliberately the largest thing in the workspace.
+
+   Nothing here invents a value: every cell is a CRM column the search
+   returned, and an empty column renders as <Unset>, never as a dash standing
+   in for data.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.lead {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-md);
+  /* The engine accent is carried as a top edge rather than a fill: a filled
+     card would compete with the status colours inside it. */
+  border-top: 2px solid var(--e, var(--accent));
+  padding: var(--s5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.lead__kicker {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--e, var(--accent));
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+}
+
+.lead__name {
+  font-family: var(--font-display);
+  font-size: var(--fs-display);
+  line-height: 1.15;
+  color: var(--text);
+  margin: var(--s2) 0 0;
+  word-break: break-word;
+}
+
+.lead__chips {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+}
+
+/* Wide enough for a country or an industry value without wrapping mid-word,
+   and it collapses to one column on a narrow workspace. */
+.lead__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--s4);
+  border-top: 1px solid var(--line-faint);
+  padding-top: var(--s4);
+}
+
+.lead__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.lead__label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.lead__value {
+  font-size: var(--fs-h3);
+  color: var(--text);
+  word-break: break-word;
+}
+
+.lead__value a { color: var(--accent); }
+
+.lead__why {
+  background: var(--bg-inset);
+  border-radius: var(--r-md);
+  padding: var(--s3);
+  font-size: var(--fs-sm);
+  color: var(--text-soft);
+  line-height: 1.55;
+}
+
+.lead__whylabel {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+
+.lead__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line-faint);
+  padding-top: var(--s4);
+}
+
+.lead__next {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 220px;
+}
+
+/* ── How a company enters the pipeline ───────────────────────────────────
+   These two tabs had markup and no stylesheet at all, so they rendered as a
+   run-on line of text — "Selected companyAc CleaningFind new companies9 runs"
+   — with no indication that either half was a control. */
+
+.mode {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s3);
+}
+
+.mode__tab {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4);
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  transition:
+    border-color var(--t-quick) var(--ease-out),
+    background var(--t-quick) var(--ease-out),
+    color var(--t-quick) var(--ease-out);
+}
+
+.mode__tab:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--bg-hover);
+}
+
+.mode__tab:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mode__tab[aria-selected='true'] {
+  border-color: color-mix(in srgb, var(--e) 46%, var(--line));
+  background: color-mix(in srgb, var(--e) 8%, var(--bg-panel));
+  color: var(--text);
+  box-shadow: 0 0 calc(20px * var(--glow)) color-mix(in srgb, var(--e) 18%, transparent);
+}
+
+.mode__tab svg {
+  flex: none;
+  color: var(--e);
+}
+
+.mode__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mode__title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mode__meta {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Find New Company — what the public-web search found ────────────────
+   Grouped by the verdict, best first, so the companies worth a salesperson's
+   time are the first thing read. The group heading states the verdict, so a
+   card under it does not repeat it; a card is a name, what the company does,
+   why it fits, and the page that says so. */
+
+.found {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+}
+
+.found__summary-line {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.found__summary-line strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.found__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.found__grouphead {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line-faint);
+}
+
+.found__groupname {
+  margin: 0;
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.found__grouphint {
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.found__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--s4);
+}
+
+.found__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+}
+
+.found__cardhead {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.found__name {
+  margin: 0;
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.found__site,
+.found__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+/* A source is one line, cut with an ellipsis — never broken mid-word. */
+.found__source {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.found__ownsite {
+  flex: 1;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.found__site:hover,
+.found__source:hover {
+  text-decoration: underline;
+}
+
+.found__about {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+
+.found__reasons {
+  margin: 0;
+  padding: var(--s3) var(--s3) var(--s3) var(--s5);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.found__cardfoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: auto;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line-faint);
+}
+
+/* ── A prospect card: company, the product page audited, what it showed ── */
+
+/* A prospect card carries an audit; two to a row reads, four does not. */
+.found__grid--wide {
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+}
+
+.found__card--prospect .found__cardhead {
+  position: relative;
+  padding-right: 64px;
+}
+
+.found__score {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.found__score--needed {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-line);
+}
+
+.found__score--possible {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+}
+
+.found__score--not_needed {
+  color: var(--ok);
+  background: var(--ok-bg);
+  border-color: var(--ok-line);
+}
+
+/* ── The ranked, paginated opportunity list ── */
+
+.found__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.found__rank {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.found__pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: var(--s3);
+}
+
+.found__pagerinfo {
+  margin-right: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.found__pagebtn {
+  min-width: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.found__pagebtn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.found__pagebtn.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.found__pagebtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.found__need {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.found__need--needed {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-line);
+}
+
+.found__need--possible {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+}
+
+.found__card--prospect .found__cardhead {
+  padding-right: 110px;
+}
+
+.found__gaps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.found__gap {
+  padding: var(--s2) var(--s3);
+  border-left: 3px solid var(--warn-line);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+
+.found__gap--major {
+  border-left-color: var(--danger-line);
+}
+
+.found__gap strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.found__minor {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.found__product {
+  display: flex;
+  gap: var(--s2);
+  padding: var(--s3);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+}
+
+.found__productbody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.found__productname {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.found__productname:hover {
+  text-decoration: underline;
+}
+
+.found__producturl {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.found__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.found__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.found__text {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+
+.found__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.found__actions {
+  margin: 0;
+  padding-left: var(--s5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.found__actions strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.found__next {
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  border-left: 3px solid var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.found__details {
+  border-top: 1px solid var(--line-faint);
+  padding-top: var(--s3);
+}
+
+.found__details > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.found__details[open] > summary {
+  margin-bottom: var(--s3);
+}
+
+.found__details > .found__block + .found__block {
+  margin-top: var(--s3);
+}
+
+.found__attrs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.found__attrs th,
+.found__attrs td {
+  padding: 5px var(--s2);
+  border-bottom: 1px solid var(--line-faint);
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.found__attrs th {
+  width: 36%;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.found__attrs td {
+  color: var(--text);
+}
+
+.found__attrs .found__attrsrc {
+  width: 1%;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.found__facts {
+  margin: 0;
+  padding-left: var(--s5);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.found__unreadmain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.found__unreadwhy {
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+@media (max-width: 640px) {
+  .found__grid--wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .found__unreadrow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .found__unreadrow .found__source {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+.found__unread {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.found__unreadrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line-faint);
+}
+
+.found__unreadrow:last-child {
+  border-bottom: none;
+}
+
+.found__unreadname {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Recent searches: a dropdown of the user's own history ── */
+.recent {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+
+.recent .field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recent__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  min-width: 0;
+  padding: 8px var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent__toggle:hover,
+.recent__toggle[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+
+.recent__current {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent__meta {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.recent__menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.14);
+}
+
+.recent__item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  border-radius: var(--r-sm);
+}
+
+.recent__item:hover,
+.recent__item.is-active {
+  background: var(--bg-inset);
+}
+
+.recent__pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: 8px var(--s3);
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent__item.is-active .recent__pick {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.recent__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent__delete {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.recent__delete:hover:not(:disabled) {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.recent__delete:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.recent__confirm {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  margin-right: 4px;
+}
+
+@media (max-width: 640px) {
+  .recent__toggle .recent__meta {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .found__unreadrow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .found__unreadrow .found__source {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

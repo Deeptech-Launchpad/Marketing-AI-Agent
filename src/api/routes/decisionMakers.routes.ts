@@ -1,11 +1,18 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { env } from '../../config/env.js'
-import { providerNames, queueDecisionMakerDiscovery } from '../../decisionmakers/discovery.js'
+import {
+  failStaleDecisionMakerRuns,
+  markDecisionMakerRunEnqueueFailed,
+  providerNames,
+  queueDecisionMakerDiscovery,
+} from '../../decisionmakers/discovery.js'
+import { explainEmail } from '../../decisionmakers/emailExplanation.js'
 import { audit } from '../../platform/audit.js'
 import { prisma } from '../../platform/db.js'
 import { NotFoundError } from '../../platform/errors.js'
 import { enqueue, QUEUE_DM_DISCOVER } from '../../platform/queue.js'
+import { assignContactRoles } from '../../decisionmakers/contactRoles.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -59,16 +66,36 @@ decisionMakerRoutes.post(
       return res.status(400).json({ error: { code: 'bad_request', message: 'No companies to process.' } })
     }
 
-    const queued: Array<{ id: string; crmCompanyId: string }> = []
+    const queued: Array<{ id: string; crmCompanyId: string; reused: boolean; failureReason?: string }> = []
     for (const crmCompanyId of ids.slice(0, MAX_BATCH)) {
-      const { id } = await queueDecisionMakerDiscovery({
+      const { id, reused } = await queueDecisionMakerDiscovery({
         tenantId: p.tenantId,
         crmCompanyId,
         requestedByCrmUserId: p.crmUserId,
         prospectSearchId: body.prospectSearchId ?? null,
       })
-      await enqueue(QUEUE_DM_DISCOVER, { dmRunId: id })
-      queued.push({ id, crmCompanyId })
+      // A search already in flight for this company is returned, not repeated.
+      if (!reused) {
+        try {
+          await enqueue(QUEUE_DM_DISCOVER, { dmRunId: id })
+        } catch (err) {
+          // The run row exists but no job does. Left as-is it would read as
+          // queued forever and block a re-run for the whole in-flight window.
+          await markDecisionMakerRunEnqueueFailed(id, err)
+          queued.push({ id, crmCompanyId, reused, failureReason: 'The search could not be queued. Try again.' })
+          continue
+        }
+      }
+      queued.push({ id, crmCompanyId, reused })
+    }
+    const enqueueFailures = queued.filter((q) => q.failureReason).length
+    if (enqueueFailures === queued.length) {
+      return res.status(503).json({
+        error: {
+          code: 'queue_unavailable',
+          message: 'Decision-maker discovery could not be queued. The run was recorded as failed; try again.',
+        },
+      })
     }
 
     await audit({
@@ -82,11 +109,44 @@ decisionMakerRoutes.post(
     })
 
     res.status(202).json({
-      queued: queued.length,
+      queued: queued.length - enqueueFailures,
+      failed: enqueueFailures,
       runs: queued,
       providers: providerNames(),
       contactDataStored: env.DM_STORE_CONTACT_DATA,
     })
+  }),
+)
+
+/**
+ * The newest discovery run for one company, whatever its status.
+ *
+ * The candidates endpoint only ever reads COMPLETED runs, so a screen reading
+ * it alone could not tell a search in progress, or one that failed, from no
+ * search at all. Answers `{ run: null }` when the company was never searched.
+ */
+decisionMakerRoutes.get(
+  '/companies/:crmCompanyId/runs/latest',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    // A run stranded past the in-flight window is closed as failed before it
+    // is reported, so a lost job never reads as "running" indefinitely.
+    await failStaleDecisionMakerRuns(p.tenantId, req.params.crmCompanyId)
+
+    const run = await prisma.decisionMakerRun.findFirst({
+      where: { tenantId: p.tenantId, crmCompanyId: req.params.crmCompanyId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        failureReason: true,
+        createdAt: true,
+        startedAt: true,
+        completedAt: true,
+      },
+    })
+    res.json({ crmCompanyId: req.params.crmCompanyId, run })
   }),
 )
 
@@ -116,6 +176,10 @@ decisionMakerRoutes.get(
     })
   }),
 )
+
+
+// Where a contact detail came from, and why there isn't one, is explained by
+// src/decisionmakers/emailExplanation.ts.
 
 /** All shortlisted candidates for one company, newest run first. */
 decisionMakerRoutes.get(
@@ -148,13 +212,61 @@ decisionMakerRoutes.get(
       orderBy: [{ outcome: 'asc' }, { rank: 'asc' }, { rankScore: 'desc' }],
     })
 
+    // Which one to approach, and who to approach instead. A designation over
+    // the rank the engine already assigned - nothing is re-ranked here, and no
+    // field is filled in. See contactRoles.ts for why the alternative is not
+    // simply the next row down.
+    const roles = assignContactRoles(
+      candidates.map((c) => ({
+        identityKey: c.identityKey,
+        fullName: c.fullName,
+        roleGroup: c.roleGroup,
+        companyMatch: c.companyMatch,
+        email: c.email,
+        phone: c.phone,
+        profileUrl: c.profileUrl,
+        rank: c.rank,
+        rankScore: c.rankScore,
+        outcome: c.outcome,
+      })),
+    )
+
     res.json({
       crmCompanyId: req.params.crmCompanyId,
       companyName: latestRun.companyName,
       runId: latestRun.id,
       discoveredAt: latestRun.completedAt,
       total: candidates.filter((c) => c.outcome === 'shortlisted').length,
-      candidates,
+      // The run's own counts, so a screen showing only the shortlist can still
+      // say how many people were seen and set aside.
+      peopleSeen: latestRun.candidateCount + latestRun.excludedCount,
+      shortlistedCount: latestRun.candidateCount,
+      excludedCount: latestRun.excludedCount,
+      // Carried on each row so the interface never has to work out which is
+      // which, and so two screens cannot disagree about who the primary is.
+      candidates: candidates.map((c) => ({
+        ...c,
+        contactRole:
+          c.identityKey === roles.primaryKey
+            ? 'primary'
+            : c.identityKey === roles.alternativeKey
+              ? 'alternative'
+              : null,
+        // Derived from what is already stored — the candidate's own evidence
+        // and the run's per-provider metadata. Adds no value and invents no
+        // address; it says where an address came from, or why there is none.
+        emailContact: explainEmail(c, latestRun.providerResults),
+        // Which provider(s) the evidence came from, so the screen can name the
+        // source rather than assume one.
+        evidenceProviders: [
+          ...new Set(
+            (Array.isArray(c.evidence) ? (c.evidence as Array<{ provider?: unknown }>) : [])
+              .map((e) => e?.provider)
+              .filter((x): x is string => typeof x === 'string'),
+          ),
+        ],
+      })),
+      contactRoles: roles,
       providerResults: latestRun.providerResults,
       noResultsReason: latestRun.noResultsReason,
       disclaimers: [
@@ -162,6 +274,8 @@ decisionMakerRoutes.get(
         'companyMatch describes how the person was tied to this company. Only "verified" means a source proved the employment.',
         'Confidence describes EVIDENCE QUALITY, computed by deterministic rules — not by a model.',
         'An empty list means no candidate could be verified, NOT that the company has no decision maker.',
+      'One candidate is designated the primary contact and, where the company has a second route in, another is designated the alternative. Both are drawn from the same shortlist; neither is a new discovery.',
+      'A contact field shown as "Not found" means no provider stated it. No email address on this screen was ever pattern-guessed from a name or a domain.',
         'Relevance is decided by job FUNCTION, never by seniority alone: a title has to name a function that owns product or catalog data.',
         'This stage identifies WHO. It does not contact anyone, and it writes nothing back to NXT Sales.',
       ],

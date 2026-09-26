@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { LayoutGrid, LogOut, PanelLeftClose, PanelLeftOpen, PanelRightClose, Search } from 'lucide-react'
+import { LayoutGrid, LogOut, PanelLeftClose, PanelLeftOpen, PanelRightClose, Search, SlidersHorizontal } from 'lucide-react'
 import { ENGINES, brandAccent, engineAccent, engineForPath, rgbTriple } from '../../lib/engines'
 import { useTheme } from '../../lib/theme'
 import { ThemeSwitch } from './ThemeSwitch'
@@ -15,7 +15,7 @@ import './shell.css'
 // ─────────────────────────────────────────────────────────────────────────
 // The shell.
 //
-//   left    twelve engines, always in the same order as the pipeline
+//   left    the engines, always in the same order as the pipeline
 //   centre  the active engine's workspace
 //   right   the shared company context, which follows you between engines
 //
@@ -25,7 +25,7 @@ import './shell.css'
 //
 // The active engine's accent is published onto the shell as a CSS variable,
 // so every accent-aware component downstream re-tints without prop-drilling a
-// colour through twelve screens.
+// colour through every screen.
 // ─────────────────────────────────────────────────────────────────────────
 
 export function AppShell() {
@@ -91,6 +91,15 @@ export function AppShell() {
           })}
         </ul>
 
+        <NavLink
+          to="/settings"
+          className={({ isActive }) => `nav__item nav__settings${isActive ? ' is-active' : ''}`}
+          title="Settings"
+        >
+          <SlidersHorizontal size={16} aria-hidden="true" />
+          {navOpen && <span className="nav__label">Settings</span>}
+        </NavLink>
+
         <button className="nav__collapse" onClick={() => setNavOpen((v) => !v)} title={navOpen ? 'Collapse' : 'Expand'}>
           {navOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
           {navOpen && <span>Collapse</span>}
@@ -129,6 +138,9 @@ export function AppShell() {
               <span className="topbar__role mono">{principal.role}</span>
             </span>
           )}
+          <NavLink to="/settings" className="topbar__icon" title="Settings">
+            <SlidersHorizontal size={15} />
+          </NavLink>
           <ThemeSwitch />
           <button className="topbar__icon" onClick={signOut} title="Sign out">
             <LogOut size={15} />
