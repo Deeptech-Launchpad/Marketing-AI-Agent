@@ -12,6 +12,7 @@ import { RadarSweep } from '../components/motion/Signatures'
 import type { CompanyDiscoverySearch, DiscoveredCompany, ServiceNeed } from '../lib/types'
 import { ProductPageView } from './ProductPageView'
 import { IDENTITY_LABEL, useCompanyIdentity, type CompanyIdentity } from '../lib/companyIdentity'
+import { CrmLeadContext, CrmStatus, type LeadWriteStatus } from './CrmLeadStatus'
 import './prospect.css'
 
 // Prospect Discovery (#977).
@@ -130,6 +131,14 @@ export function ProspectDiscovery() {
     webSearches.refresh()
     webCompanies.refresh()
   }, live)
+
+  // Each company is checked against NXT Sales just after the search finishes;
+  // refresh for a few minutes so the answers appear as they land.
+  const crmStatus = useAsync<LeadWriteStatus>((signal) => api.get('/crm-leads/status', { signal }), [])
+  const finishedRecently = Boolean(webSearch?.finishedAt && Date.now() - new Date(webSearch.finishedAt).getTime() < 5 * 60_000)
+  const crmChecking = !live && finishedRecently && candidates.some((c) => !c.crmCheckedAt)
+  usePolling(() => webCompanies.refresh(), crmChecking)
+  const crmLead = { status: crmStatus.data ?? null, canAdd: can('approve'), onChanged: () => webCompanies.refresh() }
 
   const discoverWeb = useEngineAction(async () => {
     const text = webObjective.trim()
@@ -351,6 +360,7 @@ export function ProspectDiscovery() {
                         />
                       )
                     ) : (
+                      <CrmLeadContext.Provider value={crmLead}>
                       <div className="found">
                         <p className="found__summary-line">
                           <strong>{candidates.length}</strong> {candidates.length === 1 ? 'company' : 'companies'} found
@@ -405,6 +415,7 @@ export function ProspectDiscovery() {
                           onSelect={can('operate') ? selectDiscovered : undefined}
                         />
                       </div>
+                      </CrmLeadContext.Provider>
                     )}
                   </Panel>
                 )}
@@ -514,6 +525,7 @@ function ProspectCard({ company, onSelect }: { company: DiscoveredCompany; onSel
           {NEED_LABEL[company.serviceNeed === 'needed' ? 'needed' : 'possible']}
         </span>
         <LocationLine company={company} />
+        <CrmStatus company={company} />
       </header>
 
       {company.websiteSummary && <p className="found__about">{company.websiteSummary}</p>}
@@ -854,6 +866,7 @@ function CompactGroup({
                 </span>
                 <LocationLine company={c} />
                 <span className="found__unreadwhy">{reasonOf(c)}</span>
+                <CrmStatus company={c} />
               </span>
               {isSearchRedirect(link) ? (
                 <span className="found__ownsite">Found by web search</span>

@@ -1005,3 +1005,9 @@
   color: var(--text-soft);
 }
 .found__location svg { color: var(--accent); flex: none; }
+
+/* NXT Sales status on each company found (2026-09-29). */
+.crmlead { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.crmlead__confirm { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.crmlead__note { flex-basis: 100%; font-size: var(--fs-xs); }
+.crmlead .otr-err { margin: 0; padding: 2px var(--s2); }

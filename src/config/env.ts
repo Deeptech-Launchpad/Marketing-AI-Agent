@@ -651,6 +651,16 @@ const schema = z.object({
    */
   CRM_WRITE_QUALIFICATION_VALUE_MAP: z.string().default(''),
 
+  /**
+   * "Add to NXT Sales" (2026-09-29): the Company custom field that marks a
+   * company as coming from this platform, and the value written into it.
+   * NXT Sales has no Source/Tag column, so it is a custom dropdown field —
+   * created once with `npm run crm:setup-lead-source`. Empty field key = the
+   * add is refused with that instruction, never sent without its source.
+   */
+  CRM_LEAD_SOURCE_FIELD: z.string().default(''),
+  CRM_LEAD_SOURCE_VALUE: z.string().default('Marketing AI Agent'),
+
   CRM_SYNC_PROVIDER: z.enum(['nxt_sales', 'outbox', 'none']).default('nxt_sales'),
 
   /** Whether a qualified lead with no sales owner may still be handed over. */

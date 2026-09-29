@@ -13,9 +13,10 @@ import { logger } from '../../platform/logger.js'
 // dedicated User row whose id is NXT_SALES_SERVICE_USER_ID. The token is
 // short-lived and re-minted rather than stored.
 //
-// KNOWN LIMITATION, deliberately accepted for Phase 1: NXT Sales enforces no
-// role checks anywhere, so this token has the same reach any logged-in user
-// has. Phase 1 contains this by having no write methods at all on CrmPort.
+// KNOWN LIMITATION, deliberately accepted: NXT Sales enforces no role checks
+// anywhere, so this token has the same reach any logged-in user has. This is
+// contained by keeping the writes few, named and gated (crmPut / crmPost
+// below, CRM_WRITE_ENABLED, CRM_WRITE_ALLOW_LIVE, the confirmed identity).
 // Narrowing the credential itself is Phase 0 RBAC work in NXT Sales and is
 // tracked as a follow-up, not silently assumed to be in place.
 
@@ -127,26 +128,38 @@ export async function crmGet<T>(path: string, params: QueryParams = {}): Promise
 }
 
 /**
- * The ONE write this client can perform.
+ * The writes this client can perform: PUT (update a company) and, since
+ * 2026-09-29, POST (create a company or its Lead Source setup, on a person's
+ * click — see src/crm/leads). Both go through `write()` below and nothing else.
  *
- * A separate function rather than a `method` parameter on `once()`, so the
- * read path keeps its hard-coded GET and cannot be turned into a write by
- * passing an argument. Everything about this function is deliberately narrow:
+ * Separate functions rather than a `method` parameter on `once()`, so the read
+ * path keeps its hard-coded GET and cannot be turned into a write by passing
+ * an argument. Everything about a write is deliberately narrow:
  *
  *   GATED    Refuses unless CRM_WRITE_ENABLED. The check is here as well as in
  *            the write gate because this is the last code that touches the
  *            wire, and a guard that only exists further up is a guard a future
  *            caller can route around.
  *
- *   NO RETRY A failed PUT is NOT retried. A GET is idempotent so retrying it
+ *   NO RETRY A failed write is NOT retried. A GET is idempotent so retrying it
  *            costs nothing; a write that may or may not have landed must be
- *            reported and decided on, not repeated hopefully.
+ *            reported and decided on, not repeated hopefully. A create that
+ *            timed out is found again by the duplicate check on the next try.
  *
- *   PUT ONLY There is no POST, PATCH or DELETE. Creating and deleting records
- *            are outside the approved scope, so they have no implementation to
- *            be enabled by mistake.
+ *   NO DELETE There is no PATCH or DELETE. Deleting records is outside the
+ *            approved scope, so it has no implementation to be enabled by
+ *            mistake.
  */
 export async function crmPut<T>(path: string, body: unknown): Promise<T> {
+  return write<T>('PUT', path, body)
+}
+
+/** Create — same gate, same single attempt as crmPut. */
+export async function crmPost<T>(path: string, body: unknown): Promise<T> {
+  return write<T>('POST', path, body)
+}
+
+async function write<T>(method: 'PUT' | 'POST', path: string, body: unknown): Promise<T> {
   if (!env.CRM_WRITE_ENABLED) {
     throw new UpstreamError('Refusing to write to NXT Sales: CRM_WRITE_ENABLED is off.', {
       retryable: false,
@@ -184,7 +197,7 @@ export async function crmPut<T>(path: string, body: unknown): Promise<T> {
     const timer = setTimeout(() => controller.abort(), env.NXT_SALES_TIMEOUT_MS)
     try {
       const res = await fetch(`${env.NXT_SALES_BASE_URL}${path}`, {
-        method: 'PUT',
+        method,
         signal: controller.signal,
         headers: {
           Authorization: `Bearer ${serviceToken()}`,
@@ -202,7 +215,7 @@ export async function crmPut<T>(path: string, body: unknown): Promise<T> {
           res.status === 400
             ? ' The most likely cause is a value the target field does not accept — check the dropdown options.'
             : ''
-        throw new UpstreamError(`NXT Sales ${res.status} on PUT ${path}.${hint}`, {
+        throw new UpstreamError(`NXT Sales ${res.status} on ${method} ${path}.${hint}`, {
           // Never retryable. See the note above.
           retryable: false,
           details: { status: res.status, body: text.slice(0, 400) },
@@ -212,11 +225,12 @@ export async function crmPut<T>(path: string, body: unknown): Promise<T> {
     } catch (err) {
       if (err instanceof UpstreamError) throw err
       if ((err as Error).name === 'AbortError') {
-        throw new UpstreamError(`NXT Sales timed out on PUT ${path}. The write may or may not have landed.`, {
+        throw new UpstreamError(`NXT Sales timed out on ${method} ${path}. The write may or may not have landed.`, {
           retryable: false,
+          details: { timedOut: true },
         })
       }
-      throw new UpstreamError(`NXT Sales unreachable on PUT ${path}`, {
+      throw new UpstreamError(`NXT Sales unreachable on ${method} ${path}`, {
         retryable: false,
         details: { message: (err as Error).message },
       })

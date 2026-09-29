@@ -11,7 +11,9 @@ import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
 
 // Stage 1b — open-web company discovery ("Find New Company"). Additive to
-// Stage 1 prospecting: this never reads from or writes to NXT Sales.
+// Stage 1 prospecting. Each company found is checked against NXT Sales (read
+// only); adding one to NXT Sales is a separate, explicit action
+// (crmLeads.routes.ts).
 
 export const companyDiscoveryRoutes = Router()
 
@@ -183,6 +185,10 @@ companyDiscoveryRoutes.get(
         serviceNeed: true,
         status: true,
         crmCompanyId: true,
+        crmCheckedAt: true,
+        crmMatchedOn: true,
+        crmCheckNote: true,
+        crmCreatedAt: true,
         createdAt: true,
       },
     })

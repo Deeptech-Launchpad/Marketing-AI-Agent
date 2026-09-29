@@ -119,9 +119,49 @@ describe('the HTTP request', () => {
     await expect(crmPut('/api/companies/x', { customFields: {} })).rejects.toMatchObject({ retryable: false })
   })
 
-  it('offers no POST, PATCH or DELETE', async () => {
+  // 2026-09-29: "Add to NXT Sales" needs a create (POST). It is the only
+  // addition: still no PATCH and no DELETE, and the POST passes every gate
+  // the PUT does — tested below.
+  it('offers no PATCH or DELETE, and POST only as crmPost', async () => {
     const client = await import('../../src/crm/nxtSales/httpClient.js')
-    expect(Object.keys(client).filter((k) => /post|patch|delete/i.test(k))).toEqual([])
+    expect(Object.keys(client).filter((k) => /patch|delete/i.test(k))).toEqual([])
+    expect(Object.keys(client).filter((k) => /post/i.test(k))).toEqual(['crmPost'])
+  })
+})
+
+describe('crmPost passes the same gates as crmPut', () => {
+  it('refuses while writes are disabled, before any request', async () => {
+    const { crmPost } = await import('../../src/crm/nxtSales/httpClient.js')
+    const calls = captureFetch()
+    await expect(crmPost('/api/companies', { name: 'X' })).rejects.toThrow(/CRM_WRITE_ENABLED is off/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a live CRM without CRM_WRITE_ALLOW_LIVE, before any request', async () => {
+    const { crmPost } = await import('../../src/crm/nxtSales/httpClient.js')
+    envMock.CRM_WRITE_ENABLED = true
+    envMock.CRM_WRITE_ALLOW_LIVE = false
+    const calls = captureFetch()
+    await expect(crmPost('/api/companies', { name: 'X' })).rejects.toThrow(/CRM_WRITE_ALLOW_LIVE is off/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a live CRM signed with an unconfirmed identity', async () => {
+    const { crmPost } = await import('../../src/crm/nxtSales/httpClient.js')
+    envMock.CRM_WRITE_ENABLED = true
+    envMock.NXT_SALES_SERVICE_USER_ID = 'someone-else'
+    const calls = captureFetch()
+    await expect(crmPost('/api/companies', { name: 'X' })).rejects.toThrow(/not the identity confirmed/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('is one POST, never retried', async () => {
+    const { crmPost } = await import('../../src/crm/nxtSales/httpClient.js')
+    envMock.CRM_WRITE_ENABLED = true
+    const calls = captureFetch(503)
+    await expect(crmPost('/api/companies', { name: 'X' })).rejects.toMatchObject({ retryable: false })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.init.method).toBe('POST')
   })
 })
 

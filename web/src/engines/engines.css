@@ -721,3 +721,7 @@
 .prov-row:last-child { border-bottom: none; }
 .prov-row__name { font-size: var(--fs-sm); font-weight: 650; color: var(--text); }
 .prov-row__why { flex-basis: 100%; margin: 0; font-size: var(--fs-micro); color: var(--text-dim); }
+
+/* Add a verified decision maker to NXT Sales (2026-09-29). */
+.people__crm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s2); }
+.people__crmerr { color: var(--danger-text); font-size: var(--fs-xs); }

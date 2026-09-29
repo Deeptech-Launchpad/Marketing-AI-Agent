@@ -10,6 +10,7 @@ import { BlockedState, EmptyState, ErrorState, LoadingState } from '../component
 import { RelationshipGraph } from '../components/motion/Signatures'
 import { EvidenceButton } from '../components/ui/Evidence'
 import type { CompanyContactEmail, DecisionMakerCandidate } from '../lib/types'
+import type { LeadWriteStatus } from './CrmLeadStatus'
 
 // Decision Makers (#978).
 //
@@ -277,6 +278,9 @@ export function DecisionMakers() {
   const engine = useEngine('decision-makers')
   const { company } = useCompany()
   const { can } = useAuth()
+  // Whether a verified person can be added to their company in NXT Sales (2026-09-29).
+  const crmWrite = useAsync<LeadWriteStatus>((signal) => api.get('/crm-leads/status', { signal }), [])
+  const canAddToCrm = can('approve') && Boolean(crmWrite.data?.canWrite)
   const id = company?.crmCompanyId
 
   const candidates = useResource<{
@@ -601,6 +605,7 @@ export function DecisionMakers() {
                             },
                           ]}
                         />
+                        {canAddToCrm && (c.companyMatch === 'verified' || c.companyMatch === 'probable') && <AddDmToCrm candidateId={c.id} />}
                       </li>
                     ))}
                   </ul>
@@ -742,5 +747,43 @@ function faultAffects(error: Error | ApiError): string {
   return (
     `The request failed with status ${api.status}. Nothing is known about this company’s people — in particular, ` +
     'not that there are none.'
+  )
+}
+
+/**
+ * Adds a verified decision maker to their company's record in NXT Sales
+ * (2026-09-29): name and role, public LinkedIn, verified work email — merged
+ * with what is there, never duplicating or removing anything.
+ */
+function AddDmToCrm({ candidateId }: { candidateId: string }) {
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
+  const add = async () => {
+    setBusy(true)
+    setNote(null)
+    try {
+      const r = await api.post<{ outcome: 'added' | 'already_up_to_date'; added?: string[] }>(`/crm-leads/decision-makers/${encodeURIComponent(candidateId)}/add`, {})
+      setNote(
+        r.outcome === 'added'
+          ? { ok: true, text: `Added to NXT Sales: ${(r.added ?? []).join(', ')}.` }
+          : { ok: true, text: 'Already in NXT Sales — nothing new to add.' },
+      )
+    } catch (err) {
+      setNote({ ok: false, text: (err as Error).message || 'Not added.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <span className="people__crm">
+      <Button size="sm" variant="ghost" busy={busy} onClick={() => void add()}>
+        Add to NXT Sales
+      </Button>
+      {note && (
+        <span className={note.ok ? 'cell-dim' : 'people__crmerr'} role="status">
+          {note.text}
+        </span>
+      )}
+    </span>
   )
 }

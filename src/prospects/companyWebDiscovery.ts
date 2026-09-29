@@ -1,4 +1,5 @@
 import { env } from '../config/env.js'
+import { checkSearchAgainstCrm } from '../crm/leads/leadWrite.js'
 import { registrableDomain } from '../enrichment/siteIdentity.js'
 import { getLlm } from '../llm/index.js'
 import { audit } from '../platform/audit.js'
@@ -481,6 +482,16 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
     })
 
     log.info({ found: references.length, websitesAudited, needing, costUsd, stoppedForTime }, 'company web discovery completed')
+
+    // Is each company already in NXT Sales? (2026-09-29) Read-only checks of
+    // the live CRM, after the search is already shown as complete; a CRM that
+    // cannot be reached is recorded per company, never taken as "new".
+    try {
+      const crm = await checkSearchAgainstCrm(search.tenantId, searchId)
+      log.info(crm, 'discovered companies checked against NXT Sales')
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, 'NXT Sales duplicate check did not run')
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log.error({ err: message }, 'company web discovery failed')

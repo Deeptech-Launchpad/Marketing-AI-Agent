@@ -25,7 +25,8 @@
     "purge:fixtures": "node scripts/purge-fixtures.mjs",
     "test:all": "vitest run tests/unit tests/e2e",
     "test:integration": "node scripts/run-integration.mjs",
-    "verify:live-crm": "tsx scripts/verify-live-crm.ts"
+    "verify:live-crm": "tsx scripts/verify-live-crm.ts",
+    "crm:setup-lead-source": "tsx scripts/setup-lead-source.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

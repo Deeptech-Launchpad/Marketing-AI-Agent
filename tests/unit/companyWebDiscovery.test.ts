@@ -28,6 +28,9 @@ vi.mock('../../src/platform/logger.js', () => ({ logger: { ...quiet, child: () =
 
 // The website-resolution rule imports the CRM port; nothing here reaches it.
 vi.mock('../../src/crm/index.js', () => ({ getCrm: () => ({}) }))
+// The NXT Sales duplicate check that follows a search (2026-09-29) has its
+// own tests (crmLeads.test.ts); here it answers without touching a CRM.
+vi.mock('../../src/crm/leads/leadWrite.js', () => ({ checkSearchAgainstCrm: vi.fn(async () => ({ checked: 0, inCrm: 0, unreachable: 0 })) }))
 
 const audit = vi.fn()
 vi.mock('../../src/platform/audit.js', () => ({ audit: (...a: unknown[]) => audit(...a) }))

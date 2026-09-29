@@ -604,10 +604,21 @@ model DiscoveredCompany {
   productAnalysis Json?
   serviceNeed     String?
 
-  // Populated only if/when this company is matched to an existing CRM
-  // company, or — in a deferred later phase — actually created in the live
-  // CRM. Null is the common case for a brand-new prospect under this stage.
+  // The NXT Sales company this is (2026-09-29): set when the live CRM already
+  // holds it (found by the duplicate check) or when a person added it there.
+  // Null until then.
   crmCompanyId String?
+
+  // The last duplicate check against the live CRM: when, what matched
+  // (domain | name | email | create_conflict), or why it could not be checked.
+  crmCheckedAt DateTime?
+  crmMatchedOn String?
+  crmCheckNote String?
+  // "Add to NXT Sales": a claim while the create is in flight (so two clicks
+  // cannot create twice), then who created it and when.
+  crmCreateStartedAt    DateTime?
+  crmCreatedAt          DateTime?
+  crmCreatedByCrmUserId String?
 
   status              String @default("candidate") // candidate | matched_to_crm | dismissed
   createdByCrmUserId  String
@@ -621,6 +632,7 @@ model DiscoveredCompany {
   @@unique([tenantId, searchId, discoverySourceUrl])
   @@index([tenantId, status])
   @@index([tenantId, domain])
+  @@index([tenantId, crmCompanyId])
   @@index([searchId, serviceNeed])
 }
 

@@ -17,6 +17,7 @@ import { outreachRoutes } from './outreach.routes.js'
 import { outreachSequenceRoutes } from './outreachSequence.routes.js'
 import { prospectRoutes } from './prospects.routes.js'
 import { companyDiscoveryRoutes } from './companyDiscovery.routes.js'
+import { crmLeadsRoutes } from './crmLeads.routes.js'
 import { usageRoutes } from './usage.routes.js'
 import { runRoutes } from './runs.routes.js'
 import { segmentRoutes } from './segments.routes.js'
@@ -51,6 +52,7 @@ apiRoutes.use('/prospects', prospectRoutes)
 // Stage 1b — open-web company discovery ("Find New Company"). Additive to
 // /prospects, which stays CRM-only by design.
 apiRoutes.use('/company-discovery', companyDiscoveryRoutes)
+apiRoutes.use('/crm-leads', crmLeadsRoutes)
 // Read-only reporting on what this platform spent against its own API keys.
 apiRoutes.use('/usage', usageRoutes)
 apiRoutes.use('/enrichment', enrichmentRoutes)

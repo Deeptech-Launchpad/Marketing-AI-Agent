@@ -112,9 +112,25 @@ export async function resolvePipelineCompany(
 ): Promise<{ company: CrmCompany; discoveredCompanyId: string | null } | null> {
   const discovered = await prisma.discoveredCompany.findFirst({
     where: { id, tenantId },
-    select: { id: true, companyName: true, domain: true, websiteUrl: true },
+    select: { id: true, companyName: true, domain: true, websiteUrl: true, crmCompanyId: true },
   })
-  if (discovered) return { company: companyFromDiscovered(discovered), discoveredCompanyId: discovered.id }
+  if (discovered) {
+    const company = companyFromDiscovered(discovered)
+    // Linked to NXT Sales (already there, or added): its contacts are the
+    // CRM's record of who works there, so Decision Makers verifies against
+    // and merges with them. Only the contact lists are taken; the id stays
+    // the platform's own, and an unreachable CRM changes nothing.
+    if (discovered.crmCompanyId) {
+      const linked = await getCrm().getCompany(discovered.crmCompanyId).catch(() => null)
+      if (linked) {
+        company.contactPersons = linked.contactPersons
+        company.linkedProfiles = linked.linkedProfiles
+        company.emails = linked.emails
+        company.email = linked.email
+      }
+    }
+    return { company, discoveredCompanyId: discovered.id }
+  }
 
   const company = await getCrm().getCompany(id)
   return company ? { company, discoveredCompanyId: null } : null

@@ -71,6 +71,13 @@ export interface DiscoveredCompany {
   serviceNeed?: ServiceNeed | null
   status: string
   crmCompanyId: string | null
+  /** The last live NXT Sales duplicate check (2026-09-29). Null = not checked yet. */
+  crmCheckedAt?: string | null
+  /** What matched: domain | name | email | crm_rule | created. */
+  crmMatchedOn?: string | null
+  /** Why it could not be checked, when it could not. */
+  crmCheckNote?: string | null
+  crmCreatedAt?: string | null
   createdAt: string
 }
 
