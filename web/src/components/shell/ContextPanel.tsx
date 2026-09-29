@@ -6,6 +6,7 @@ import { useAsync } from '../../lib/hooks'
 import { useCompany } from '../../lib/companyContext'
 import type { CompanySearch, EngagementEvent } from '../../lib/types'
 import { technologySummary } from '../../lib/enrichmentSummary'
+import { IDENTITY_LABEL, useCompanyIdentity } from '../../lib/companyIdentity'
 import { Unset } from '../ui/primitives'
 import './shell.css'
 
@@ -34,6 +35,7 @@ export function ContextPanel() {
   const [settled, setSettled] = useState('')
 
   const id = company?.crmCompanyId
+  const { identity } = useCompanyIdentity(id)
 
   useEffect(() => {
     const timer = setTimeout(() => setSettled(term.trim()), 250)
@@ -234,8 +236,21 @@ export function ContextPanel() {
               <dd title={techNames.length ? techNames.join(', ') : undefined}>
                 {techNames.length ? techText : <Unset what={techText} />}
               </dd>
-              <dt>CRM id</dt>
-              <dd className="mono context__id">{company.crmCompanyId}</dd>
+              {/* A CRM id only for a record NXT Sales holds right now; a
+                  Prospects find says so instead of passing off its own id. */}
+              {identity?.kind === 'crm' && identity.crmCompanyId ? (
+                <>
+                  <dt>CRM id</dt>
+                  <dd className="mono context__id">{identity.crmCompanyId}</dd>
+                </>
+              ) : (
+                <>
+                  <dt>Source</dt>
+                  <dd title={identity?.reason}>
+                    {identity ? IDENTITY_LABEL[identity.kind] : <Unset what="Checking NXT Sales…" />}
+                  </dd>
+                </>
+              )}
             </dl>
           </section>
 

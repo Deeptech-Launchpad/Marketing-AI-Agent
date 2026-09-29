@@ -701,9 +701,9 @@ export function IntentSignals() {
                   </p>
                 )}
                 <p className="sig-lead__note">
-                  Intent detection reads the CRM, the company website’s technology and careers pages, job boards, the
-                  public profiles the company links to, and the open web, and records only what those sources actually
-                  stated. Each signal is evidence that something happened — not a conclusion that this company needs
+                  Intent detection reads the CRM, the company website’s technology, the public profiles the company links
+                  to, and the open web, and records only what those sources actually stated. Job postings are not used
+                  as intent signals. Each signal is evidence that something happened — not a conclusion that this company needs
                   anything. Scoring is a later stage; nothing here has been scored.
                 </p>
 
@@ -1069,7 +1069,7 @@ function NoRows({
         <EmptyState
           icon={Radar}
           title={`Signal detection has not run for ${name}.`}
-          detail="No intent detection run exists for this company. Intent detection reads the CRM, the company website’s technology and careers pages, job boards, the public profiles the company links to, and the open web, and records only what those sources actually stated — until it runs, there is nothing to show and nothing to count."
+          detail="No intent detection run exists for this company. Intent detection reads the CRM, the company website’s technology, the public profiles the company links to, and the open web, and records only what those sources actually stated — job postings are not used as intent signals — until it runs, there is nothing to show and nothing to count."
           action={action}
         />
       )

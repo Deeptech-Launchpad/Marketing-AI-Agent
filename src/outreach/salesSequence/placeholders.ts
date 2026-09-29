@@ -21,6 +21,8 @@ export const PLACEHOLDERS = {
   xOf5NotRecommended: '[X of 5 were not recommended by any of the four engines]',
   senderFirstName: '[Sender first name]',
   senderCompany: '[Sender company]',
+  /** The genuine product page Prospects verified for THIS company (compose.ts). */
+  productPageUrl: '[Product page URL]',
 } as const
 
 export type PlaceholderKey = keyof typeof PLACEHOLDERS

@@ -78,6 +78,20 @@ export interface DiscoveredCompany {
 export type ServiceNeed = 'needed' | 'possible' | 'not_needed' | 'not_assessed'
 
 /** Mirrors src/prospects/productPageAnalysis.ts. */
+/**
+ * A verified shared company mailbox, used only when the decision maker has no
+ * email of their own. Mirrors src/decisionmakers/companyContactEmail.ts.
+ */
+export interface CompanyContactEmail {
+  email: string
+  mailbox: string
+  source: 'company_website' | 'hunter_public_page' | 'crm_record'
+  sourceLabel: string
+  sourceUrl: string | null
+  evidence: string
+  checkedAt: string
+}
+
 /** Where a company is, as its own website or the listing that named it states. Mirrors src/prospects/companyLocation.ts. */
 export interface CompanyLocation {
   text: string

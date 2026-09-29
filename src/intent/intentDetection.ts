@@ -6,9 +6,8 @@ import { prisma, newId } from '../platform/db.js'
 import { serializeError } from '../platform/errors.js'
 import { logger } from '../platform/logger.js'
 import { scoreConfidence, scoreFreshness, signalStatus } from './confidence.js'
-import { CareersPageProvider } from './providers/careersPageProvider.js'
 import { CrmSignalProvider } from './providers/crmProvider.js'
-import { ApifyJobsProvider } from './providers/jobsProvider.js'
+import { isJobSignal } from './jobSignals.js'
 import { outreachAngleFor } from './outreachAngles.js'
 import { ExternalSourcesProvider } from './providers/externalSourcesProvider.js'
 import { CommunityQuestionsProvider } from './providers/communityQuestionsProvider.js'
@@ -32,8 +31,9 @@ import { eventFingerprint, type IntentSignalDraft } from './types.js'
 const PROVIDERS: IntentProvider[] = [
   new CrmSignalProvider(),
   new TechnologySignalProvider(),
-  new CareersPageProvider(),
-  new ApifyJobsProvider(),
+  // CareersPageProvider and ApifyJobsProvider are no longer run (2026-09-28):
+  // job postings are not intent signals (see jobSignals.ts). Their code is
+  // kept; they are simply not asked, so no careers page or job board is read.
   // Public company profiles the company's own website links to. Last because
   // it makes the most external requests; its findings are independent of the
   // others, so nothing above it depends on the order.
@@ -187,7 +187,9 @@ export async function runIntentDetection(runId: string): Promise<void> {
       log.debug({ provider: result.provider, ok: result.ok, signals: result.signals.length }, 'provider finished')
     }
 
-    const drafts = results.flatMap((r) => r.signals)
+    // Job postings are not intent signals: whichever source met one — a
+    // forum, a news page, a "we're hiring" social post — it is not stored.
+    const drafts = results.flatMap((r) => r.signals).filter((d) => !isJobSignal(d))
     const stored = await persistSignals(run.tenantId, runId, drafts, discoveredCompanyId)
 
     // A run withdraws what it has observed to be false, as well as recording

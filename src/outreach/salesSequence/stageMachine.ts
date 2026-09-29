@@ -57,6 +57,7 @@ export interface SequenceInput {
 export type StageStatus =
   | 'done' // marked sent
   | 'approved' // approved, waiting to be sent by a person
+  | 'scheduled' // approved test email, the test sender sends it at its time
   | 'drafted' // a draft is waiting for review
   | 'due' // can be prepared now
   | 'overdue' // its window has passed and it was not sent
@@ -120,7 +121,9 @@ function actionFor(actions: StageAction[], key: StageKey): StageAction | null {
 function statusFromAction(a: StageAction | null): StageStatus | null {
   if (!a) return null
   if (a.status === 'sent') return 'done'
-  if (a.status === 'ready_to_send') return 'approved'
+  // A failed test send stays approved: a person retries or reschedules it.
+  if (a.status === 'ready_to_send' || a.status === 'failed') return 'approved'
+  if (a.status === 'scheduled' || a.status === 'sending') return 'scheduled'
   if (a.status === 'skipped') return 'skipped'
   if (a.status === 'draft') return 'drafted'
   return null
@@ -257,7 +260,7 @@ export function computeSequence(input: SequenceInput): SequenceView {
   return { phase, stages, next: nextStep(phase, stages, now), reminders, initialSentAt }
 }
 
-const ACTIVE: StageStatus[] = ['approved', 'drafted', 'overdue', 'due']
+const ACTIVE: StageStatus[] = ['approved', 'scheduled', 'drafted', 'overdue', 'due']
 
 function nextStep(phase: Phase, stages: StageView[], now: Date): SequenceView['next'] {
   const none = (text: string): SequenceView['next'] => ({ stageKey: null, text, window: null, overdue: false })
@@ -281,7 +284,9 @@ function nextStep(phase: Phase, stages: StageView[], now: Date): SequenceView['n
     const verb =
       s.status === 'approved'
         ? 'Send it from your mail client, then mark it sent'
-        : s.status === 'drafted'
+        : s.status === 'scheduled'
+          ? 'Scheduled — the test sender sends it to the internal test inbox at its time'
+          : s.status === 'drafted'
           ? 'Review and approve the draft'
           : 'Prepare the draft'
     return {

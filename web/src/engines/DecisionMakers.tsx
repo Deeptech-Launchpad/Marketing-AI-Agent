@@ -9,7 +9,7 @@ import { Panel, Metric, MetricRow, Chip, Button, Unset } from '../components/ui/
 import { BlockedState, EmptyState, ErrorState, LoadingState } from '../components/ui/states'
 import { RelationshipGraph } from '../components/motion/Signatures'
 import { EvidenceButton } from '../components/ui/Evidence'
-import type { DecisionMakerCandidate } from '../lib/types'
+import type { CompanyContactEmail, DecisionMakerCandidate } from '../lib/types'
 
 // Decision Makers (#978).
 //
@@ -284,6 +284,8 @@ export function DecisionMakers() {
     providerResults?: unknown
     peopleSeen?: number
     excludedCount?: number
+    /** A verified company mailbox, found when the primary contact has no email. */
+    companyContactEmail?: CompanyContactEmail | null
   }>(
     // EVERYONE THE RUN SAW, not only the people it could verify.
     //
@@ -333,6 +335,7 @@ export function DecisionMakers() {
   }, [latestRun?.id, latestRun?.status])
 
   const rows = candidates.data?.candidates ?? []
+  const companyMailbox = candidates.data?.companyContactEmail ?? null
   // Which sources were actually asked. The panel below used to carry one
   // sentence of static prose, so a reader could not tell a provider that ran
   // and found nobody from one that was never configured — and, while the
@@ -545,12 +548,32 @@ export function DecisionMakers() {
                                   )}
                                 </>
                               ) : (
-                                <Unset
-                                  what={
-                                    c.emailContact?.note ??
-                                    'No verified person email found. Nothing was guessed from the name or the domain.'
-                                  }
-                                />
+                                <>
+                                  <Unset
+                                    what={
+                                      c.emailContact?.note ??
+                                      'No verified person email found. Nothing was guessed from the name or the domain.'
+                                    }
+                                  />
+                                  {/* The primary contact has no email: the verified
+                                      company mailbox Outreach will use instead,
+                                      labelled as the company's, never as theirs. */}
+                                  {c.contactRole === 'primary' && companyMailbox && (
+                                    <span className="people__src people__mailbox">
+                                      {' '}
+                                      Company mailbox for outreach:{' '}
+                                      <a href={`mailto:${companyMailbox.email}`}>{companyMailbox.email}</a> — from{' '}
+                                      {companyMailbox.sourceUrl ? (
+                                        <a href={companyMailbox.sourceUrl} target="_blank" rel="noopener noreferrer">
+                                          {companyMailbox.sourceLabel}
+                                        </a>
+                                      ) : (
+                                        companyMailbox.sourceLabel
+                                      )}
+                                      ; it is the company’s shared inbox, not {c.fullName}’s own.
+                                    </span>
+                                  )}
+                                </>
                               )}
                             </span>
                             <span>{c.phone ?? <Unset what="No phone number recorded" />}</span>

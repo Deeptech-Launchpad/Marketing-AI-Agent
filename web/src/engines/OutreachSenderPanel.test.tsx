@@ -4,15 +4,16 @@ import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '../lib/theme'
 import { OutreachSenderPanel } from './OutreachSenderPanel'
 
-// The sender every approved email is signed as: set by an admin in Settings,
-// read-only for everyone else, and never hard-coded.
+// The shared part of the sender (the company name): set by an admin in
+// Settings, read-only for everyone else. The person is always whoever starts
+// the outreach — no person's name or email is entered here.
 
 const perms = { value: ['view', 'operate', 'approve', 'admin'] as string[] }
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ can: (p: string) => perms.value.includes(p) }) }))
 
 interface Call { url: string; method: string; body: unknown }
 let calls: Call[] = []
-const EMPTY = { sender: { firstName: '', fullName: '', email: '', companyName: '', signature: '' }, configured: false }
+const EMPTY = { sender: { companyName: '', signature: '' }, configured: false }
 
 beforeEach(() => {
   perms.value = ['view', 'operate', 'approve', 'admin']
@@ -31,13 +32,14 @@ describe('Outreach sender in Settings', () => {
   it('says plainly when no sender is set, and lets an admin save one', async () => {
     render()
     expect(await screen.findByText('Not set')).toBeInTheDocument()
-    await userEvent.type(screen.getByLabelText(/first name/i), 'Ada')
-    await userEvent.type(screen.getByLabelText(/^company$/i), 'AltiusNxt')
+    expect(screen.queryByLabelText(/first name/i)).toBeNull()
+    expect(screen.queryByLabelText(/^email$/i)).toBeNull()
+    await userEvent.type(screen.getByLabelText(/company name/i), 'AltiusNxt')
     await userEvent.click(screen.getByRole('button', { name: /save sender/i }))
     await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
     const post = calls.find((c) => c.method === 'POST')!
     expect(post.url).toMatch(/\/outreach\/sequence\/sender$/)
-    expect(post.body).toMatchObject({ firstName: 'Ada', companyName: 'AltiusNxt' })
+    expect(post.body).toEqual({ companyName: 'AltiusNxt', signature: '' })
   })
 
   it('is read-only for someone who is not an admin', async () => {

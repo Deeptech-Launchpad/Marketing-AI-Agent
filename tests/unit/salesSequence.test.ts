@@ -14,13 +14,84 @@ const quiet = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 vi.mock('../../src/platform/logger.js', () => ({ logger: { ...quiet, child: () => quiet } }))
 vi.mock('../../src/llm/index.js', () => ({ getLlm: () => ({ generate: vi.fn() }) }))
 
-const { STAGE_TEMPLATES, templateFor, EXPO, REPLY_FOLLOWUP_EXPO_PARAGRAPH } = await import('../../src/outreach/salesSequence/templates.js')
+const { STAGE_TEMPLATES, templateFor, EXPO, REPLY_FOLLOWUP_EXPO_PARAGRAPH, PRODUCT_PAGE_LINE } = await import('../../src/outreach/salesSequence/templates.js')
 const { fill, findUnresolved, firstName, companyDisplayName, placeholdersIn } = await import('../../src/outreach/salesSequence/placeholders.js')
 const { dayWindow, sameOrNextBusinessDay, startOfLocalDay } = await import('../../src/outreach/salesSequence/businessDays.js')
 const { computeSequence } = await import('../../src/outreach/salesSequence/stageMachine.js')
 const { evaluateGates } = await import('../../src/outreach/salesSequence/gates.js')
 const { verifyReading } = await import('../../src/outreach/salesSequence/replies.js')
-const { checkLine, appearsIn, categoryLeaf, withoutExpoParagraph, valuesFromInputs } = await import('../../src/outreach/salesSequence/compose.js')
+const { checkLine, appearsIn, categoryLeaf, withoutExpoParagraph, valuesFromInputs, composeStage, withoutProductPageLine } = await import('../../src/outreach/salesSequence/compose.js')
+const { verifiedProductPageUrl } = await import('../../src/outreach/salesSequence/productPage.js')
+
+describe('the product page in Versions 1–3', () => {
+  const product = (url: string | null) => ({ name: 'VIO3 electro-surgical unit', url, category: 'Surgical > Electrosurgery', description: null, gaps: [] })
+
+  it('links only this company’s own verified product page — never another site, its homepage, or a malformed address', () => {
+    expect(verifiedProductPageUrl(product('https://www.medinahealthcare.com/products/vio3'), 'medinahealthcare.com')).toBe('https://www.medinahealthcare.com/products/vio3')
+    expect(verifiedProductPageUrl(product('https://shop.medinahealthcare.com/p/vio3'), 'www.medinahealthcare.com')).toBe('https://shop.medinahealthcare.com/p/vio3')
+    expect(verifiedProductPageUrl(product('https://www.othersupplier.com/products/vio3'), 'medinahealthcare.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://www.medinahealthcare.com/'), 'medinahealthcare.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('not a url'), 'medinahealthcare.com')).toBeNull()
+    // Articles, posts, searches and listings are not a product page — seen on a real company.
+    expect(verifiedProductPageUrl(product('https://www.medinahealth.com.mt/2024/09/23/vio3-electro-surgical-unit-by-erbe-at-mater-dei-hospital/'), 'medinahealth.com.mt')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://www.medinahealthcare.com/news/vio3-launch'), 'medinahealthcare.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://www.medinahealthcare.com/products/'), 'medinahealthcare.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://www.medinahealthcare.com/catalogsearch?q=vio3'), 'medinahealthcare.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://www.medinahealthcare.com/category/electrosurgery'), 'medinahealthcare.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://www.medinahealthcare.com/item/vio3-300d'), 'medinahealthcare.com')).toBe('https://www.medinahealthcare.com/item/vio3-300d')
+    // Prospects' own address rule, applied here too: recalls, contests, newsrooms, press releases.
+    expect(verifiedProductPageUrl(product('https://www.kleintools.com/recall/ncvt1-sp'), 'kleintools.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://indsupply.com/a2z_crescent-contest_landing-page/'), 'indsupply.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://newsroom.stanleyblackanddecker.com/2026-09-08-Stanley-to-Present'), 'stanleyblackanddecker.com')).toBeNull()
+    expect(verifiedProductPageUrl(product('https://www.parker.com/us/en/about-parker/newsroom/news-release-details/motor.html'), 'parker.com')).toBeNull()
+    expect(verifiedProductPageUrl(product(null), 'medinahealthcare.com')).toBeNull()
+    expect(verifiedProductPageUrl(null, 'medinahealthcare.com')).toBeNull()
+  })
+
+  const facts = (productPageUrl: string | null) => ({
+    crmCompanyId: 'c1',
+    discoveredCompanyId: 'd1',
+    companyName: 'Medina Healthcare Ltd',
+    companyDomain: 'medinahealthcare.com',
+    companySummary: null,
+    decisionMaker: { id: 'dm1', fullName: 'John Camilleri', title: 'Director', email: 'john@medinahealthcare.com', profileUrl: null },
+    product: product(productPageUrl),
+    productPageUrl,
+    signals: [],
+    facts: [],
+  })
+  const compose = (v: 'v1' | 'v2' | 'v3', url: string | null) =>
+    composeStage({
+      template: templateFor('initial', v),
+      facts: facts(url) as never,
+      sender: { firstName: 'Mani', fullName: 'Mani', email: 'mani@altius.test', companyName: 'AltiusNxt', signature: '' },
+      inputs: {},
+      initialSubject: null,
+      tenantId: 't1',
+      personalise: false,
+    })
+
+  it('puts the verified product page in the draft, right after the product paragraph, for every version', async () => {
+    for (const v of ['v1', 'v2', 'v3'] as const) {
+      const r = await compose(v, 'https://www.medinahealthcare.com/products/vio3')
+      expect(r.body, v).toContain('For reference, this is the product page I checked: https://www.medinahealthcare.com/products/vio3')
+      expect(r.unresolved, v).toEqual([])
+      expect(r.resolution.find((x) => x.placeholder === 'productPageUrl')).toMatchObject({ value: 'https://www.medinahealthcare.com/products/vio3', factId: 'product.url' })
+    }
+  })
+
+  it('with no verified product page, leaves the line out — the approved copy exactly as before, no URL and no placeholder', async () => {
+    for (const v of ['v1', 'v2', 'v3'] as const) {
+      const r = await compose(v, null)
+      expect(r.body, v).not.toContain('product page I checked')
+      expect(r.body, v).not.toContain('[Product page URL]')
+      expect(r.body, v).not.toMatch(/\n{3,}/)
+      expect(r.unresolved, v).toEqual([])
+      expect(r.resolution.find((x) => x.placeholder === 'productPageUrl')?.source).toMatch(/left out/)
+    }
+    expect(withoutProductPageLine(templateFor('initial', 'v1').body)).not.toContain(PRODUCT_PAGE_LINE)
+  })
+})
 
 const TZ = 'America/New_York'
 
@@ -46,6 +117,17 @@ describe('the approved templates are the PDF, verbatim', () => {
       expect(`${t.subject ?? ''} ${t.body}`).not.toMatch(/\bManoj\b|AltiusNxt/)
       expect(t.body.trim().endsWith('[Sender first name]')).toBe(true)
     }
+  })
+
+  it('adds exactly one product page line to Versions 1, 2 and 3 — after the product paragraph — and to no other stage', () => {
+    for (const v of ['v1', 'v2', 'v3'] as const) {
+      const paragraphs = templateFor('initial', v).body.split('\n\n')
+      expect(paragraphs.filter((p) => p === PRODUCT_PAGE_LINE), v).toHaveLength(1)
+      const at = paragraphs.indexOf(PRODUCT_PAGE_LINE)
+      // The paragraph just before it is the one naming the test that was run.
+      expect(paragraphs[at - 1], v).toMatch(/Two other suppliers were\.|didn't come up as the pick in any of the four\./)
+    }
+    for (const t of STAGE_TEMPLATES.filter((x) => x.key !== 'initial')) expect(t.body).not.toContain('[Product page URL]')
   })
 
   it('keeps the expo registration details, minus the PDF’s layout brackets', () => {

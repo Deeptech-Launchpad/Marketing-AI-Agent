@@ -14,6 +14,8 @@ const store: Record<string, Row[]> = {}
 const reset = () => {
   for (const k of ['outreachCampaign', 'outreachAction', 'outreachMessage', 'outreachReply', 'auditEvent', 'tenantMember']) store[k] = []
   store.tenant = [{ id: 't1', settings: { outreachSender: { firstName: 'Ada', fullName: 'Ada Lovelace', email: 'ada@altius.test', companyName: 'AltiusNxt', signature: '' } } }]
+  // The person who starts the outreach signs it: their own login name, never a shared setting.
+  store.tenantMember = [{ tenantId: 't1', crmUserId: 'u1', email: 'ada@altius.test', name: 'Ada Lovelace' }]
 }
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([k, v]) => {
@@ -111,6 +113,9 @@ const FACTS = {
 }
 const loadFacts = vi.fn(async () => FACTS as unknown)
 vi.mock('../../src/outreach/salesSequence/facts.js', () => ({ loadProspectFacts: (...a: unknown[]) => loadFacts(...a) }))
+// The company-mailbox lookup reads web pages; here it answers from the test.
+const ensureMailbox = vi.fn(async () => null as unknown)
+vi.mock('../../src/decisionmakers/companyContactEmail.js', () => ({ ensureCompanyContactEmail: (...a: unknown[]) => ensureMailbox(...a) }))
 
 const svc = await import('../../src/outreach/salesSequence/service.js')
 const actor = { tenantId: 't1', crmUserId: 'u1' }
@@ -154,6 +159,28 @@ describe('starting outreach', () => {
   it('refuses without a shortlisted decision maker', async () => {
     loadFacts.mockResolvedValueOnce({ ...FACTS, decisionMaker: null })
     await expect(svc.startSequence(actor, 'c1')).rejects.toThrow(/decision maker/)
+  })
+
+  it('addresses the decision maker’s own email when there is one', async () => {
+    await svc.startSequence(actor, 'c1')
+    expect(store.outreachCampaign![0]).toMatchObject({ recipientEmail: 'jane@acmesafety.test', recipientEmailSource: 'decision_maker' })
+    expect(ensureMailbox).not.toHaveBeenCalled()
+  })
+
+  it('uses a verified company mailbox when the decision maker has no email of their own, labelled as such', async () => {
+    const mailbox = { email: 'sales@acmesafety.test', mailbox: 'sales', source: 'company_website', sourceLabel: 'the company’s own website', sourceUrl: 'https://acmesafety.test/contact', evidence: 'x', checkedAt: 'x' }
+    loadFacts.mockResolvedValueOnce({ ...FACTS, decisionMaker: { ...FACTS.decisionMaker, email: null, companyContactEmail: mailbox } })
+    await svc.startSequence(actor, 'c1')
+    expect(store.outreachCampaign![0]).toMatchObject({ recipientEmail: 'sales@acmesafety.test', recipientEmailSource: 'company_mailbox' })
+  })
+
+  it('looks for a company mailbox once when neither is stored, and leaves the recipient empty if none exists — nothing guessed', async () => {
+    loadFacts.mockResolvedValue({ ...FACTS, decisionMaker: { ...FACTS.decisionMaker, email: null } })
+    ensureMailbox.mockResolvedValueOnce(null)
+    await svc.startSequence(actor, 'c1')
+    expect(ensureMailbox).toHaveBeenCalledWith('t1', 'c1')
+    expect(store.outreachCampaign![0]).toMatchObject({ recipientEmail: null, recipientEmailSource: null })
+    loadFacts.mockImplementation(async () => FACTS as unknown)
   })
 })
 
@@ -259,5 +286,23 @@ describe('replies', () => {
     const { replyId } = await svc.addReply(actor, campaignId, { text: 'We are not interested, thanks.', receivedAt: new Date().toISOString() })
     await svc.confirmReply(actor, replyId, { classification: 'not_interested' })
     expect(store.outreachCampaign![0]!.status).toBe('cancelled')
+  })
+})
+
+describe('who signs the email', () => {
+  it('is the logged-in user who started the outreach — not a shared or hard-coded person', async () => {
+    store.tenantMember!.push({ tenantId: 't1', crmUserId: 'u2', email: 'bo@altius.test', name: 'Bo Diddley' })
+    // Settings still carry an old person's details; they must be ignored.
+    ;(store.tenant![0]!.settings as Record<string, Record<string, string>>).outreachSender!.firstName = 'Mani'
+    await svc.startSequence({ tenantId: 't1', crmUserId: 'u2' }, 'c1')
+    const body = messageOf(initialAction().id).body as string
+    expect(body).toMatch(/^Jane,\n\nBo here, from AltiusNxt\./)
+    expect(body).not.toMatch(/Mani|Ada/)
+  })
+
+  it('leaves the name unfilled (and approval blocked) when the user has no name on record', async () => {
+    store.tenantMember!.push({ tenantId: 't1', crmUserId: 'u3', email: 'x@altius.test', name: null })
+    await svc.startSequence({ tenantId: 't1', crmUserId: 'u3' }, 'c1')
+    expect(messageOf(initialAction().id).body).toMatch(/\[Sender first name\] here/)
   })
 })

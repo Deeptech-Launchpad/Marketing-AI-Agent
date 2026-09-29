@@ -14,6 +14,13 @@
 //      details are configuration, never hard-coded copy.
 //   2. The expo registration block. The PDF wraps it in "[ … ]" as layout —
 //      those two brackets are dropped; every line inside them is kept.
+//   3. The product page (2026-09-28, requested by Sales). Versions 1, 2 and 3
+//      each gain ONE line, PRODUCT_PAGE_LINE, right after the paragraph that
+//      names the product, so the recipient sees which product was checked.
+//      It carries the genuine product page Prospects verified for that same
+//      company; with no verified page the line is left out entirely and the
+//      email is the approved copy exactly as before (compose.ts). No approved
+//      sentence is changed.
 //
 // The PDF gives subjects only for the three initial versions. Every later
 // stage is sent in the same thread, so its subject is "Re: " + the subject the
@@ -75,6 +82,12 @@ export const EXPO = {
   registrationUrl:
     'https://events.b2becommerceworld.org/v2/registrations/event/696f763a5e592e8a0a92da6e/ticketType/6971a5671dfa01967fe37b30?couponCode=ALTIUSVIP',
 } as const
+
+/**
+ * The one line added to Versions 1, 2 and 3: the product page that was checked.
+ * Removed whole when Prospects verified no product page for the company.
+ */
+export const PRODUCT_PAGE_LINE = 'For reference, this is the product page I checked: [Product page URL]'
 
 /** The registration block, exactly as the PDF lays it out (minus its outer brackets). */
 const REGISTRATION_BLOCK = `Guest registrations
@@ -140,6 +153,8 @@ export const STAGE_TEMPLATES: StageTemplate[] = [
 
 I ran a few buyer-style queries for [Product] through ChatGPT, Claude, Perplexity and Gemini this week — the kind a buyer types when shortlisting suppliers. [Company] wasn't the one recommended. Two other suppliers were.
 
+${PRODUCT_PAGE_LINE}
+
 Usually this is not a product issue — it is a data issue. AI engines only recommend listings they can parse with confidence, and most distributor product data isn't structured for that yet.
 
 We have spent 20+ years fixing exactly this for distributors like Vallen, Travers Tool Co Inc, Industrial Sales & Engineering Co, Coastal Farm, SRS Distribution Inc, etc.
@@ -164,6 +179,8 @@ If you send over 5 SKUs, I will run the same test on them and send back a before
 [Sender first name] here, from [Sender company].
 
 Before reaching out, I wanted to check something rather than just claim it: how does [Product] show up when someone asks ChatGPT, Claude, Perplexity or Gemini for a recommendation? I ran it myself — [Company] didn't come up as the pick in any of the four.
+
+${PRODUCT_PAGE_LINE}
 
 That's usually not a quality problem. It's a data problem; these engines only surface listings they can parse with confidence, and most distributor catalogs are not structured for that yet.
 
@@ -191,6 +208,8 @@ Send me 5 SKUs, and I will run the same test and send back a side-by-side compar
 A growing share of B2B buyers now ask ChatGPT, Claude, Perplexity or Gemini directly instead of searching for the best [Product] supplier who carries [Product] near me. I tried a few of those searches for [Company] this week.
 
 [Company / Product] was not the one recommended. Two other suppliers were.
+
+${PRODUCT_PAGE_LINE}
 
 AI engines recommend what they can confidently parse, and a lot of distributor product data is too sparse or inconsistent for that. Every query where you are not the pick is a buyer looking at someone else's page instead.
 

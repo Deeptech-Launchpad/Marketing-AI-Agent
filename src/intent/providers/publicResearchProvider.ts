@@ -127,9 +127,10 @@ export class PublicResearchSignalProvider implements IntentProvider {
     let droppedOtherOrganisation = 0
     const failures: string[] = []
 
-    // Two questions, both generic: what has this company announced, and what
-    // is it advertising. Every company is asked both.
-    for (const topic of ['business_activity', 'hiring'] as const) {
+    // What has this company announced. The second question — what jobs is it
+    // advertising — is no longer asked (2026-09-28): job postings are not
+    // intent signals (see ../jobSignals.ts).
+    for (const topic of ['business_activity'] as const) {
       const discovery = await discoverPublicSources({
         tenantId: ctx.tenantId,
         companyName,

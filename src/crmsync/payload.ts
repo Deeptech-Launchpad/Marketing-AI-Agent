@@ -119,7 +119,8 @@ export async function buildPayload(ctx: PayloadContext): Promise<BuiltPayload | 
           orderBy: { generatedAt: 'desc' },
         }),
     prisma.outreachCampaign.findFirst({
-      where: { tenantId: ctx.tenantId, crmCompanyId: q.crmCompanyId },
+      // Test rehearsals are never handed to the CRM.
+      where: { tenantId: ctx.tenantId, crmCompanyId: q.crmCompanyId, isTest: false },
       orderBy: { createdAt: 'desc' },
     }),
     prisma.salesFollowUpTask.findFirst({

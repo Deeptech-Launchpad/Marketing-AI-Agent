@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Copy, Mail, RotateCcw, Save, ThumbsUp, XCircle } from 'lucide-react'
+import { AlertTriangle, CalendarClock, CheckCircle2, Copy, FlaskConical, Mail, RotateCcw, Save, ThumbsUp, XCircle } from 'lucide-react'
 import { api } from '../../lib/api'
 import { Button, Chip, Field, StatusBadge, Unset, toUiStatus } from '../../components/ui/primitives'
 import { Drawer } from '../../components/ui/Evidence'
 import { asPlainText, buildMailto } from './mailto'
 import { useCall } from './useCall'
-import { fmtDateTime, fmtWindow, type CompanySequence, type Draft, type Version } from './types'
+import { InfoTip } from './InfoTip'
+import { emailStatus } from './status'
+import { APPROVED_UNSENT, fmtDateTime, fmtWindow, type CompanySequence, type Draft, type SendAttempt, type SendingStatus, type Version } from './types'
 
 // THE REVIEW SCREEN FOR ONE EMAIL.
 //
@@ -15,15 +17,19 @@ import { fmtDateTime, fmtWindow, type CompanySequence, type Draft, type Version 
 // considered and the one (if any) that was used, the values only Sales can
 // supply, and the checklist that decides whether it may be approved.
 //
-// There is no send control. An approved email is copied or opened in the
-// person's own mail client, sent from there, and then marked sent here.
+// There is no control that emails a customer. An approved email is copied or
+// opened in the person's own mail client, sent from there, and marked sent.
+//
+// TEST MODE (2026-09-28): in a test-batch campaign, an approved email is
+// scheduled and delivered by the test sender to the INTERNAL test inbox only,
+// and "Test email to my inbox" previews any draft to the reviewer's own
+// internal address. Both are refused by the backend unless sending is in test
+// mode and the address is on the internal allow-list.
 
-const STATUS_WORD: Record<string, string> = {
-  draft: 'Draft — awaiting review',
-  ready_to_send: 'Approved — send it from your mail client',
-  sent: 'Sent',
-  cancelled: 'Cancelled',
-  skipped: 'Skipped',
+const ATTEMPT_WORD: Record<SendAttempt['status'], string> = {
+  accepted: 'Delivered',
+  failed: 'Failed',
+  blocked: 'Blocked',
 }
 
 const SKU_SLOTS = [0, 1, 2, 3, 4]
@@ -36,6 +42,7 @@ export function DraftEditor({
   onChanged,
   canOperate,
   canApprove,
+  sending = null,
 }: {
   draft: Draft | null
   view: CompanySequence
@@ -44,8 +51,10 @@ export function DraftEditor({
   onChanged: () => void
   canOperate: boolean
   canApprove: boolean
+  sending?: SendingStatus | null
 }) {
   const call = useCall(onChanged)
+  const [preview, setPreview] = useState<{ status: string; to: string[]; error: string | null } | null>(null)
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [client, setClient] = useState('')
@@ -73,6 +82,7 @@ export function DraftEditor({
     setRejectReason('')
     setSentAt('')
     setCopied(false)
+    setPreview(null)
     call.clearError()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.actionId, draft?.revision, draft?.status])
@@ -83,9 +93,16 @@ export function DraftEditor({
   if (!draft) return null
 
   const id = draft.actionId
+  const isTest = Boolean(view.campaign?.isTest)
   const isDraft = draft.status === 'draft'
-  const isApproved = draft.status === 'ready_to_send'
+  // Approved and not yet gone: for a real email, waiting for a person to send
+  // it; for a test email, scheduled, unscheduled or failed.
+  const isApproved = APPROVED_UNSENT.includes(draft.status)
   const editable = canOperate && (isDraft || isApproved)
+  const attempts = draft.attempts ?? []
+  const testMode = sending?.mode === 'test'
+  const statusWord = emailStatus(draft.status, draft.statusReason, isTest).label
+  const productLink = draft.stageKey === 'initial' ? (p?.resolution ?? []).find((r) => r.placeholder === 'productPageUrl') ?? null : null
   const dirty = subject !== (draft.subject ?? '') || body !== (draft.body ?? '')
   const gates = draft.gates
   const signals = view.facts.signals ?? []
@@ -128,7 +145,9 @@ export function DraftEditor({
       title={`${draft.pdfRef} ${draft.label}`}
       subtitle={
         <span className="row">
-          <StatusBadge status={toUiStatus(draft.status)} label={STATUS_WORD[draft.status] ?? draft.status.replace(/_/g, ' ')} size="sm" />
+          <StatusBadge status={toUiStatus(draft.status)} label={statusWord} size="sm" />
+          {isTest && <Chip tone="warn">Test run</Chip>}
+          <InfoTip topic="emailStatus" />
           {draft.edited && <Chip tone="info">Edited by Sales</Chip>}
           <Chip>Revision {draft.revision}</Chip>
         </span>
@@ -149,12 +168,23 @@ export function DraftEditor({
             value={draft.contactName ? `${draft.contactName}${draft.contactTitle ? ` · ${draft.contactTitle}` : ''}` : <Unset />}
           />
           <Field
-            label="Recipient"
+            label="Goes to"
             value={
               draft.recipient ? (
                 <span>
+                  <InfoTip topic="recipient" />{' '}
                   {draft.recipient}{' '}
-                  <span className="cell-dim">({draft.recipientSource === 'sales_entered' ? 'entered by Sales' : 'from Decision Makers'})</span>
+                  <span className="cell-dim">
+                    (
+                    {draft.recipientSource === 'sales_entered'
+                      ? 'entered by Sales'
+                      : draft.recipientSource === 'company_mailbox'
+                        ? `company mailbox — ${view.facts.decisionMaker?.fullName ?? 'the decision maker'} has no direct email; from ${
+                            view.facts.decisionMaker?.companyContactEmail?.sourceLabel ?? 'a verified public source'
+                          }`
+                        : 'from Decision Makers'}
+                    )
+                  </span>
                 </span>
               ) : (
                 <Unset what="No email address on record — enter one below" />
@@ -169,14 +199,19 @@ export function DraftEditor({
             <Field label="Due" value={fmtWindow({ start: draft.dueStartAt ?? draft.dueEndAt!, end: draft.dueEndAt ?? draft.dueStartAt! })} />
           )}
           {draft.approvedAt && <Field label="Approved" value={fmtDateTime(draft.approvedAt)} />}
-          {draft.sentAt && <Field label="Marked sent" value={fmtDateTime(draft.sentAt)} />}
+          {draft.scheduledAt && <Field label="Scheduled (test)" value={fmtDateTime(draft.scheduledAt)} />}
+          {draft.sentAt && (
+            <Field label={draft.sentVia === 'platform_test' ? 'Sent (test, internal inbox)' : 'Marked sent'} value={fmtDateTime(draft.sentAt)} />
+          )}
           {draft.statusReason && draft.status !== 'draft' && <p className="note">{draft.statusReason}</p>}
         </section>
 
         {/* ── Version (initial email only) ──────────────────────────── */}
         {draft.stageKey === 'initial' && draft.version && editable && (
           <section className="otr-ed__block">
-            <p className="eyebrow">Version</p>
+            <p className="eyebrow row">
+              Version <InfoTip topic="versions" />
+            </p>
             <div className="otr-seg" role="group" aria-label="Initial email version">
               {(['v1', 'v2', 'v3'] as Version[]).map((v) => (
                 <button
@@ -256,6 +291,28 @@ export function DraftEditor({
             </Button>
           )}
         </section>
+
+        {/* ── The product page link (first email only) ─────────────── */}
+        {draft.stageKey === 'initial' && (
+          <section className="otr-ed__block">
+            <p className="eyebrow row">
+              Product page link in this email <InfoTip topic="productPage" />
+            </p>
+            {productLink?.value ? (
+              <p className="note">
+                <a className="cell-link" href={productLink.value} target="_blank" rel="noreferrer noopener">
+                  {productLink.value}
+                </a>{' '}
+                — verified as this company’s own product page. Open it to check before approving.
+              </p>
+            ) : (
+              <p className="note">
+                No link in this email{productLink?.source ? ` — ${productLink.source}` : view.facts.productPageNote ? ` — ${view.facts.productPageNote}` : ''}. We never add
+                a guessed or other company’s link.
+              </p>
+            )}
+          </section>
+        )}
 
         {/* ── What was personalised, and from what ──────────────────── */}
         <section className="otr-ed__block">
@@ -418,7 +475,9 @@ export function DraftEditor({
         {/* ── The checklist ─────────────────────────────────────────── */}
         {gates && (
           <section className="otr-ed__block">
-            <p className="eyebrow">Before approval</p>
+            <p className="eyebrow row">
+              Before approval <InfoTip topic="checklist" />
+            </p>
             <ul className="otr-gates">
               {gates.items.map((g) => (
                 <li key={g.key} className={g.ok ? 'is-ok' : 'is-bad'}>
@@ -441,6 +500,9 @@ export function DraftEditor({
         {/* ── Decisions ─────────────────────────────────────────────── */}
         {isDraft && canApprove && (
           <section className="otr-ed__block">
+            <p className="eyebrow row">
+              Your decision <InfoTip topic="approval" />
+            </p>
             <div className="row">
               <Button
                 icon={ThumbsUp}
@@ -453,6 +515,11 @@ export function DraftEditor({
                 Approve
               </Button>
             </div>
+            {isTest && (
+              <p className="note">
+                TEST campaign: approving puts this email on the test schedule. It goes only to the internal test inbox, never to the customer.
+              </p>
+            )}
             <label className="field-label" htmlFor={`rej-${id}`} style={{ marginTop: 'var(--s3)' }}>
               Reason for rejecting (optional)
             </label>
@@ -480,12 +547,116 @@ export function DraftEditor({
         )}
         {isDraft && !canApprove && <p className="note">Approval is made by someone with approval permission.</p>}
 
-        {isApproved && (
+        {/* ── TEST campaign: the test sender, never the customer ───── */}
+        {isTest && isApproved && (
           <section className="otr-ed__block otr-ed__send">
-            <p className="note">
-              Approved. Send it yourself from your own mail program — this platform does not send email — then mark it sent here so the
-              sequence can move on.
+            {draft.status === 'scheduled' && (
+              <p className="note">
+                <CalendarClock size={12} aria-hidden="true" /> Scheduled for {fmtDateTime(draft.scheduledAt)}. The test sender delivers it to the
+                internal test inbox{sending?.testInbox ? ` (${sending.testInbox})` : ''} at that time. {view.campaign?.recipientEmail ?? 'The customer'} is
+                not emailed.
+              </p>
+            )}
+            {draft.status === 'failed' && (
+              <p className="otr-err" role="alert">
+                <AlertTriangle size={13} aria-hidden="true" /> The test send did not go: {draft.statusReason ?? 'no reason was recorded'}
+              </p>
+            )}
+            {draft.status === 'ready_to_send' && (
+              <p className="note">{draft.statusReason ?? 'Approved, but not on the test schedule.'}</p>
+            )}
+            {canOperate && draft.status !== 'scheduled' && (
+              <div className="row">
+                <Button
+                  icon={RotateCcw}
+                  size="sm"
+                  disabled={dirty}
+                  busy={call.busy === 'reschedule'}
+                  onClick={() => void call.run('reschedule', () => post(`/actions/${id}/reschedule-test`))}
+                >
+                  {draft.status === 'failed' ? 'Retry test' : 'Schedule test'}
+                </Button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ── Test email to the reviewer's own internal inbox ──────── */}
+        {canOperate && testMode && draft.status !== 'cancelled' && (
+          <section className="otr-ed__block">
+            <p className="eyebrow row">
+              Test email <InfoTip topic="testEmail" />
             </p>
+            <p className="note">
+              Emails this version to your own inbox exactly as the customer would receive it — same subject, content, product link and
+              sender. It changes nothing in the sequence and never goes to {view.campaign?.recipientEmail ?? 'the customer'}.
+            </p>
+            <div className="row">
+              <Button
+                icon={FlaskConical}
+                size="sm"
+                disabled={dirty}
+                title={dirty ? 'Save your changes first' : undefined}
+                busy={call.busy === 'preview'}
+                onClick={() =>
+                  void call.run('preview', async () => {
+                    const r = (await post(`/actions/${id}/test-send`)) as { status?: string; to?: string[]; error?: string | null }
+                    setPreview({ status: String(r?.status ?? ''), to: Array.isArray(r?.to) ? r.to : [], error: r?.error ?? null })
+                  })
+                }
+              >
+                Test email to my inbox
+              </Button>
+              {preview && (
+                <span className={preview.status === 'accepted' ? 'cell-dim' : 'otr-err'} role="status">
+                  {preview.status === 'accepted' ? `Delivered to ${preview.to.join(', ')}` : `Not sent — ${preview.error ?? preview.status}`}
+                </span>
+              )}
+            </div>
+          </section>
+        )}
+
+        {attempts.length > 0 && (
+          <section className="otr-ed__block">
+            <p className="eyebrow">Test deliveries</p>
+            <table className="otr-table">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Kind</th>
+                  <th>Result</th>
+                  <th>Went to</th>
+                  <th>Intended for</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attempts.map((t) => (
+                  <tr key={t.id}>
+                    <td>{fmtDateTime(t.at)}</td>
+                    <td>{t.kind === 'preview' ? 'Preview' : 'Scheduled'}</td>
+                    <td>
+                      <Chip tone={t.status === 'accepted' ? 'ok' : 'danger'}>{ATTEMPT_WORD[t.status] ?? t.status}</Chip>
+                      {t.error && <span className="cell-dim"> {t.error}</span>}
+                    </td>
+                    <td className="mono">{t.actualRecipients.join(', ') || '—'}</td>
+                    <td className="cell-dim">{t.intendedRecipient ?? '—'} (not emailed)</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
+
+        {!isTest && isApproved && (
+          <section className="otr-ed__block otr-ed__send">
+            <p className="eyebrow row">
+              Send it <InfoTip topic="send" />
+            </p>
+            <ol className="otr-steps">
+              <li>Click Copy email or Open in mail app.</li>
+              <li>Send it from your own mail program.</li>
+              <li>Come back and click Mark as sent — this starts the follow-up timer.</li>
+            </ol>
             <div className="row">
               <Button icon={Copy} size="sm" onClick={() => void copy()}>
                 {copied ? 'Copied' : 'Copy email'}

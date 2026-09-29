@@ -14,7 +14,7 @@ import {
   type PlaceholderValues,
 } from './placeholders.js'
 import type { SenderConfig } from './sender.js'
-import { EXPO, type StageKey, type StageTemplate } from './templates.js'
+import { EXPO, PRODUCT_PAGE_LINE, type StageKey, type StageTemplate } from './templates.js'
 
 // FROM AN APPROVED TEMPLATE TO A PERSONAL DRAFT — WITHOUT REWRITING IT.
 //
@@ -233,10 +233,34 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
   const x = typeof inputs.xOf5 === 'number' ? inputs.xOf5 : null
   set('xOf5Recommended', x === null ? null : `${x} of 5 went from not recommended to appearing in the AI answer`, 'Entered by Sales (from the report)')
   set('xOf5NotRecommended', x === null ? null : `${x} of 5 were not recommended by any of the four engines`, 'Entered by Sales (from the report)')
-  set('senderFirstName', sender.firstName || null, 'Settings → Outreach sender')
+  set('senderFirstName', sender.firstName || null, 'The person who started this outreach (their NXT Sales login)')
   set('senderCompany', sender.companyName || null, 'Settings → Outreach sender')
 
-  let body = fill(template.body, values)
+  // The product page line (Versions 1–3): this company's verified product
+  // page, or — when Prospects verified none — no line at all. Never another
+  // URL, and never a visible placeholder left for someone to fill.
+  let approvedBody = template.body
+  if (used.has('productPageUrl')) {
+    const url = facts.productPageUrl ?? null
+    if (url) {
+      set(
+        'productPageUrl',
+        url,
+        `The genuine product page Prospects verified on this company’s own website${facts.productPageNote ? ` (${facts.productPageNote})` : ''}`,
+        'product.url',
+      )
+    } else {
+      approvedBody = withoutProductPageLine(approvedBody)
+      resolution.push({
+        placeholder: 'productPageUrl',
+        value: null,
+        source: `No verified product page — the product page line was left out${facts.productPageNote ? `: ${facts.productPageNote}` : '.'}`,
+        factId: null,
+      })
+    }
+  }
+
+  let body = fill(approvedBody, values)
   if (aiLine.status === 'added' && slot !== undefined) {
     const paragraphs = body.split('\n\n')
     paragraphs.splice(slot + 1, 0, aiLine.text!)
@@ -285,6 +309,11 @@ export function valuesFromInputs(inputs: MessageInputs): PlaceholderValues {
     v.xOf5NotRecommended = `${inputs.xOf5} of 5 were not recommended by any of the four engines`
   }
   return v
+}
+
+/** The approved copy without the product page line, as it was before the line was added. */
+export function withoutProductPageLine(body: string): string {
+  return body.replace(`\n\n${PRODUCT_PAGE_LINE}`, '').replace(PRODUCT_PAGE_LINE, '').replace(/\n{3,}/g, '\n\n')
 }
 
 /** Removes the expo paragraph from a 2.1 draft — only when Sales asks, and logged by the caller. */

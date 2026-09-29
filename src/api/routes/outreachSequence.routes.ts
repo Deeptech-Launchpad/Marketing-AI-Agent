@@ -15,6 +15,8 @@ import {
   prepareStage,
   reject,
   removeExpoParagraph,
+  scheduleTestSend,
+  sendTestPreview,
   setCampaignState,
   setInputs,
   skipStage,
@@ -23,6 +25,8 @@ import {
   type Actor,
 } from '../../outreach/salesSequence/service.js'
 import { REPLY_CLASSES } from '../../outreach/salesSequence/stageMachine.js'
+import { MAX_BATCH_COMPANIES, batchCandidates, batchView, createTestBatch, listBatches, setBatchState } from '../../outreach/salesSequence/batches.js'
+import { transportStatus } from '../../outreach/salesSequence/sending/transport.js'
 import { audit } from '../../platform/audit.js'
 import { BadRequestError } from '../../platform/errors.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
@@ -35,8 +39,12 @@ import type { Request } from 'express'
 // Drafts for review, never sends. Preparing, editing, entering values,
 // pasting replies and marking an email sent are operator work; approving a
 // draft is an approver's decision (the same split the legacy /release uses).
-// There is deliberately no route here that sends anything: an approved email
-// is sent by a person from their own mail client, then marked sent.
+// A real customer email is never sent by the platform: an approved email is
+// sent by a person from their own mail client, then marked sent.
+//
+// TEST MODE (2026-09-28): the only routes that deliver anything are the test
+// ones below, and every one of them goes through the test-mode guard — the
+// email reaches an INTERNAL test inbox only, never the customer.
 
 export const outreachSequenceRoutes = Router()
 
@@ -76,7 +84,8 @@ outreachSequenceRoutes.get(
   '/companies/:crmCompanyId',
   requirePermission('view'),
   asyncHandler(async (req, res) => {
-    res.json(await companyView(req.principal!.tenantId, req.params.crmCompanyId!))
+    const campaign = typeof req.query.campaign === 'string' && req.query.campaign.trim() ? req.query.campaign.trim() : null
+    res.json(await companyView(req.principal!.tenantId, req.params.crmCompanyId!, new Date(), campaign, req.principal!.crmUserId))
   }),
 )
 
@@ -230,14 +239,99 @@ outreachSequenceRoutes.post(
   }),
 )
 
+// ── TEST MODE sending (internal test inboxes only) ─────────────────────────
+
+outreachSequenceRoutes.get(
+  '/sending',
+  requirePermission('view'),
+  asyncHandler(async (_req, res) => {
+    res.json(transportStatus())
+  }),
+)
+
+outreachSequenceRoutes.post(
+  '/actions/:id/test-send',
+  requirePermission('operate'),
+  asyncHandler(async (req, res) => {
+    res.json(await sendTestPreview({ ...actorOf(req), email: req.principal!.email }, req.params.id!))
+  }),
+)
+
+outreachSequenceRoutes.post(
+  '/actions/:id/reschedule-test',
+  requirePermission('operate'),
+  asyncHandler(async (req, res) => {
+    res.json(await scheduleTestSend(actorOf(req), req.params.id!))
+  }),
+)
+
+outreachSequenceRoutes.get(
+  '/batches',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    res.json(await listBatches(req.principal!.tenantId))
+  }),
+)
+
+outreachSequenceRoutes.get(
+  '/batches/candidates',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    res.json({ candidates: await batchCandidates(req.principal!.tenantId), max: MAX_BATCH_COMPANIES })
+  }),
+)
+
+const CreateBatchBody = z
+  .object({
+    name: z.string().max(120).optional(),
+    crmCompanyIds: z.array(z.string().min(1).max(100)).min(1).max(MAX_BATCH_COMPANIES),
+    firstSendAt: z.string().datetime(),
+    timezone: z.string().max(64).optional(),
+    sendDays: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
+    sendStart: z.string().max(5).optional(),
+    sendEnd: z.string().max(5).optional(),
+    spacingMinutes: z.number().int().min(1).max(240).optional(),
+    dailyCap: z.number().int().min(1).max(200).optional(),
+  })
+  .strict()
+
+outreachSequenceRoutes.post(
+  '/batches',
+  requirePermission('operate'),
+  validateBody(CreateBatchBody),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await createTestBatch(actorOf(req), req.body as z.infer<typeof CreateBatchBody>))
+  }),
+)
+
+outreachSequenceRoutes.get(
+  '/batches/:id',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    res.json(await batchView(req.principal!.tenantId, req.params.id!))
+  }),
+)
+
+for (const to of ['pause', 'resume', 'cancel'] as const) {
+  outreachSequenceRoutes.post(
+    `/batches/:id/${to}`,
+    requirePermission('operate'),
+    asyncHandler(async (req, res) => {
+      res.json(await setBatchState(actorOf(req), req.params.id!, to))
+    }),
+  )
+}
+
 // ── The sender every draft is signed as ────────────────────────────────────
 
 outreachSequenceRoutes.get(
   '/sender',
   requirePermission('view'),
   asyncHandler(async (req, res) => {
-    const sender = await readSender(req.principal!.tenantId)
-    res.json({ sender, configured: Boolean(sender.firstName && sender.companyName) })
+    // Only the shared part: the company name and signature. The person is
+    // always whoever starts the outreach (see readSenderFor).
+    const { companyName, signature } = await readSender(req.principal!.tenantId)
+    res.json({ sender: { companyName, signature }, configured: Boolean(companyName) })
   }),
 )
 
@@ -255,9 +349,9 @@ outreachSequenceRoutes.post(
       action: 'outreach.sender_updated',
       resourceType: 'Tenant',
       resourceId: p.tenantId,
-      summary: `Outreach sender set to ${sender.fullName || sender.firstName} (${sender.companyName})`,
+      summary: `Outreach company name set to ${sender.companyName}`,
       requestId: req.requestId ?? null,
     })
-    res.json({ sender, configured: Boolean(sender.firstName && sender.companyName) })
+    res.json({ sender: { companyName: sender.companyName, signature: sender.signature }, configured: Boolean(sender.companyName) })
   }),
 )

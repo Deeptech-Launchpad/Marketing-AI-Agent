@@ -117,6 +117,8 @@ export async function syncOutreachActions(
   const actions = await prisma.outreachAction.findMany({
     where: {
       tenantId,
+      // Test rehearsals never reached the company: they are not engagement.
+      campaign: { isTest: false },
       ...(filter.actionIds ? { id: { in: filter.actionIds } } : {}),
       ...(filter.crmCompanyId ? { crmCompanyId: filter.crmCompanyId } : {}),
       ...(filter.campaignId ? { campaignId: filter.campaignId } : {}),

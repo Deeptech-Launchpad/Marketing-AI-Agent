@@ -1,4 +1,5 @@
 import { scoreFreshness, signalStatus } from './confidence.js'
+import { isJobSignal } from './jobSignals.js'
 import type { Confidence } from './types.js'
 
 // HOW A STORED SIGNAL IS READ BACK.
@@ -32,6 +33,8 @@ export interface StoredSignalLike {
   ageDays?: number | null
   freshness?: string
   metadata?: unknown
+  signalType?: string | null
+  signalCategory?: string | null
 }
 
 function metaOf(row: { metadata?: unknown }): Record<string, unknown> {
@@ -105,5 +108,7 @@ export function presentSignals<T extends StoredSignalLike>(
   rows: T[],
   now: Date = new Date(),
 ): Array<T & { storedCopies: number; ageDays: number | null; freshness: string; status: string }> {
-  return latestPerFingerprint(rows).map((r) => presentSignal(r, now))
+  // Job postings are not intent signals: ones stored by earlier runs stay off
+  // every screen and every consumer that reads through here (jobSignals.ts).
+  return latestPerFingerprint(rows.filter((r) => !isJobSignal(r))).map((r) => presentSignal(r, now))
 }

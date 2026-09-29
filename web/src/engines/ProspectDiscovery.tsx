@@ -11,6 +11,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/ui/states'
 import { RadarSweep } from '../components/motion/Signatures'
 import type { CompanyDiscoverySearch, DiscoveredCompany, ServiceNeed } from '../lib/types'
 import { ProductPageView } from './ProductPageView'
+import { IDENTITY_LABEL, useCompanyIdentity, type CompanyIdentity } from '../lib/companyIdentity'
 import './prospect.css'
 
 // Prospect Discovery (#977).
@@ -38,15 +39,10 @@ import './prospect.css'
 // product owner's request. The CRM endpoints still exist; this screen no
 // longer draws them.
 
-/**
- * The one source label a company chosen in Shared context may carry.
- *
- * It is a record in the customer's own CRM. It was not "found" by anything:
- * no search ran for it, and no provider was asked. The label is a constant
- * rather than a field precisely so that nothing can ever fill it with a
- * provider's name.
- */
-const SELECTED_SOURCE_LABEL = 'NXT Sales company'
+// The source a selected company is shown with — "NXT Sales company" or
+// "Found by Prospects" — comes from a live check (lib/companyIdentity.ts),
+// never from where it was picked: a Prospects find was being labelled an
+// NXT Sales record with a CRM id that was really this platform's own id.
 
 /** How a company is entering the pipeline from this screen. */
 type Mode = 'company' | 'discover'
@@ -103,6 +99,9 @@ export function ProspectDiscovery() {
   // operator's from then on. Without a company there is only one mode.
   const [chosenMode, setChosenMode] = useState<Mode>(() => (company ? 'company' : 'discover'))
   const mode: Mode = company ? chosenMode : 'discover'
+  // Whether the selected company is an NXT Sales record or a Prospects find,
+  // checked live — never assumed from where it was picked.
+  const { identity } = useCompanyIdentity(mode === 'company' ? company?.crmCompanyId : null)
 
   const [webObjective, setWebObjective] = useState('')
   const [webSearchId, setWebSearchId] = useState<string | null>(null)
@@ -185,6 +184,7 @@ export function ProspectDiscovery() {
   const completion = footerFor({
     mode,
     company,
+    sourceLabel: identity ? IDENTITY_LABEL[identity.kind] : 'checking NXT Sales',
     status: webSearch?.status ?? null,
     found: candidates.length,
     needing: needing.length,
@@ -253,6 +253,7 @@ export function ProspectDiscovery() {
             {mode === 'company' && company ? (
               <SelectedCompany
                 company={company}
+                identity={identity}
                 accent={engine.accent}
                 onStart={can('operate') ? startPipeline : undefined}
                 onDiscoverInstead={() => setChosenMode('discover')}
@@ -418,14 +419,24 @@ export function ProspectDiscovery() {
                   not: no search, no provider, no result. Spelled out because
                   the sidebar's "Shared context" and this engine's discovered
                   company used to be indistinguishable one screen later. */}
-              <Field label="Entry" value="Selected in Shared context" />
+              <Field label="Entry" value={identity?.kind === 'discovered' ? 'Selected from Prospects results' : 'Selected in Shared context'} />
               <Field label="Company" value={company.companyName ?? <Unset />} />
-              <Field label="Source" value={SELECTED_SOURCE_LABEL} />
-              <Field label="Discovery" value={<StatusBadge status="idle" label="NOT RUN" size="sm" />} />
+              <Field label="Source" value={identity ? IDENTITY_LABEL[identity.kind] : <Unset what="Checking NXT Sales…" />} />
+              <Field
+                label="Discovery"
+                value={
+                  identity?.kind === 'discovered' ? (
+                    <StatusBadge status="complete" label="FOUND BY SEARCH" size="sm" />
+                  ) : (
+                    <StatusBadge status="idle" label="NOT RUN" size="sm" />
+                  )
+                }
+              />
               <Field label="Next stage" value="Enrichment" />
               <p className="note" style={{ marginTop: 'var(--s4)' }}>
-                Selecting is not discovering. No search row is created for this company, no provider is asked about it,
-                and nothing later in the pipeline will say it was found here.
+                {identity?.kind === 'discovered'
+                  ? 'This company came from a Prospects search of the public web. It is not an NXT Sales record, and nothing has been written to the CRM.'
+                  : 'Selecting is not discovering. No search row is created for this company, no provider is asked about it, and nothing later in the pipeline will say it was found here.'}
               </p>
             </Panel>
           ) : (
@@ -975,11 +986,14 @@ function notAnalysedReason(c: DiscoveredCompany): string {
  */
 function SelectedCompany({
   company,
+  identity,
   accent,
   onStart,
   onDiscoverInstead,
 }: {
   company: CompanyRef
+  /** The live answer to "is this an NXT Sales record?"; null while checking. */
+  identity: CompanyIdentity | null
   accent: string
   onStart?: () => void
   onDiscoverInstead: () => void
@@ -989,9 +1003,22 @@ function SelectedCompany({
   // in `sourceUrl`. Either is shown as held, with a scheme added only so the
   // link opens.
   const site = company.website ?? company.sourceUrl ?? null
+  const kind = identity?.kind ?? null
+  const isCrm = kind === 'crm'
+  const isDiscovered = kind === 'discovered'
+
+  const subtitle = !identity
+    ? 'Checking whether NXT Sales holds this company…'
+    : isCrm
+      ? 'Already in NXT Sales. The pipeline starts here, without a discovery run'
+      : isDiscovered
+        ? 'Found by a Prospects search — not an NXT Sales record. The pipeline starts here'
+        : kind === 'not_in_crm'
+          ? 'NXT Sales holds no record with this id'
+          : 'NXT Sales could not be checked, so this company is not shown as an NXT Sales record'
 
   return (
-    <Panel title="Selected company" subtitle="Already in NXT Sales. The pipeline starts here, without a discovery run">
+    <Panel title="Selected company" subtitle={subtitle}>
       <div className="lead lead--picked" style={{ ['--e' as string]: accent }}>
         <div>
           <p className="lead__kicker">
@@ -1001,10 +1028,18 @@ function SelectedCompany({
           <h3 className="lead__name">{name}</h3>
           <div className="lead__chips">
             <Chip tone="ok">In shared context</Chip>
-            <Chip title="An existing record in the customer's own CRM. No search ran for it and no provider was asked.">
-              {SELECTED_SOURCE_LABEL}
-            </Chip>
-            <StatusBadge status="idle" label="Discovery: NOT RUN" size="sm" />
+            {identity ? (
+              <Chip tone={isCrm ? 'neutral' : isDiscovered ? 'info' : 'warn'} title={identity.reason}>
+                {IDENTITY_LABEL[identity.kind]}
+              </Chip>
+            ) : (
+              <Chip>Checking NXT Sales…</Chip>
+            )}
+            {isDiscovered ? (
+              <StatusBadge status="complete" label="Discovery: FOUND BY SEARCH" size="sm" />
+            ) : (
+              <StatusBadge status="idle" label="Discovery: NOT RUN" size="sm" />
+            )}
           </div>
         </div>
 
@@ -1021,13 +1056,28 @@ function SelectedCompany({
               )}
             </span>
           </div>
-          <div className="lead__cell">
-            <span className="lead__label">CRM record</span>
-            <span className="lead__value mono">{company.crmCompanyId}</span>
-          </div>
+          {/* A CRM id is shown only for a record NXT Sales holds right now. */}
+          {isCrm && identity?.crmCompanyId ? (
+            <div className="lead__cell">
+              <span className="lead__label">CRM record</span>
+              <span className="lead__value mono">{identity.crmCompanyId}</span>
+            </div>
+          ) : isDiscovered ? (
+            <div className="lead__cell">
+              <span className="lead__label">Found by search</span>
+              <span className="lead__value">{identity?.searchObjective ?? <Unset what="Search not recorded" />}</span>
+            </div>
+          ) : (
+            <div className="lead__cell">
+              <span className="lead__label">CRM record</span>
+              <span className="lead__value">
+                <Unset what={identity ? (kind === 'not_in_crm' ? 'Not in NXT Sales' : 'Not verified') : 'Checking…'} />
+              </span>
+            </div>
+          )}
           <div className="lead__cell">
             <span className="lead__label">Source</span>
-            <span className="lead__value">{SELECTED_SOURCE_LABEL}</span>
+            <span className="lead__value">{identity ? IDENTITY_LABEL[identity.kind] : <Unset what="Checking…" />}</span>
           </div>
           {/* Only the fields the reference carries. Their absence is "not
               carried", not "not recorded" — and a cell that said the latter
@@ -1046,11 +1096,24 @@ function SelectedCompany({
           )}
         </div>
 
-        <p className="lead__why">
-          <span className="lead__whylabel">Why there is no discovery result here</span>
-          {name} was chosen in Shared context, not returned by a search. It is an existing NXT Sales record: no provider
-          was asked for it, no discovery run was created, and no later screen will say it was found here.
-        </p>
+        {isDiscovered ? (
+          <p className="lead__why">
+            <span className="lead__whylabel">Where this company comes from</span>
+            {name} was found by a Prospects search of the public web. NXT Sales holds no record of it, so it has no CRM
+            id; nothing has been written to the CRM.
+          </p>
+        ) : isCrm ? (
+          <p className="lead__why">
+            <span className="lead__whylabel">Why there is no discovery result here</span>
+            {name} was chosen in Shared context, not returned by a search. It is an existing NXT Sales record: no provider
+            was asked for it, no discovery run was created, and no later screen will say it was found here.
+          </p>
+        ) : identity ? (
+          <p className="lead__why">
+            <span className="lead__whylabel">Not confirmed as an NXT Sales record</span>
+            {identity.reason}
+          </p>
+        ) : null}
 
         <div className="lead__foot">
           <p className="lead__next">
@@ -1081,12 +1144,15 @@ function SelectedCompany({
 function footerFor({
   mode,
   company,
+  sourceLabel,
   status,
   found,
   needing,
 }: {
   mode: Mode
   company: CompanyRef | null
+  /** Where the selected company comes from, as the live check found. */
+  sourceLabel: string
   status: string | null
   found: number
   needing: number
@@ -1097,7 +1163,9 @@ function footerFor({
     // where that company came from.
     return {
       done: true,
-      label: `Company selected — ${company.companyName ?? company.crmCompanyId} (${SELECTED_SOURCE_LABEL}). Discovery not run; not needed.`,
+      label:
+        `Company selected — ${company.companyName ?? company.crmCompanyId} (${sourceLabel}).` +
+        (sourceLabel === IDENTITY_LABEL.discovered ? ' Found by a Prospects search.' : ' Discovery not run; not needed.'),
     }
   }
   switch (status) {

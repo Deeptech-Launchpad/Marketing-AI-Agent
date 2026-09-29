@@ -30,6 +30,8 @@ export const QUEUE_DM_LEAD_WATCH = 'decisionmaker.lead_watch'
  * overloading one queue with two different contracts.
  */
 export const QUEUE_COMPANY_WEB_DISCOVER = 'company.web_discover'
+/** Scheduled sender for approved TEST-batch emails (internal test inboxes only). */
+export const QUEUE_OUTREACH_TEST_DISPATCH = 'outreach.test_dispatch'
 
 const ALL_QUEUES = [
   QUEUE_RUN_STEP,
@@ -45,6 +47,7 @@ const ALL_QUEUES = [
   QUEUE_CRM_SYNC,
   QUEUE_DM_LEAD_WATCH,
   QUEUE_COMPANY_WEB_DISCOVER,
+  QUEUE_OUTREACH_TEST_DISPATCH,
 ]
 
 /**

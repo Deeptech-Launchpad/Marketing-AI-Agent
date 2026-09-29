@@ -5,12 +5,14 @@ import { prisma } from '../../platform/db.js'
 //
 // The approved templates were written in one salesperson's voice ("Manoj here,
 // from AltiusNxt"). That name is not hard-coded anywhere: templates.ts carries
-// [Sender first name] and [Sender company], filled from here. An admin sets it
-// once in Settings; until then those placeholders stay unfilled and no draft
-// can be approved.
+// [Sender first name] and [Sender company].
 //
-// Stored under Tenant.settings.outreachSender. Other keys in Tenant.settings
-// are left exactly as they are.
+// 2026-09-29: the PERSON is whoever started the outreach — the logged-in user,
+// by their NXT Sales login (TenantMember name and email). They send it from
+// their own mail program, so the email is signed as them. Only the company
+// name (and an optional signature) is shared, set once by an admin in
+// Settings, stored under Tenant.settings.outreachSender. One user's name is
+// never used on another user's outreach.
 
 export const SenderSchema = z.object({
   firstName: z.string().trim().max(60).default(''),
@@ -34,6 +36,28 @@ export async function readSender(tenantId: string): Promise<SenderConfig> {
   const raw = (tenant?.settings as Record<string, unknown> | null)?.outreachSender
   const parsed = SenderSchema.safeParse(raw ?? {})
   return parsed.success ? parsed.data : EMPTY_SENDER
+}
+
+/**
+ * The sender of one person's outreach: their own name and login email, with
+ * the company name and signature from Settings. No person's details are taken
+ * from Settings, so no user's name is ever used on someone else's outreach.
+ * With no name on record, [Sender first name] stays unfilled and the email
+ * cannot be approved until it is.
+ */
+export async function readSenderFor(tenantId: string, crmUserId: string | null | undefined): Promise<SenderConfig> {
+  const shared = await readSender(tenantId)
+  const member = crmUserId
+    ? await prisma.tenantMember.findFirst({ where: { tenantId, crmUserId }, select: { name: true, email: true } })
+    : null
+  const fullName = member?.name?.trim() ?? ''
+  return {
+    firstName: fullName.split(/\s+/)[0] ?? '',
+    fullName,
+    email: member?.email?.trim() ?? '',
+    companyName: shared.companyName,
+    signature: shared.signature,
+  }
 }
 
 export async function writeSender(tenantId: string, value: SenderConfig): Promise<SenderConfig> {

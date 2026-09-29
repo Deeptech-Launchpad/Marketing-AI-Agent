@@ -8,6 +8,7 @@ import {
   queueDecisionMakerDiscovery,
 } from '../../decisionmakers/discovery.js'
 import { explainEmail } from '../../decisionmakers/emailExplanation.js'
+import { storedCompanyContactEmail } from '../../decisionmakers/companyContactEmail.js'
 import { audit } from '../../platform/audit.js'
 import { prisma } from '../../platform/db.js'
 import { NotFoundError } from '../../platform/errors.js'
@@ -267,6 +268,9 @@ decisionMakerRoutes.get(
         ],
       })),
       contactRoles: roles,
+      // The verified company mailbox found for a primary contact who has no
+      // email of their own (companyContactEmail.ts). Null otherwise.
+      companyContactEmail: storedCompanyContactEmail(latestRun.providerResults),
       providerResults: latestRun.providerResults,
       noResultsReason: latestRun.noResultsReason,
       disclaimers: [

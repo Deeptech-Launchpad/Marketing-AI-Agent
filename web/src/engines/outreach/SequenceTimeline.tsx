@@ -3,7 +3,8 @@ import { FileEdit, SkipForward } from 'lucide-react'
 import { api } from '../../lib/api'
 import { Button, Chip, Unset } from '../../components/ui/primitives'
 import { useCall } from './useCall'
-import { fmtDateTime, fmtWindow, type CompanySequence, type Draft, type StageStatus } from './types'
+import { emailStatus, stepStatus } from './status'
+import { fmtDateTime, fmtWindow, type CompanySequence, type Draft } from './types'
 
 // THE SEQUENCE, STAGE BY STAGE.
 //
@@ -12,29 +13,7 @@ import { fmtDateTime, fmtWindow, type CompanySequence, type Draft, type StageSta
 // prepared from here once the sequence allows it; nothing is prepared, and
 // nothing is sent, on its own.
 
-const STATUS_TEXT: Record<StageStatus, string> = {
-  done: 'Sent',
-  approved: 'Approved, not sent',
-  drafted: 'Draft in review',
-  due: 'Due',
-  overdue: 'Overdue',
-  upcoming: 'Upcoming',
-  skipped: 'Skipped',
-  not_applicable: 'Not applicable',
-}
-
-const STATUS_TONE: Record<StageStatus, 'ok' | 'warn' | 'danger' | 'accent' | 'info' | 'neutral'> = {
-  done: 'ok',
-  approved: 'accent',
-  drafted: 'info',
-  due: 'warn',
-  overdue: 'danger',
-  upcoming: 'neutral',
-  skipped: 'neutral',
-  not_applicable: 'neutral',
-}
-
-const TRACK: Record<string, string> = { initial: 'Initial', no_reply: 'If no reply', reply: 'After a reply' }
+const TRACK: Record<string, string> = { initial: 'First email', no_reply: 'Follow-up if no reply', reply: 'After they reply' }
 
 export function SequenceTimeline({
   view,
@@ -71,12 +50,16 @@ export function SequenceTimeline({
               <div className="otr-tl__head">
                 <span className="otr-tl__ref mono">{s.pdfRef}</span>
                 <span className="otr-tl__name">{s.label}</span>
-                <Chip tone={STATUS_TONE[s.status]}>{STATUS_TEXT[s.status]}</Chip>
+                {(() => {
+                  const st = d ? emailStatus(d.status, d.statusReason, Boolean(view.campaign?.isTest)) : stepStatus(s.status)
+                  return <Chip tone={st.tone}>{st.label}</Chip>
+                })()}
                 <span className="cell-dim">{TRACK[s.track] ?? s.track}</span>
               </div>
               <div className="otr-tl__meta">
                 {s.window ? <span>Due {fmtWindow(s.window)}</span> : null}
-                {d?.sentAt ? <span>Sent {fmtDateTime(d.sentAt)}</span> : null}
+                {d?.scheduledAt ? <span>Test send {fmtDateTime(d.scheduledAt)}</span> : null}
+                {d?.sentAt ? <span>{d.sentVia === 'platform_test' ? 'Sent (test)' : 'Sent'} {fmtDateTime(d.sentAt)}</span> : null}
                 {d?.version ? <span>Version {d.version.toUpperCase()}</span> : null}
                 {s.reason ? <span className="cell-dim">{s.reason}</span> : null}
               </div>
@@ -84,7 +67,7 @@ export function SequenceTimeline({
                 <div className="row otr-tl__actions">
                   {d ? (
                     <Button size="sm" icon={FileEdit} onClick={() => onOpenDraft(d)}>
-                      {d.status === 'draft' ? 'Review draft' : 'Open'}
+                      {d.status === 'draft' ? 'Review & approve' : 'Open'}
                     </Button>
                   ) : (
                     s.canPrepare && (

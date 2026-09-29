@@ -7,6 +7,7 @@ import { useAuth } from '../lib/auth'
 import { Panel, Chip, Button, Field, Unset } from '../components/ui/primitives'
 import { AsyncBoundary, EmptyState } from '../components/ui/states'
 import { OutreachSenderPanel } from './OutreachSenderPanel'
+import { EmailSendingPanel } from './EmailSendingPanel'
 import './settings.css'
 
 // SETTINGS — who is signed in, how to leave, and what the platform spent.
@@ -138,6 +139,7 @@ export function Settings() {
       </Panel>
 
       <OutreachSenderPanel />
+      <EmailSendingPanel />
 
       <Panel title="Session">
         <p className="note">Signing out clears this browser&rsquo;s token. It does not sign you out of NXT Sales.</p>

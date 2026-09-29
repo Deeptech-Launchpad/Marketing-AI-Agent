@@ -216,6 +216,13 @@ export class HunterProvider implements DecisionMakerProvider {
         addressesHeld: emails.length,
         namedPeople: candidates.length,
         genericMailboxes: generic.length,
+        // The shared mailboxes themselves, with the pages Hunter saw them on.
+        // Never a person's address; kept so a company mailbox can be offered
+        // when the decision maker has no email (companyContactEmail.ts).
+        genericMailboxAddresses: generic
+          .filter((g) => g.value)
+          .slice(0, 10)
+          .map((g) => ({ email: g.value!, sources: (g.sources ?? []).map((s) => s.uri).filter((u): u is string => Boolean(u)).slice(0, 3) })),
         // Recorded but NEVER used to synthesise an address. Kept because
         // "Hunter believes this org uses {first}.{last}" is worth knowing when
         // deciding whether to buy a lookup, and worth nothing as a contact.

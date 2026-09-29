@@ -412,6 +412,30 @@ const schema = z.object({
   // is worked from the US East Coast unless configured otherwise.
   OUTREACH_SEQUENCE_TIMEZONE: z.string().default('America/New_York'),
 
+  // ── TEST MODE sending for the Sales sequence (2026-09-28) ──────────────
+  // "off" (default): the platform sends nothing. "test": emails go ONLY to the
+  // internal test inboxes below. There is deliberately no "live" value in this
+  // phase — any other value fails validation and the service refuses to start,
+  // so real customer sending cannot be switched on by configuration.
+  OUTREACH_EMAIL_MODE: z.enum(['off', 'test']).default('off'),
+  // The allow-list: exact addresses and/or "@domain" entries, comma-separated.
+  // Every recipient is checked against it at the moment of sending.
+  OUTREACH_TEST_RECIPIENTS: z.string().default(''),
+  // Where scheduled test sends are delivered. Must itself be on the allow-list.
+  OUTREACH_TEST_INBOX: z.string().default(''),
+  // "capture": record the email exactly as it would be delivered, no network.
+  // "smtp": deliver it to the test inbox through the SMTP settings below.
+  OUTREACH_TEST_TRANSPORT: z.enum(['capture', 'smtp']).default('capture'),
+  SMTP_HOST: z.string().default(''),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_SECURE: bool.default('false'),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
+  // The From address; defaults to the sender set in Settings → Outreach sender.
+  SMTP_FROM: z.string().default(''),
+  /** How often the test sender looks for due emails. */
+  OUTREACH_TEST_DISPATCH_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
+
 
   // ── Task #983: engagement tracking ──────────────────────────────────────
   /**

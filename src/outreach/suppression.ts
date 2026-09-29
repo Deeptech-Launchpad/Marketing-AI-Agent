@@ -125,6 +125,8 @@ export async function checkSuppression(input: SuppressionInput): Promise<Suppres
       crmCompanyId: input.crmCompanyId,
       status: 'sent',
       sentAt: { gte: since },
+      // A test send reached an internal inbox, not the company: it is not contact.
+      campaign: { isTest: false },
       ...(input.campaignId ? { NOT: { campaignId: input.campaignId } } : {}),
     },
     orderBy: { sentAt: 'desc' },

@@ -1507,6 +1507,14 @@ model OutreachCampaign {
   recipientEmail       String?
   recipientEmailSource String?
 
+  // TEST MODE (2026-09-28). A test campaign is a rehearsal inside a test
+  // batch: its emails are sent ONLY to the internal test inboxes, its "sent"
+  // is a test send, and it never reaches Engagement, CRM Sync or the real
+  // prospect list — nor blocks a real sequence for the same company.
+  isTest  Boolean @default(false)
+  batchId String?
+  batch   OutreachBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
   requestedByCrmUserId String
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
@@ -1537,6 +1545,7 @@ model OutreachCampaign {
   @@index([auditRunId])
   @@index([discoveredCompanyId])
   @@index([tenantId, flow, status])
+  @@index([batchId])
 }
 
 // A prospect's reply, pasted in by Sales (2026-09-26 sales sequence).
@@ -1544,6 +1553,74 @@ model OutreachCampaign {
 // No mailbox is connected, so a reply only exists here because a person put
 // it here. The model's reading is stored apart from what Sales confirmed: a
 // classification changes the sequence only once a person has confirmed it.
+// A TEST BATCH (2026-09-28): several companies run through the approved
+// sequence as a rehearsal. Every email is drafted, approved by Sales one by one,
+// and only then scheduled; the scheduler sends it to the internal test inbox —
+// never to the customer. The sequence's own PDF timing is not configurable
+// here: a batch sets only when the first emails go, the spacing between
+// companies, the sending days and hours, and a daily cap.
+model OutreachBatch {
+  id       String @id
+  tenantId String
+  name     String
+  // Only "test" in this phase. Real sending is not implemented.
+  mode     String @default("test")
+  // running | paused | completed | cancelled
+  status   String @default("running")
+
+  firstSendAt DateTime
+  timezone    String
+  // ISO weekdays the sender may send on (1 = Monday … 7 = Sunday).
+  sendDays    Json
+  // Minutes after local midnight: the sending window each day.
+  sendStartMinute Int
+  sendEndMinute   Int
+  spacingMinutes  Int
+  dailyCap        Int
+
+  createdByCrmUserId String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  campaigns OutreachCampaign[]
+
+  @@index([tenantId, status])
+}
+
+// One attempt to deliver one email — a "Send test to me" preview or a
+// scheduled test send. The intended recipient is recorded apart from the
+// address it actually went to, so a test can always be told from a real send.
+model OutreachSendAttempt {
+  id         String @id
+  tenantId   String
+  actionId   String
+  campaignId String
+
+  // preview | scheduled
+  kind      String
+  // test (the only mode)
+  mode      String
+  intendedRecipient String?
+  actualRecipients  Json
+  subject           String?
+  // smtp | capture
+  transport         String
+  // accepted | failed | blocked
+  status            String
+  providerMessageId String?
+  error             String?
+  // transient | permanent | guard
+  errorKind         String?
+  // A crmUserId, or "scheduler".
+  triggeredBy       String
+  createdAt         DateTime @default(now())
+
+  action OutreachAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@index([actionId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
 model OutreachReply {
   id         String @id
   tenantId   String
@@ -1707,8 +1784,12 @@ model OutreachAction {
   // changed after it was approved.
   approvedBodyHash    String?
   sentByCrmUserId     String?
+  // How a sent email went out: "manual" (Sales sent it and marked it sent) or
+  // "platform_test" (the test sender delivered it to an internal test inbox).
+  sentVia             String?
 
   campaign OutreachCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sendAttempts OutreachSendAttempt[]
   step     OutreachSequenceStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
   message  OutreachMessage?
   runs     OutreachProviderRun[]

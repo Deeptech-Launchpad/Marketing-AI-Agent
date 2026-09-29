@@ -10,9 +10,13 @@ import { generateCallPoints } from './callPoints.js'
 import { companyDisplayName, fill } from './placeholders.js'
 import { composeStage, valuesFromInputs, withoutExpoParagraph } from './compose.js'
 import { loadProspectFacts, type ProspectFacts } from './facts.js'
+import { ensureCompanyContactEmail } from '../../decisionmakers/companyContactEmail.js'
+import { deliverTestEmail } from './sending/deliver.js'
+import { windowOfBatch } from './sending/batchWindow.js'
+import { followUpSlot, nextSendSlot } from './sending/schedule.js'
 import { evaluateGates, type Attestation, type GateResult, type MessageInputs } from './gates.js'
 import { classifyReply, REPLY_LABELS } from './replies.js'
-import { readSender } from './sender.js'
+import { readSenderFor } from './sender.js'
 import { computeSequence, type ConfirmedReply, type ReplyClass, type SequenceView, type StageAction } from './stageMachine.js'
 import {
   CALL_POINTS_STEP_NUMBER,
@@ -57,11 +61,17 @@ const tz = () => env.OUTREACH_SEQUENCE_TIMEZONE
 const sha = (s: string) => createHash('sha256').update(s).digest('hex')
 export const bodyHash = (subject: string | null, body: string) => sha(`${subject ?? ''}\n\n${body}`)
 
-function idempotencyKey(tenantId: string, crmCompanyId: string, campaignId: string, stage: string): string {
+function idempotencyKey(tenantId: string, crmCompanyId: string, campaignId: string, stage: string, isTest = false): string {
   // The initial email is keyed to the COMPANY, not the campaign: the database
-  // itself refuses a second initial email to the same prospect.
+  // itself refuses a second initial email to the same prospect. A TEST
+  // campaign's emails are keyed to that test campaign, so a rehearsal never
+  // blocks — or is mistaken for — the real sequence for the same company.
+  if (isTest) return sha(`${FLOW}|test|${campaignId}|${stage}`)
   return stage === 'initial' ? sha(`${FLOW}|${tenantId}|${crmCompanyId}|initial`) : sha(`${FLOW}|${campaignId}|${stage}`)
 }
+
+/** Statuses of an approved email that has not gone yet: approved, scheduled (test), or a test send that failed. */
+const APPROVED_UNSENT = ['ready_to_send', 'scheduled', 'failed']
 
 // ── Loading ────────────────────────────────────────────────────────────────
 
@@ -144,7 +154,7 @@ async function gatesFor(c: LoadedCampaign, a: LoadedAction, seq: SequenceView, n
     attestations: (a.message?.attestations ?? []) as unknown as Attestation[],
     confirmedSkus: confirmedSkus(c),
     recipientEmail: c.recipientEmail,
-    sender: await readSender(c.tenantId),
+    sender: await readSenderFor(c.tenantId, c.requestedByCrmUserId),
     suppression: await suppressionFor(c, template),
     now,
   })
@@ -180,28 +190,49 @@ async function syncEngagement(tenantId: string, actionIds: string[]) {
 async function nextRotationVersion(tenantId: string): Promise<InitialVersion> {
   const counts = await prisma.outreachCampaign.groupBy({
     by: ['initialVersion'],
-    where: { tenantId, flow: FLOW },
+    // Test rehearsals do not count toward the real split test.
+    where: { tenantId, flow: FLOW, isTest: false },
     _count: { _all: true },
   })
   const n = (v: InitialVersion) => counts.find((c) => c.initialVersion === v)?._count._all ?? 0
   return [...INITIAL_VERSIONS].sort((a, b) => n(a) - n(b))[0]!
 }
 
-export async function startSequence(actor: Actor, crmCompanyId: string, opts: { version?: InitialVersion } = {}) {
-  const existing = await prisma.outreachCampaign.findFirst({
-    where: { tenantId: actor.tenantId, crmCompanyId, flow: FLOW },
-    orderBy: { createdAt: 'asc' },
-    select: { id: true },
-  })
+export async function startSequence(
+  actor: Actor,
+  crmCompanyId: string,
+  opts: { version?: InitialVersion; isTest?: boolean; batchId?: string } = {},
+) {
+  const isTest = Boolean(opts.isTest)
+  // A real sequence is one per company. A test campaign belongs to its batch,
+  // and never stands in for the real one.
+  const existing = isTest
+    ? await prisma.outreachCampaign.findFirst({ where: { tenantId: actor.tenantId, crmCompanyId, flow: FLOW, isTest: true, batchId: opts.batchId ?? null }, select: { id: true } })
+    : await prisma.outreachCampaign.findFirst({
+        where: { tenantId: actor.tenantId, crmCompanyId, flow: FLOW, isTest: false },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      })
   if (existing) return { campaignId: existing.id, created: false }
 
-  const facts = await loadProspectFacts(actor.tenantId, crmCompanyId)
+  let facts = await loadProspectFacts(actor.tenantId, crmCompanyId)
   if (!facts) throw new NotFoundError('Company not found.')
   if (!facts.decisionMaker) {
     throw new ConflictError(
       'No decision maker has been shortlisted for this company yet. Run Decision Makers first — every approved email is addressed to a named person.',
     )
   }
+  // No direct email and no company mailbox stored yet (a run made before the
+  // fallback existed): look for one now, once, and read the facts again.
+  if (!facts.decisionMaker.email && !facts.decisionMaker.companyContactEmail) {
+    if (await ensureCompanyContactEmail(actor.tenantId, crmCompanyId)) {
+      facts = (await loadProspectFacts(actor.tenantId, crmCompanyId)) ?? facts
+    }
+  }
+  const dm = facts.decisionMaker!
+  // The decision maker's own address first; a verified company mailbox only when they have none.
+  const recipientEmail = dm.email ?? dm.companyContactEmail?.email ?? null
+  const recipientEmailSource = dm.email ? 'decision_maker' : dm.companyContactEmail ? 'company_mailbox' : null
 
   const version = opts.version ?? (await nextRotationVersion(actor.tenantId))
   const campaignId = newId()
@@ -213,15 +244,17 @@ export async function startSequence(actor: Actor, crmCompanyId: string, opts: { 
       discoveredCompanyId: facts.discoveredCompanyId,
       companyName: facts.companyName,
       companyDomain: facts.companyDomain,
-      decisionMakerId: facts.decisionMaker.id,
+      decisionMakerId: dm.id,
       status: 'active',
       flow: FLOW,
       initialVersion: version,
       versionSource: opts.version ? 'sales_override' : 'auto_rotation',
-      recipientEmail: facts.decisionMaker.email,
-      recipientEmailSource: facts.decisionMaker.email ? 'decision_maker' : null,
+      recipientEmail,
+      recipientEmailSource,
       autoSendEnabled: false,
       dryRun: true,
+      isTest,
+      batchId: opts.batchId ?? null,
       requestedByCrmUserId: actor.crmUserId,
     },
   })
@@ -231,7 +264,7 @@ export async function startSequence(actor: Actor, crmCompanyId: string, opts: { 
     'started',
     'OutreachCampaign',
     campaignId,
-    `Outreach started for ${facts.companyName} — Version ${version.slice(1)} (${opts.version ? 'chosen by Sales' : 'split-test rotation'})`,
+    `${isTest ? 'TEST ' : ''}Outreach started for ${facts.companyName} — Version ${version.slice(1)} (${opts.version ? 'chosen by Sales' : 'split-test rotation'})`,
   )
 
   try {
@@ -241,7 +274,7 @@ export async function startSequence(actor: Actor, crmCompanyId: string, opts: { 
     // the first sequence and remove this one.
     if ((err as { code?: string }).code === 'P2002') {
       await prisma.outreachCampaign.delete({ where: { id: campaignId } }).catch(() => undefined)
-      const first = await prisma.outreachCampaign.findFirst({ where: { tenantId: actor.tenantId, crmCompanyId, flow: FLOW }, select: { id: true } })
+      const first = await prisma.outreachCampaign.findFirst({ where: { tenantId: actor.tenantId, crmCompanyId, flow: FLOW, isTest }, select: { id: true } })
       if (first) return { campaignId: first.id, created: false }
     }
     throw err
@@ -258,14 +291,16 @@ export async function prepareStage(actor: Actor, campaignId: string, stageKey: S
   const view = seq.stages.find((s) => s.stageKey === stageKey)
   if (!view) throw new BadRequestError(`Unknown stage "${stageKey}".`)
   const existing = campaign.actions.find((a) => a.stageKey === stageKey) ?? null
-  if (existing && (existing.status === 'sent' || existing.status === 'ready_to_send')) {
+  if (existing && (existing.status === 'sent' || existing.status === 'sending' || APPROVED_UNSENT.includes(existing.status))) {
     throw new ConflictError(`${view.label} is already ${existing.status === 'sent' ? 'sent' : 'approved'}. Edit it instead of preparing it again.`)
   }
   if (!view.canPrepare && !(existing && (existing.status === 'draft' || existing.status === 'cancelled'))) {
     throw new ConflictError(view.reason ?? `${view.label} is not due yet.`)
   }
 
-  const facts = await loadProspectFacts(actor.tenantId, campaign.crmCompanyId)
+  // Only the initial versions carry the product page line, and only they need
+  // the page re-opened and re-checked before it is linked.
+  const facts = await loadProspectFacts(actor.tenantId, campaign.crmCompanyId, { recheckProductPage: stageKey === 'initial' })
   if (!facts) throw new NotFoundError('Company not found.')
   const template = templateOfAction(campaign, stageKey)
   const prevInputs = (existing?.message?.inputs ?? {}) as MessageInputs
@@ -274,7 +309,7 @@ export async function prepareStage(actor: Actor, campaignId: string, stageKey: S
   const composed = await composeStage({
     template,
     facts,
-    sender: await readSender(actor.tenantId),
+    sender: await readSenderFor(actor.tenantId, campaign.requestedByCrmUserId),
     inputs,
     initialSubject: stageKey === 'initial' ? null : initialAction?.message?.subject ?? null,
     tenantId: actor.tenantId,
@@ -352,8 +387,8 @@ export async function prepareStage(actor: Actor, campaignId: string, stageKey: S
         stepNumber: STAGE_STEP_NUMBER[stageKey],
         stageKey,
         status: 'draft',
-        idempotencyKey: idempotencyKey(actor.tenantId, campaign.crmCompanyId, campaignId, stageKey),
-        providerName: 'manual_send',
+        idempotencyKey: idempotencyKey(actor.tenantId, campaign.crmCompanyId, campaignId, stageKey, campaign.isTest),
+        providerName: campaign.isTest ? 'test_sender' : 'manual_send',
         providerStatus: 'draft_only',
         scheduledAt: due?.start ?? new Date(),
         ...common,
@@ -391,19 +426,22 @@ export async function prepareStage(actor: Actor, campaignId: string, stageKey: S
 async function requireEditable(actor: Actor, actionId: string) {
   const { campaign, action } = await loadAction(actor.tenantId, actionId)
   if (!action.stageKey || action.stageKey === CALL_POINTS_STAGE) throw new BadRequestError('Only sequence drafts can be changed here.')
-  if (action.status !== 'draft' && action.status !== 'ready_to_send') {
+  if (action.status !== 'draft' && !APPROVED_UNSENT.includes(action.status)) {
     throw new ConflictError(`This email is "${action.status}" and can no longer be changed.`)
   }
   if (!action.message) throw new ConflictError('This draft has no message.')
   return { campaign, action, message: action.message }
 }
 
-/** An approved draft that changes goes back to review: approval covers exact copy. */
+/**
+ * An approved draft that changes goes back to review: approval covers exact
+ * copy. A scheduled test send is taken off the schedule with it.
+ */
 async function backToDraftIfApproved(actionId: string, status: string) {
-  if (status !== 'ready_to_send') return false
+  if (!APPROVED_UNSENT.includes(status)) return false
   await prisma.outreachAction.update({
     where: { id: actionId },
-    data: { status: 'draft', approvedAt: null, approvedByCrmUserId: null, approvedBodyHash: null, validationOk: false },
+    data: { status: 'draft', statusReason: null, approvedAt: null, approvedByCrmUserId: null, approvedBodyHash: null, validationOk: false },
   })
   return true
 }
@@ -552,7 +590,217 @@ export async function approve(actor: Actor, actionId: string) {
   })
   await record(actor, campaign.id, 'approved', 'OutreachAction', actionId, `Approved: ${templateOfAction(campaign, action.stageKey as StageKey).label}`)
   await syncEngagement(actor.tenantId, [actionId])
+  // In a test batch, approval is what makes an email eligible to be sent — to
+  // the internal test inbox, at its planned time.
+  if (campaign.isTest && campaign.batchId) await scheduleTestSend(actor, actionId, now)
   return { actionId }
+}
+
+// ── TEST MODE sending (2026-09-28) ─────────────────────────────────────────
+
+const windowOf = windowOfBatch
+
+/**
+ * Places an APPROVED email of a test batch on the schedule. The initial email
+ * keeps the slot planned when the batch was created (or the next free one);
+ * a follow-up goes inside its PDF window, or — if none is left — is not
+ * scheduled at all. Nothing is ever scheduled that Sales did not approve.
+ */
+export async function scheduleTestSend(actor: Actor, actionId: string, now = new Date()) {
+  const { campaign, action } = await loadAction(actor.tenantId, actionId)
+  if (!campaign.isTest || !campaign.batchId) throw new ConflictError('Only emails in a test batch are sent by the platform.')
+  if (!APPROVED_UNSENT.includes(action.status)) throw new ConflictError('Only an approved email can be scheduled.')
+  const batch = await prisma.outreachBatch.findFirst({ where: { id: campaign.batchId, tenantId: actor.tenantId } })
+  if (!batch || batch.status === 'cancelled' || batch.status === 'completed') throw new ConflictError('This test batch is no longer running.')
+  const w = windowOf(batch)
+  const members = await prisma.outreachCampaign.findMany({ where: { batchId: batch.id }, orderBy: { createdAt: 'asc' }, select: { id: true } })
+  const index = Math.max(0, members.findIndex((m) => m.id === campaign.id))
+
+  let slot: Date | null
+  if (action.stageKey === 'initial') {
+    const planned = action.scheduledAt && action.scheduledAt.getTime() > now.getTime() ? action.scheduledAt : now
+    slot = nextSendSlot(planned, w)
+  } else {
+    const view = sequenceOf(campaign, now).stages.find((s) => s.stageKey === action.stageKey)
+    const window = view?.window ?? (action.dueStartAt && action.dueEndAt ? { start: action.dueStartAt, end: action.dueEndAt } : null)
+    slot = window ? followUpSlot({ window, index, spacingMinutes: batch.spacingMinutes, w, now }) : null
+  }
+
+  if (!slot) {
+    await prisma.outreachAction.update({
+      where: { id: actionId },
+      data: {
+        status: 'ready_to_send',
+        statusReason: 'Approved, but no sending slot is left inside this step’s PDF window and the batch’s sending hours — it will not be sent automatically.',
+      },
+    })
+    return { actionId, scheduledAt: null }
+  }
+  await prisma.outreachAction.update({ where: { id: actionId }, data: { status: 'scheduled', statusReason: null, scheduledAt: slot } })
+  await record(actor, campaign.id, 'test_scheduled', 'OutreachAction', actionId, `TEST send scheduled for ${slot.toISOString()} — to the internal test inbox only`)
+  return { actionId, scheduledAt: slot.toISOString() }
+}
+
+/** "Send test to me": a one-off preview to the requester's own internal inbox. Changes no status. */
+export async function sendTestPreview(actor: Actor & { email?: string | null }, actionId: string) {
+  const { campaign, action } = await loadAction(actor.tenantId, actionId)
+  if (!action.stageKey || action.stageKey === CALL_POINTS_STAGE || !action.message) throw new BadRequestError('Only sequence emails can be previewed.')
+  const outcome = await deliverTestEmail({
+    tenantId: actor.tenantId,
+    actionId,
+    campaignId: campaign.id,
+    kind: 'preview',
+    intendedRecipient: campaign.recipientEmail,
+    subject: action.message.subject,
+    body: action.message.body,
+    sender: await readSenderFor(actor.tenantId, campaign.requestedByCrmUserId),
+    requester: actor.email ?? null,
+    triggeredBy: actor.crmUserId,
+  })
+  await record(
+    actor,
+    campaign.id,
+    'test_preview',
+    'OutreachAction',
+    actionId,
+    outcome.status === 'accepted' ? `Test preview sent to ${outcome.to.join(', ')} (${outcome.transport})` : `Test preview not sent: ${outcome.error}`,
+  )
+  return outcome
+}
+
+/**
+ * The scheduler's send of one due test email. Every check runs again at the
+ * moment of sending; any that fails records WHY the email was not sent. The
+ * email goes only to the internal test inbox (deliver.ts → guard.ts).
+ */
+export async function runScheduledTestSend(actionId: string, now = new Date()): Promise<'sent' | 'failed' | 'not_sent' | 'skipped'> {
+  // Claim it, so two schedulers can never send the same email.
+  const claimed = await prisma.outreachAction.updateMany({
+    where: { id: actionId, status: 'scheduled', scheduledAt: { lte: now } },
+    data: { status: 'sending' },
+  })
+  if (claimed.count === 0) return 'skipped'
+  const row = await prisma.outreachAction.findUnique({ where: { id: actionId }, select: { tenantId: true } })
+  const system: Actor = { tenantId: row!.tenantId, crmUserId: 'scheduler' }
+  const { campaign, action } = await loadAction(system.tenantId, actionId)
+  const notSent = async (status: string, reason: string) => {
+    await prisma.outreachAction.update({ where: { id: actionId }, data: { status, statusReason: reason } })
+    await record(system, campaign.id, 'test_not_sent', 'OutreachAction', actionId, `TEST send not made: ${reason}`)
+    return 'not_sent' as const
+  }
+
+  if (!campaign.isTest) return notSent('ready_to_send', 'Only test campaigns are sent by the platform; this email was not sent.')
+  if (campaign.status === 'cancelled' || campaign.status === 'completed') {
+    return notSent('cancelled', campaign.statusReason ?? 'The sequence was stopped.')
+  }
+  if (campaign.status !== 'active') {
+    // Paused: it waits, and goes once the sequence is resumed.
+    await prisma.outreachAction.update({ where: { id: actionId }, data: { status: 'scheduled' } })
+    return 'skipped'
+  }
+  const message = action.message
+  if (!message || action.approvedBodyHash !== bodyHash(message.subject, message.body)) {
+    return notSent('draft', 'The email changed after it was approved — review and approve it again.')
+  }
+  const stage = sequenceOf(campaign, now).stages.find((s) => s.stageKey === action.stageKey)
+  if (stage?.status === 'not_applicable') return notSent('cancelled', stage.reason ?? 'This step no longer applies.')
+  if (action.dueEndAt && now.getTime() > action.dueEndAt.getTime()) {
+    return notSent('ready_to_send', 'This step’s PDF window closed before it could be sent.')
+  }
+  const suppression = await suppressionFor(campaign, templateOfAction(campaign, action.stageKey as StageKey))
+  if (suppression.suppressed) return notSent('cancelled', `The company is suppressed: ${suppression.detail ?? suppression.reason}`)
+
+  const outcome = await deliverTestEmail({
+    tenantId: system.tenantId,
+    actionId,
+    campaignId: campaign.id,
+    kind: 'scheduled',
+    intendedRecipient: campaign.recipientEmail,
+    subject: message.subject,
+    body: message.body,
+    sender: await readSenderFor(system.tenantId, campaign.requestedByCrmUserId),
+    triggeredBy: 'scheduler',
+  })
+  if (outcome.status !== 'accepted') {
+    await prisma.outreachAction.update({
+      where: { id: actionId },
+      data: { status: 'failed', statusReason: outcome.error, retryCount: { increment: 1 }, failureKind: outcome.status === 'blocked' ? 'guard' : 'transient' },
+    })
+    await record(system, campaign.id, 'test_failed', 'OutreachAction', actionId, `TEST send failed: ${outcome.error}`)
+    return 'failed'
+  }
+  await prisma.outreachAction.update({
+    where: { id: actionId },
+    data: { status: 'sent', sentAt: now, sentVia: 'platform_test', providerName: `test_${outcome.transport}`, providerMessageId: outcome.messageId, statusReason: null },
+  })
+  if (action.stageKey === 'breakup' || action.stageKey === 'sku_report') {
+    await prisma.outreachCampaign.update({
+      where: { id: campaign.id },
+      data: { status: 'completed', statusReason: action.stageKey === 'breakup' ? 'Break-up email sent (test) — sequence complete.' : 'Report delivered (test) — sequence complete.' },
+    })
+  }
+  await record(system, campaign.id, 'test_sent', 'OutreachAction', actionId, `TEST sent to ${outcome.to.join(', ')} (${outcome.transport}) — the customer was not contacted`)
+  return 'sent'
+}
+
+/** For a running test batch: prepares each no-reply follow-up once the PDF timing allows. */
+export async function prepareDueTestFollowUps(tenantId: string, campaignId: string, now = new Date()): Promise<number> {
+  const campaign = await loadCampaign(tenantId, campaignId)
+  if (!campaign.isTest || campaign.status !== 'active') return 0
+  const seq = sequenceOf(campaign, now)
+  let prepared = 0
+  for (const s of seq.stages) {
+    if (s.track !== 'no_reply' || !s.canPrepare) continue
+    const live = campaign.actions.find((a) => a.stageKey === s.stageKey && a.status !== 'cancelled')
+    if (live) continue
+    try {
+      await prepareStage({ tenantId, crmUserId: 'scheduler' }, campaignId, s.stageKey)
+      prepared++
+    } catch (err) {
+      logger.info({ err: (err as Error).message, campaignId, stage: s.stageKey }, 'test batch: follow-up not prepared')
+    }
+  }
+  return prepared
+}
+
+/** One row per email of a set of test campaigns — for the batch screen. */
+export async function testCampaignSummaries(tenantId: string, campaignIds: string[], now = new Date()) {
+  const out = []
+  for (const id of campaignIds) {
+    const c = await loadCampaign(tenantId, id)
+    const seq = sequenceOf(c, now)
+    const attempts = await prisma.outreachSendAttempt.findMany({ where: { campaignId: id }, orderBy: { createdAt: 'desc' }, take: 50 })
+    out.push({
+      campaignId: c.id,
+      crmCompanyId: c.crmCompanyId,
+      companyName: c.companyName,
+      status: c.status,
+      statusReason: c.statusReason,
+      intendedRecipient: c.recipientEmail,
+      phase: seq.phase,
+      stages: seq.stages.map((s) => {
+        const a = c.actions.find((x) => x.stageKey === s.stageKey && x.status !== 'cancelled') ?? c.actions.filter((x) => x.stageKey === s.stageKey).pop() ?? null
+        const last = a ? attempts.find((t) => t.actionId === a.id && t.kind === 'scheduled') ?? null : null
+        return {
+          stageKey: s.stageKey,
+          pdfRef: s.pdfRef,
+          label: s.label,
+          track: s.track,
+          stageStatus: s.status,
+          reason: s.reason,
+          window: s.window ? { start: s.window.start.toISOString(), end: s.window.end.toISOString() } : null,
+          actionId: a?.id ?? null,
+          actionStatus: a?.status ?? null,
+          statusReason: a?.statusReason ?? null,
+          scheduledAt: a && (a.status === 'scheduled' || a.status === 'draft') ? a.scheduledAt.toISOString() : null,
+          sentAt: a?.sentAt?.toISOString() ?? null,
+          sentVia: a?.sentVia ?? null,
+          lastAttempt: last ? { status: last.status, at: last.createdAt.toISOString(), error: last.error, to: last.actualRecipients } : null,
+        }
+      }),
+    })
+  }
+  return out
 }
 
 export async function reject(actor: Actor, actionId: string, reason: string, regenerate: boolean) {
@@ -570,6 +818,7 @@ export async function reject(actor: Actor, actionId: string, reason: string, reg
 export async function markSent(actor: Actor, actionId: string, sentAtRaw?: string | null) {
   const { campaign, action } = await loadAction(actor.tenantId, actionId)
   if (!action.stageKey || action.stageKey === CALL_POINTS_STAGE || !action.message) throw new BadRequestError('Only sequence emails can be marked sent.')
+  if (campaign.isTest) throw new ConflictError('This is a TEST campaign: its emails are sent to the internal test inbox by the test sender, not marked sent by hand.')
   if (action.status !== 'ready_to_send') throw new ConflictError('Only an approved email can be marked sent.')
   if (action.approvedBodyHash !== bodyHash(action.message.subject, action.message.body)) {
     throw new ConflictError('The email changed after it was approved. Review and approve it again.')
@@ -620,7 +869,7 @@ export async function skipStage(actor: Actor, campaignId: string, stageKey: Stag
         stageKey,
         status: 'skipped',
         statusReason: note,
-        idempotencyKey: idempotencyKey(actor.tenantId, campaign.crmCompanyId, campaignId, stageKey),
+        idempotencyKey: idempotencyKey(actor.tenantId, campaign.crmCompanyId, campaignId, stageKey, campaign.isTest),
         providerName: 'manual_send',
         scheduledAt: new Date(),
       },
@@ -689,7 +938,8 @@ export async function confirmReply(actor: Actor, replyId: string, input: { class
 
   // Any reply ends the no-reply track: unsent follow-ups no longer apply.
   const cancelled = await prisma.outreachAction.findMany({
-    where: { campaignId: reply.campaignId, stageKey: { in: NO_REPLY_STAGES }, status: { in: ['draft', 'ready_to_send'] } },
+    // Scheduled and failed test sends are unsent too: a reply stops them as well.
+    where: { campaignId: reply.campaignId, stageKey: { in: NO_REPLY_STAGES }, status: { in: ['draft', ...APPROVED_UNSENT] } },
     select: { id: true },
   })
   if (cancelled.length) {
@@ -800,7 +1050,8 @@ function windowJson(w: { start: Date; end: Date } | null) {
 
 export async function listProspects(tenantId: string, now = new Date()) {
   const campaigns = await prisma.outreachCampaign.findMany({
-    where: { tenantId, flow: FLOW },
+    // Real sequences only: test rehearsals live on the Test batches screen.
+    where: { tenantId, flow: FLOW, isTest: false },
     orderBy: { updatedAt: 'desc' },
     take: 500,
     include: {
@@ -844,27 +1095,34 @@ export async function listProspects(tenantId: string, now = new Date()) {
   return rows
 }
 
-export async function companyView(tenantId: string, crmCompanyId: string, now = new Date()) {
+export async function companyView(tenantId: string, crmCompanyId: string, now = new Date(), campaignId?: string | null, viewerCrmUserId?: string | null) {
   const facts = await loadProspectFacts(tenantId, crmCompanyId)
   if (!facts) throw new NotFoundError('Company not found.')
-  const sender = await readSender(tenantId)
   const summary = factsSummary(facts)
   const gate = facts.decisionMaker
     ? { ready: true, reason: null }
     : { ready: false, reason: 'No decision maker has been shortlisted for this company yet. Run Decision Makers first — every approved email is addressed to a named person.' }
 
-  const found = await prisma.outreachCampaign.findFirst({ where: { tenantId, crmCompanyId, flow: FLOW }, orderBy: { createdAt: 'asc' }, select: { id: true } })
+  // The company's real sequence — or, when asked for by id, one of its test campaigns.
+  const found = campaignId
+    ? await prisma.outreachCampaign.findFirst({ where: { id: campaignId, tenantId, crmCompanyId, flow: FLOW }, select: { id: true } })
+    : await prisma.outreachCampaign.findFirst({ where: { tenantId, crmCompanyId, flow: FLOW, isTest: false }, orderBy: { createdAt: 'asc' }, select: { id: true } })
   if (!found) {
+    // Not started yet: it would be signed as whoever is looking (and starts it).
+    const sender = await readSenderFor(tenantId, viewerCrmUserId)
     return { crmCompanyId, facts: summary, gate, sender: { configured: Boolean(sender.firstName && sender.companyName), ...sender }, campaign: null, sequence: null, drafts: [], callPoints: null, replies: [], history: [] }
   }
   const campaign = await loadCampaign(tenantId, found.id)
   const seq = sequenceOf(campaign, now)
+  // Signed as the person who started this outreach.
+  const sender = await readSenderFor(tenantId, campaign.requestedByCrmUserId)
 
+  const attemptRows = await prisma.outreachSendAttempt.findMany({ where: { campaignId: campaign.id }, orderBy: { createdAt: 'desc' }, take: 200 })
   const drafts = []
   for (const a of campaign.actions.filter((x) => x.stageKey && x.stageKey !== CALL_POINTS_STAGE)) {
     const stageKey = a.stageKey as StageKey
     const template = templateOfAction(campaign, stageKey)
-    const reviewable = a.status === 'draft' || a.status === 'ready_to_send'
+    const reviewable = a.status === 'draft' || APPROVED_UNSENT.includes(a.status)
     drafts.push({
       actionId: a.id,
       stageKey,
@@ -897,6 +1155,24 @@ export async function companyView(tenantId: string, crmCompanyId: string, now = 
       approvedByCrmUserId: a.approvedByCrmUserId,
       sentAt: a.sentAt?.toISOString() ?? null,
       sentByCrmUserId: a.sentByCrmUserId,
+      sentVia: a.sentVia,
+      scheduledAt: a.status === 'scheduled' ? a.scheduledAt.toISOString() : null,
+      // Every attempt to deliver this email: previews and test sends.
+      attempts: attemptRows
+        .filter((t) => t.actionId === a.id)
+        .slice(0, 20)
+        .map((t) => ({
+          id: t.id,
+          at: t.createdAt.toISOString(),
+          kind: t.kind,
+          mode: t.mode,
+          status: t.status,
+          intendedRecipient: t.intendedRecipient,
+          actualRecipients: Array.isArray(t.actualRecipients) ? (t.actualRecipients as string[]) : [],
+          transport: t.transport,
+          providerMessageId: t.providerMessageId,
+          error: t.error,
+        })),
       gates: reviewable ? await gatesFor(campaign, a, seq, now) : null,
     })
   }
@@ -931,6 +1207,8 @@ export async function companyView(tenantId: string, crmCompanyId: string, now = 
       recipientEmail: campaign.recipientEmail,
       recipientEmailSource: campaign.recipientEmailSource,
       startedAt: campaign.createdAt.toISOString(),
+      isTest: campaign.isTest,
+      batchId: campaign.batchId,
     },
     sequence: {
       phase: seq.phase,
@@ -968,6 +1246,9 @@ function factsSummary(f: ProspectFacts) {
     companySummary: f.companySummary,
     decisionMaker: f.decisionMaker,
     product: f.product,
+    // The verified product page V1/V2/V3 link to, or why there is none.
+    productPageUrl: f.productPageUrl ?? null,
+    productPageNote: f.productPageNote ?? null,
     signals: f.signals,
     discovered: Boolean(f.discoveredCompanyId),
   }

@@ -17,10 +17,12 @@ const signal = (over: Partial<UnderstandingSignalRow> = {}): UnderstandingSignal
   detectedAt: new Date('2026-09-01T00:00:00.000Z'),
   confidence: 'high',
   status: 'active',
-  signalType: 'careers_page_role',
-  signalCategory: 'hiring',
-  summary: 'Careers page mentions a buyer role',
-  sourceUrl: 'https://acme.test/careers',
+  // A non-job signal: job postings are not intent signals (2026-09-28), so a
+  // hiring row would now be withheld before it could be counted.
+  signalType: 'platform_detected',
+  signalCategory: 'technology',
+  summary: 'The website runs on nopCommerce',
+  sourceUrl: 'https://acme.test/',
   ...over,
 })
 
@@ -81,7 +83,18 @@ describe('what the combined view shows honestly when data is missing', () => {
     const out = buildUnderstanding('co_1', many, null, null)
     expect(out.intentSource.count).toBe(8)
     expect(out.intentSource.signals).toHaveLength(5)
-    expect(out.intentSource.byCategory).toEqual({ hiring: 8 })
+    expect(out.intentSource.byCategory).toEqual({ technology: 8 })
+  })
+
+  it('never counts a job posting as an intent signal', () => {
+    const out = buildUnderstanding(
+      'co_1',
+      [signal({ id: 's1' }), signal({ id: 'job', eventFingerprint: 'fpj', signalType: 'careers_page_role', signalCategory: 'hiring' })],
+      null,
+      null,
+    )
+    expect(out.intentSource.count).toBe(1)
+    expect(out.intentSource.byCategory).toEqual({ technology: 1 })
   })
 })
 

@@ -4,6 +4,8 @@
 // listProspects), not from what the screen would like to receive. Every field
 // the API can omit or null is typed that way, and the screen guards for it.
 
+import type { CompanyContactEmail } from '../../lib/types'
+
 export type StageKey =
   | 'initial'
   | 'reply_followup'
@@ -62,7 +64,7 @@ export interface ProspectRow {
   lastActivityAt: string
 }
 
-export type StageStatus = 'done' | 'approved' | 'drafted' | 'due' | 'overdue' | 'upcoming' | 'skipped' | 'not_applicable'
+export type StageStatus = 'done' | 'approved' | 'scheduled' | 'drafted' | 'due' | 'overdue' | 'upcoming' | 'skipped' | 'not_applicable'
 
 export interface StageView {
   stageKey: StageKey
@@ -157,8 +159,45 @@ export interface Draft {
   approvedByCrmUserId: string | null
   sentAt: string | null
   sentByCrmUserId: string | null
+  /** "platform_test" when the test sender delivered it to the internal test inbox. */
+  sentVia?: string | null
+  /** When an approved test email is due to go (status "scheduled"). */
+  scheduledAt?: string | null
+  attempts?: SendAttempt[]
   gates: { ok: boolean; items: GateItem[]; warnings: string[] } | null
 }
+
+/** One delivery attempt of a test email — a preview or a scheduled test send. */
+export interface SendAttempt {
+  id: string
+  at: string
+  kind: 'preview' | 'scheduled'
+  mode: string
+  status: 'accepted' | 'failed' | 'blocked'
+  intendedRecipient: string | null
+  actualRecipients: string[]
+  transport: string
+  providerMessageId: string | null
+  error: string | null
+}
+
+/** GET /outreach/sequence/sending — whether (test) email can go, and where. */
+export interface SendingStatus {
+  mode: 'off' | 'test'
+  transport: 'capture' | 'smtp'
+  ready: boolean
+  reason: string | null
+  testInbox: string | null
+  allowList: string[]
+}
+
+export function isSendingStatus(v: unknown): v is SendingStatus {
+  const o = v as SendingStatus | null
+  return Boolean(o && typeof o === 'object' && (o.mode === 'off' || o.mode === 'test') && Array.isArray(o.allowList))
+}
+
+/** Statuses of an approved email that has not gone yet. */
+export const APPROVED_UNSENT = ['ready_to_send', 'scheduled', 'failed']
 
 export interface Reply {
   id: string
@@ -209,8 +248,19 @@ export interface CompanySequence {
     companyName: string
     companyDomain: string | null
     companySummary: string | null
-    decisionMaker: { id: string; fullName: string; title: string | null; email: string | null; profileUrl: string | null } | null
+    decisionMaker: {
+      id: string
+      fullName: string
+      title: string | null
+      email: string | null
+      profileUrl: string | null
+      /** A verified company mailbox, present only when the person has no email of their own. */
+      companyContactEmail?: CompanyContactEmail | null
+    } | null
     product: { name: string; url: string | null; category: string | null; description: string | null; gaps: Array<{ title: string; detail: string; severity: string }> } | null
+    /** The verified product page V1/V2/V3 link to, or why there is none. */
+    productPageUrl?: string | null
+    productPageNote?: string | null
     signals: SignalFact[]
     discovered: boolean
   }
@@ -225,6 +275,9 @@ export interface CompanySequence {
     recipientEmail: string | null
     recipientEmailSource: string | null
     startedAt: string
+    /** A test-batch rehearsal: its emails go only to internal test inboxes. */
+    isTest?: boolean
+    batchId?: string | null
   } | null
   sequence: {
     phase: Phase

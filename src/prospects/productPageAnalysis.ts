@@ -20,6 +20,7 @@ import { registrableDomain } from '../enrichment/siteIdentity.js'
 import { readProductWithModel, type ProductReader, type VerifiedRead } from './productReader.js'
 import { readBreadcrumb, readProductPageDetails, readableHtml, type ProductPageDetails } from './productPageDetails.js'
 import { addressPageLink, locationsOnPage, placeCompany, shortLocation, stateInObjective, type CompanyLocation } from './companyLocation.js'
+import { nonProductPath } from './productPath.js'
 import { hostOf, normalizeUrlForDedup, resolveLink, sameSite } from '../websiteaudit/urls.js'
 
 // PROSPECT DISCOVERY — ONE COMPANY, ONE GENUINE PRODUCT, ONE ANSWER.
@@ -531,47 +532,11 @@ export async function productSitemapUrls(
 
 // ── Is this ONE genuine individual product? ──────────────────────────────
 
-/**
- * Path segments that name something other than one product. A page under
- * /solutions/ or /faq/ is that, whatever product words its title uses.
- */
-const NON_PRODUCT_SEGMENT =
-  /^(solutions?|industr(y|ies)|applications?|markets?|sectors?|blogs?|news|articles?|stories|faqs?|help|resources?|support|learn(ing)?|insights?|guides?|case-stud(y|ies)|about(-us)?|company|careers?|jobs|events?|press|media|knowledge(-base)?|training|services?|contact(-us)?|webinars?|videos?|downloads?|literature|brochures?|catalogs?|catalogues?|search|cart|account|login|privacy|terms|legal|sitemap|categories|category|collections?|brands?|shop-by|compare|wishlist)$/i
-
 /** JSON-LD types that declare a page to be something other than one product. */
 const NON_PRODUCT_TYPES = ['Article', 'BlogPosting', 'NewsArticle', 'FAQPage', 'CollectionPage', 'SearchResultsPage', 'HowTo', 'Event']
 
-/** Files and upload folders: a PDF or an image is never the product page. */
-const FILE_PATH = /(\.(pdf|jpe?g|png|gif|webp|svg|zip|docx?|xlsx?|pptx?|mp4|mov)$)|\/(wp-content|uploads|media|assets|static)\//i
-
-/**
- * Words that mark a page as something other than a product wherever they
- * appear in a segment: "a2z_crescent-contest_landing-page", "recall",
- * "news-release-details", "newsroom".
- */
-const NON_PRODUCT_WORD =
-  /(contest|sweepstake|giveaway|landing[-_]?page|recalls?\b|news[-_]?releases?|press[-_]?releases?|newsroom|investors?\b|warranty|registration|rebates?\b|promotions?\b|coupons?\b)/i
-
-/** Side sites of a company that never carry its product pages. */
-const NON_PRODUCT_HOST = /^(newsroom|pressroom|press|news|media|ir|investors?|careers?|jobs|blog|community|events)\./i
-
-function nonProductPath(url: string): boolean {
-  try {
-    const u = new URL(url)
-    if (NON_PRODUCT_HOST.test(u.hostname.replace(/^www\./i, ''))) return true
-    const path = u.pathname
-    if (FILE_PATH.test(path)) return true
-    return path
-      .split('/')
-      .filter(Boolean)
-      .some((seg) => {
-        const s = decodeURIComponent(seg)
-        return NON_PRODUCT_SEGMENT.test(s) || NON_PRODUCT_WORD.test(s)
-      })
-  } catch {
-    return true
-  }
-}
+// nonProductPath — addresses that are never one product's page — lives in
+// ./productPath.ts, shared with Outreach so both engines apply one rule.
 
 /**
  * Whether a link stays with the same company: the same registrable domain,

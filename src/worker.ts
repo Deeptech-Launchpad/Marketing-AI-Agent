@@ -22,6 +22,7 @@ import {
   QUEUE_INTENT_SCORE,
   QUEUE_KNOWLEDGE_INGEST,
   QUEUE_OUTREACH_ACTION,
+  QUEUE_OUTREACH_TEST_DISPATCH,
   QUEUE_PROSPECT_DISCOVER,
   QUEUE_QUALIFICATION_EVALUATE,
   QUEUE_RUN_STEP,
@@ -31,6 +32,7 @@ import {
   work,
 } from './platform/queue.js'
 import { checkForNewLeads } from './decisionmakers/leadWatch.js'
+import { dispatchTestSends } from './outreach/salesSequence/sending/dispatcher.js'
 import { env } from './config/env.js'
 
 // Worker entrypoint.
@@ -210,11 +212,23 @@ async function main() {
     await boss.unschedule(QUEUE_DM_LEAD_WATCH)
   }
 
+  // TEST MODE outreach sender (2026-09-28): approved test-batch emails go to the
+  // internal test inboxes at their scheduled time. Off → no schedule at all.
+  await work(QUEUE_OUTREACH_TEST_DISPATCH, async () => {
+    await dispatchTestSends()
+  })
+  if (env.OUTREACH_EMAIL_MODE === 'test') {
+    await boss.schedule(QUEUE_OUTREACH_TEST_DISPATCH, `*/${env.OUTREACH_TEST_DISPATCH_INTERVAL_MINUTES} * * * *`)
+  } else {
+    await boss.unschedule(QUEUE_OUTREACH_TEST_DISPATCH)
+  }
+
   logger.info(
     {
       autoDecisionMakerDiscovery: env.DM_AUTO_DISCOVER_ENABLED
         ? `every ${env.DM_AUTO_DISCOVER_INTERVAL_MINUTES} min`
         : 'off',
+      outreachEmailMode: env.OUTREACH_EMAIL_MODE === 'test' ? `test (every ${env.OUTREACH_TEST_DISPATCH_INTERVAL_MINUTES} min, internal inboxes only)` : 'off',
       queues: [
         QUEUE_RUN_STEP,
         QUEUE_KNOWLEDGE_INGEST,

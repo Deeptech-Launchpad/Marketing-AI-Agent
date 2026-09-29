@@ -128,7 +128,7 @@ export function evaluateGates(g: GateInput): GateResult {
   )
 
   // 5. Someone to send it as.
-  push('sender', senderReady(g.sender), 'The sender is configured in Settings', senderReady(g.sender) ? null : 'An admin sets the sender name and company in Settings → Outreach sender.')
+  push('sender', senderReady(g.sender), 'The sender’s name and company are known', senderReady(g.sender) ? null : 'The email is signed with the name of the person who started this outreach (their NXT Sales login) and the company name an admin sets in Settings → Outreach sender. One of them is missing.')
 
   // 6. Nobody asked not to be contacted.
   if (g.suppression) {

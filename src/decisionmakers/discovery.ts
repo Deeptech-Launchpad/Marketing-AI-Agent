@@ -14,6 +14,7 @@ import {
   type ShortlistExclusion,
 } from './candidates.js'
 import { hostOf } from './companyMatch.js'
+import { companyContactRow, findCompanyContactEmail, hunterMailboxesOf } from './companyContactEmail.js'
 import { ApolloProvider } from './providers/apolloProvider.js'
 import { CrmContactProvider } from './providers/crmContactProvider.js'
 import { LinkedInReferenceProvider } from './providers/linkedInReferenceProvider.js'
@@ -411,6 +412,21 @@ export async function runDecisionMakerDiscovery(runId: string): Promise<void> {
 
     await persistCandidates(run.tenantId, runId, run.crmCompanyId, scored, shortlist, excluded)
 
+    // A decision maker named without an email of their own: one verified
+    // company mailbox, so the company can still be reached (2026-09-28). Runs
+    // only in that case, and never alters a candidate.
+    let companyContact: ReturnType<typeof companyContactRow> | null = null
+    const top = shortlist[0]
+    if (top && !top.email) {
+      const started = Date.now()
+      const found = await findCompanyContactEmail({
+        company,
+        companyDomain,
+        hunterMailboxes: hunterMailboxesOf(results.map((r) => ({ provider: r.provider, metadata: r.metadata }))),
+      }).catch((err: Error) => ({ found: null, reason: `The lookup failed: ${err.message}`, pagesRead: [] as string[] }))
+      companyContact = companyContactRow(found, Date.now() - started)
+    }
+
     const costUsd = results.reduce((sum, r) => sum + (r.costUsd ?? 0), 0)
 
     await prisma.decisionMakerRun.update({
@@ -441,7 +457,7 @@ export async function runDecisionMakerDiscovery(runId: string): Promise<void> {
           durationMs: r.durationMs,
           costUsd: r.costUsd ?? null,
           metadata: r.metadata ?? null,
-        })) as never,
+        })).concat(companyContact ? [companyContact as never] : []) as never,
         noResultsReason: shortlist.length ? null : explainNoResults(results, scored.length, excluded.length),
         costUsd: new Prisma.Decimal(costUsd),
         completedAt: new Date(),
