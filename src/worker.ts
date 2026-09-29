@@ -19,6 +19,7 @@ import {
   QUEUE_DM_DISCOVER,
   QUEUE_DM_LEAD_WATCH,
   QUEUE_INTENT_DETECT,
+  QUEUE_INTENT_MONITOR,
   QUEUE_INTENT_SCORE,
   QUEUE_KNOWLEDGE_INGEST,
   QUEUE_OUTREACH_ACTION,
@@ -33,6 +34,7 @@ import {
 } from './platform/queue.js'
 import { checkForNewLeads } from './decisionmakers/leadWatch.js'
 import { dispatchTestSends } from './outreach/salesSequence/sending/dispatcher.js'
+import { monitorIntentSignals } from './intent/intentMonitor.js'
 import { env } from './config/env.js'
 
 // Worker entrypoint.
@@ -223,8 +225,23 @@ async function main() {
     await boss.unschedule(QUEUE_OUTREACH_TEST_DISPATCH)
   }
 
+  // Live Intent Signals monitoring (2026-09-29): the ordinary Intent run,
+  // repeated on a schedule for companies being worked. Off → no schedule.
+  await work(QUEUE_INTENT_MONITOR, async () => {
+    await monitorIntentSignals()
+  })
+  if (env.INTENT_MONITOR_ENABLED) {
+    const h = env.INTENT_MONITOR_INTERVAL_HOURS
+    await boss.schedule(QUEUE_INTENT_MONITOR, h >= 24 ? '23 6 * * *' : `23 */${h} * * *`)
+  } else {
+    await boss.unschedule(QUEUE_INTENT_MONITOR)
+  }
+
   logger.info(
     {
+      intentMonitor: env.INTENT_MONITOR_ENABLED
+        ? `every ${env.INTENT_MONITOR_INTERVAL_HOURS}h, up to ${env.INTENT_MONITOR_MAX_COMPANIES} companies, each at most every ${env.INTENT_MONITOR_MIN_DAYS} days`
+        : 'off',
       autoDecisionMakerDiscovery: env.DM_AUTO_DISCOVER_ENABLED
         ? `every ${env.DM_AUTO_DISCOVER_INTERVAL_MINUTES} min`
         : 'off',

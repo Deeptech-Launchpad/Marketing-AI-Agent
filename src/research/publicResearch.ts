@@ -164,7 +164,8 @@ function queriesFor(topic: ResearchTopic, companyName: string, domain: string | 
       //   1. the company's own site — authoritative about its own staff;
       //   2. registry and directory listings — where a director is a matter
       //      of record rather than of marketing;
-      //   3. the roles this platform actually approaches, named in the wild.
+      //   3. the roles this platform actually approaches, named in the wild;
+      //   4. org-chart and professional-directory pages (added 2026-09-29).
       //
       // Every one of them asks for RETRIEVED PAGES and says so twice. No name
       // is read from any of these answers: the pages come back as links, this
@@ -184,6 +185,14 @@ function queriesFor(topic: ResearchTopic, companyName: string, domain: string | 
           `procurement lead, product manager or e-commerce manager of ${where} — press releases, trade-press ` +
           `articles, interviews, conference listings or membership directories. Do not guess and do not name ` +
           `anyone in your answer: only report pages you actually retrieved.`,
+        // 4. (2026-09-29) Public org-chart and professional-directory pages,
+        //    which list a person WITH their title and employer in one line —
+        //    the shape the verifier can tie to this company. Profiles behind a
+        //    sign-in wall are recorded as such and read for nothing.
+        `Find publicly viewable org-chart, leadership or professional-directory pages (for example The Org, ` +
+          `Crunchbase people pages, trade-association member listings) that list e-commerce, digital, marketing, ` +
+          `product, catalogue or purchasing staff or leaders of ${where}, each with their job title. Do not name ` +
+          `anyone in your answer: only report pages you actually retrieved.`,
       ]
     case 'hiring':
       return [
@@ -198,12 +207,13 @@ function queriesFor(topic: ResearchTopic, companyName: string, domain: string | 
       return [
         `Find public discussions about ${where} or its products on Reddit, industry forums, Q&A sites and online ` +
           `communities — customer questions, complaints, product experiences, comparisons or recommendations. ` +
-          `Only report pages you actually retrieved.`,
+          `Prefer the most recent posts (the last 12 months). Only report pages you actually retrieved.`,
         `Find customer reviews of ${where} or its products on review platforms and marketplaces that publish ` +
-          `reviews. Only report pages you actually retrieved.`,
+          `reviews. Prefer the most recent reviews. Only report pages you actually retrieved.`,
         `Find recent news, trade-press articles and blog posts about ${where} — expansion, acquisitions, new ` +
           `locations, new product launches, leadership or business changes, and technology or platform changes ` +
-          `such as a new website, e-commerce platform or ERP. Only report pages you actually retrieved.`,
+          `such as a new website, e-commerce platform or ERP. Prefer the last 12 months. Only report pages you ` +
+          `actually retrieved.`,
         `Find public LinkedIn posts, company updates or social media posts by or about ${where}. ` +
           `Only report pages you actually retrieved.`,
       ]

@@ -136,6 +136,7 @@ export class PublicResearchProvider implements DecisionMakerProvider {
       domain: companyHost,
       topic: 'people',
       feature: 'decision_maker_public_research',
+      maxSources: env.DM_PUBLIC_RESEARCH_MAX_PAGES,
     })
 
     if (discovery.status !== 'available') {
@@ -150,7 +151,7 @@ export class PublicResearchProvider implements DecisionMakerProvider {
       }
     }
 
-    const pages = await readPublicSources(discovery.sources)
+    const pages = await readPublicSources(discovery.sources, env.DM_PUBLIC_RESEARCH_MAX_PAGES)
     const drafts: CandidateDraft[] = []
     const seenNames = new Set<string>()
     const pagesRead: Array<{ url: string; finalUrl: string; ok: boolean; loginWall: boolean; people: number; reason?: string }> = []
@@ -276,7 +277,7 @@ export class PublicResearchProvider implements DecisionMakerProvider {
  * here on which company this is, and nothing is defaulted.
  */
 function draftFrom(
-  person: { fullName: string; rawTitle: string | null; sourceSentence: string },
+  person: { fullName: string; rawTitle: string | null; sourceSentence: string; employer?: string | null },
   page: ReadPublicSource,
   companyHost: string | null,
   companyName: string,
@@ -288,18 +289,21 @@ function draftFrom(
   if (person.rawTitle) supports.push('title')
   if (email) supports.push('contact')
   // Only the company's OWN page establishes the employer by the fact of
-  // publishing. A third-party page has to say so in words, and the engine's
-  // company-match step is what reads those words.
-  if (sourceType === 'company_website') supports.push('company')
+  // publishing. A third-party page has to say so in words — the employer its
+  // sentence states, verbatim (modelReader.employerFromSentence) — and the
+  // engine's company-match step compares those words with this company.
+  const statedEmployer = sourceType === 'company_website' ? companyName : person.employer?.trim() || null
+  if (statedEmployer) supports.push('company')
 
   return {
     fullName: person.fullName,
     rawTitle: person.rawTitle,
     // The company's OWN page establishes the employer by the fact of
-    // publishing it. A third-party page does not, so the employer is left
-    // unstated and the engine's company-match step decides on the words the
-    // page actually used — which is what that step is for.
-    statedCompany: sourceType === 'company_website' ? companyName : null,
+    // publishing it. A third-party page establishes it only by saying so: the
+    // employer its sentence names, copied verbatim, which the company-match
+    // step then verifies, marks probable, or rejects (2026-09-29). Before this
+    // every third-party find was "unverified" and never shortlisted.
+    statedCompany: statedEmployer,
     profileUrl: null,
     providerPersonId: null,
     // Only an address this page publishes, on the company's own domain, whose

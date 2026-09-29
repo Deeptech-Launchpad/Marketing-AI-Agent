@@ -591,6 +591,46 @@ describe('#8 a grounded event must be about this company', () => {
     ).toBe(false)
   })
 
+  // 2026-09-29: seen in live data — list articles tied other companies' news
+  // to this one through one shared word.
+  it('drops another company’s news on a list article, even when this company is listed nearby', () => {
+    const list =
+      'Top 100 distributors of 2026: big projects across the industry this year. ' +
+      'Our annual ranking of the largest electrical distributors in North America, with the projects, ' +
+      'acquisitions and investments that shaped their year, based on sales reported to our editors. ' +
+      '12. Scott Electric, Greensburg PA. 13. Northgate Supply. ' +
+      'IDEAL Electrical to provide grants to Midwest community colleges to fund electrical career training.'
+    expect(
+      isEventAboutCompany(
+        { summary: 'grants', sourceSentence: 'IDEAL Electrical to provide grants to Midwest community colleges to fund electrical career training.' },
+        list,
+        { name: 'Scott Electric', host: 'scottelectricusa.com', pageOnCompanyDomain: false },
+      ),
+    ).toBe(false)
+  })
+
+  it('does not count ONE shared word of a multi-word name as naming the company', () => {
+    const sentence = 'Graybar acquired American Electric Supply, one of the largest single distributors.'
+    expect(
+      isEventAboutCompany({ summary: 'acquisition', sourceSentence: sentence }, `Industry news. ${sentence}`, {
+        name: 'Johnson Electric Supply Company',
+        host: 'johnson-electric.com',
+        pageOnCompanyDomain: false,
+      }),
+    ).toBe(false)
+  })
+
+  it('keeps a follow-on sentence under a headline that names the company', () => {
+    const article = 'Eaton to acquire COL Group in data-centre push. Eaton said on Monday it had agreed terms. The transaction is expected to close in the first quarter of 2027.'
+    expect(
+      isEventAboutCompany(
+        { summary: 'acquisition close', sourceSentence: 'The transaction is expected to close in the first quarter of 2027.' },
+        article,
+        { name: 'Eaton', host: 'eaton.com', pageOnCompanyDomain: false },
+      ),
+    ).toBe(true)
+  })
+
   it('accepts any event on the company’s own domain', () => {
     expect(isEventAboutCompany(event, page, { name: 'Jamesco Trading', host: 'jamesco.com', pageOnCompanyDomain: true })).toBe(true)
   })

@@ -258,6 +258,57 @@ describe('2. a person found in a public web result', () => {
   }
 })
 
+// ── FIXTURE 2b (2026-09-29): the employer a third-party page STATES ───────
+
+describe('2b. a third-party page that states the employer in the same sentence', () => {
+  const article = (c: Company, sentence: string) => {
+    searchReturns('https://trade-journal.test/2026/appointments')
+    pageServes(`<html><body><article><h1>Appointments</h1><p>${sentence}</p><p>${FILLER}</p></article></body></html>`)
+  }
+  const claim = (c: Company, sentence: string, employer: string | null) =>
+    generate.mockResolvedValue({ data: { people: [{ fullName: c.person, rawTitle: c.title, sourceSentence: sentence, employer }] }, model: 'm', costUsd: 0 })
+
+  for (const c of COMPANIES) {
+    it(`ties them to the company by the page's own words, and the company check verifies it — ${c.label}`, async () => {
+      const { verifyCompanyMatch: match } = await import('../../src/decisionmakers/companyMatch.js')
+      const sentence = `${c.person} has been appointed ${c.title} at ${c.name}, the ${c.product} distributor.`
+      article(c, sentence)
+      claim(c, sentence, c.name)
+      const person = (await new PublicResearchProvider().search(ctxFor(c) as never)).candidates[0]!
+      expect(person.statedCompany).toBe(c.name)
+      expect(person.evidence[0]!.supports).toContain('company')
+      expect(match(person, crmCompany(c), c.domain).level).toBe('verified')
+    })
+
+    it(`drops an employer the sentence does not contain — the person stays, unlinked — ${c.label}`, async () => {
+      const sentence = `${c.person} has been appointed ${c.title} this month.`
+      article(c, sentence)
+      claim(c, sentence, c.name)
+      const person = (await new PublicResearchProvider().search(ctxFor(c) as never)).candidates[0]!
+      expect(person.fullName).toBe(c.person)
+      expect(person.statedCompany).toBeNull()
+    })
+
+    it(`never links a FORMER role — ${c.label}`, async () => {
+      const sentence = `${c.person}, formerly ${c.title} at ${c.name}, has joined a rival group.`
+      article(c, sentence)
+      claim(c, sentence, c.name)
+      const person = (await new PublicResearchProvider().search(ctxFor(c) as never)).candidates[0]!
+      expect(person.statedCompany).toBeNull()
+    })
+
+    it(`records a DIFFERENT stated employer, which the company check rejects — ${c.label}`, async () => {
+      const { verifyCompanyMatch: match } = await import('../../src/decisionmakers/companyMatch.js')
+      const sentence = `${c.person} has been appointed ${c.title} at Quorvex Holdings, a supplier to ${c.name}.`
+      article(c, sentence)
+      claim(c, sentence, 'Quorvex Holdings')
+      const person = (await new PublicResearchProvider().search(ctxFor(c) as never)).candidates[0]!
+      expect(person.statedCompany).toBe('Quorvex Holdings')
+      expect(match(person, crmCompany(c), c.domain).level).toBe('rejected')
+    })
+  }
+})
+
 // ── FIXTURE 3: a name found, but no title stated ──────────────────────────
 
 describe('3. a name is found but the source states no title', () => {

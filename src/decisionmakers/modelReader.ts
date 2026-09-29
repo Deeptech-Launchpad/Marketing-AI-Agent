@@ -67,6 +67,12 @@ const ReadPeople = z.object({
          * believe the extraction at all.
          */
         sourceSentence: z.string().min(10).max(400),
+        /**
+         * The organisation the SAME sentence says they currently work for,
+         * copied from it (2026-09-29). Optional: older prompt versions do not
+         * return it. Checked in code — see employerFromSentence.
+         */
+        employer: z.string().max(120).nullable().optional(),
       }),
     )
     .max(12),
@@ -77,6 +83,11 @@ export interface ReadPerson {
   rawTitle: string | null
   /** The stretch of the page this person was read out of, verbatim. */
   sourceSentence: string
+  /**
+   * The employer that same sentence states, verbatim — or null. Only ever a
+   * value employerFromSentence accepted; never the page's domain or title.
+   */
+  employer?: string | null
 }
 
 /** Letters and digits only, lower-cased — for comparing what a page SAYS. */
@@ -115,6 +126,27 @@ export function isGroundedInSource(person: ReadPerson, sourceText: string): bool
     if (title.length < 2 || !quoted.includes(title)) return false
   }
   return true
+}
+
+/** Words that turn "X at Acme" into a PAST job, which ties X to nobody now. */
+const FORMER_ROLE = /\b(former|formerly|previously|ex-|prior to (joining|that)|until (19|20)\d\d|retired|departed|stepped down|left the company)\b/i
+
+/**
+ * The employer a verified person's own sentence states, or null.
+ *
+ * Accepted only when every character of it is in that sentence (so the page,
+ * not the model, says it), and the sentence does not describe a former role.
+ * A rejected employer drops the EMPLOYER, never the person: the name and title
+ * were already verified, and the engine's company-match step then treats the
+ * link as unproven, exactly as before this field existed.
+ */
+export function employerFromSentence(person: { sourceSentence: string; employer?: string | null }): string | null {
+  const employer = person.employer?.trim()
+  if (!employer) return null
+  const e = flatten(employer)
+  if (e.length < 2 || !flatten(person.sourceSentence).includes(e)) return null
+  if (FORMER_ROLE.test(person.sourceSentence)) return null
+  return employer
 }
 
 export interface ModelReadResult {
@@ -170,7 +202,9 @@ export async function readPeopleFromPage(input: {
     })
 
     const claimed = result.data.people
-    const grounded = claimed.filter((p) => isGroundedInSource(p, text))
+    const grounded = claimed
+      .filter((p) => isGroundedInSource(p, text))
+      .map((p) => ({ fullName: p.fullName, rawTitle: p.rawTitle, sourceSentence: p.sourceSentence, employer: employerFromSentence(p) }))
 
     return {
       people: grounded,

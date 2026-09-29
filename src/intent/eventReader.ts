@@ -158,12 +158,33 @@ export function isEventAboutCompany(
   const hostWords = company.host ? words(company.host.replace(/^www\./, '')) : ''
   const hostLabel = company.host ? words(company.host.replace(/^www\./, '').split('.')[0] ?? '') : ''
 
-  if (tokens.length > 0 && tokens.some((t) => hay.includes(` ${t} `))) return true
-  // A name made only of generic words must appear whole.
-  if (tokens.length === 0 && phrase.length >= 3 && hay.includes(` ${phrase} `)) return true
-  if (hostWords && hay.includes(` ${hostWords} `)) return true
-  if (hostLabel.length >= 4 && !GENERIC_NAME_WORDS.has(hostLabel) && hay.includes(` ${hostLabel} `)) return true
-  return false
+  /**
+   * Whether this text NAMES the company: every distinctive word of its name
+   * (so "Scott Electric" is not named by "IDEAL Electrical" or by a person
+   * called Scott), the whole name when it has no distinctive word, or its
+   * web address.
+   */
+  const names = (text: string): boolean => {
+    const t = ` ${text} `
+    if (tokens.length > 0 && tokens.every((tok) => t.includes(` ${tok} `))) return true
+    if (tokens.length === 0 && phrase.length >= 3 && t.includes(` ${phrase} `)) return true
+    if (hostWords && t.includes(` ${hostWords} `)) return true
+    if (hostLabel.length >= 4 && !GENERIC_NAME_WORDS.has(hostLabel) && t.includes(` ${hostLabel} `)) return true
+    return false
+  }
+
+  // 2026-09-29: ONE matching word anywhere near the sentence used to be enough,
+  // which on a list article ("Top 100 distributors") tied other companies'
+  // news to this one — IDEAL Electrical's grants to Scott Electric, Graybar's
+  // acquisition to Johnson Electric Supply. Now the event counts when:
+  //   · its own sentence names the company, or
+  //   · the page is ABOUT the company — its heading names it — and the company
+  //     is named near the sentence (a follow-on sentence such as "The company
+  //     said…" under a headline that names it).
+  if (names(sentence)) return true
+  // The page's title and headline, which htmlToText puts first.
+  const heading = page.slice(0, 200)
+  return names(heading) && names(hay)
 }
 
 /**

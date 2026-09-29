@@ -126,6 +126,18 @@ const schema = z.object({
   INTENT_AGING_DAYS: z.coerce.number().int().positive().default(90),
   // No infinite retries against a paid provider.
   INTENT_MAX_RETRIES: z.coerce.number().int().positive().max(10).default(3),
+  // Live monitoring (2026-09-29): the same Intent Signals run, repeated on a
+  // schedule for companies already being worked, so new public discussions,
+  // news and reviews are picked up after deployment. Off by default — every
+  // run spends search and model budget. The same filters apply; a signal seen
+  // again is refreshed, never duplicated.
+  INTENT_MONITOR_ENABLED: bool.default('false'),
+  /** How often the monitor wakes (hours). */
+  INTENT_MONITOR_INTERVAL_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+  /** A company is re-checked at most this often (days). */
+  INTENT_MONITOR_MIN_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+  /** At most this many companies are re-checked per wake-up, oldest first. */
+  INTENT_MONITOR_MAX_COMPANIES: z.coerce.number().int().min(1).max(100).default(10),
 
   // ── Stage 4: decision-maker discovery ───────────────────────────────────
   //
@@ -220,6 +232,13 @@ const schema = z.object({
   PUBLIC_RESEARCH_MAX_SOURCES: z.coerce.number().int().positive().max(10).default(6),
   /** How many of those may actually be fetched. Bounds third-party traffic. */
   PUBLIC_RESEARCH_MAX_PAGES: z.coerce.number().int().nonnegative().max(10).default(4),
+  /**
+   * Decision Makers' own budget for the open web (2026-09-29): how many of the
+   * pages its four people-searches find are fetched and read. The shared
+   * budget above left about one page per search, too few to find a person the
+   * company's own site does not list. Each page is one model read.
+   */
+  DM_PUBLIC_RESEARCH_MAX_PAGES: z.coerce.number().int().positive().max(10).default(8),
   /**
    * Open-web company discovery (2026-09-24 restructure) — "Find New Company"
    * in Prospects. Off by default, same reasoning as PUBLIC_RESEARCH_ENABLED:

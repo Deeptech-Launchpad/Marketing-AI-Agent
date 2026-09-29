@@ -30,6 +30,8 @@ export const QUEUE_DM_LEAD_WATCH = 'decisionmaker.lead_watch'
  * overloading one queue with two different contracts.
  */
 export const QUEUE_COMPANY_WEB_DISCOVER = 'company.web_discover'
+/** Scheduled re-check of Intent Signals for companies being worked (2026-09-29). */
+export const QUEUE_INTENT_MONITOR = 'intent.monitor'
 /** Scheduled sender for approved TEST-batch emails (internal test inboxes only). */
 export const QUEUE_OUTREACH_TEST_DISPATCH = 'outreach.test_dispatch'
 
@@ -48,6 +50,7 @@ const ALL_QUEUES = [
   QUEUE_DM_LEAD_WATCH,
   QUEUE_COMPANY_WEB_DISCOVER,
   QUEUE_OUTREACH_TEST_DISPATCH,
+  QUEUE_INTENT_MONITOR,
 ]
 
 /**
