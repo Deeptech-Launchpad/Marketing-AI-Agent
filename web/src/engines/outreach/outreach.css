@@ -261,23 +261,6 @@
 .otr-flow__step.is-now { border-color: var(--accent); color: var(--text); font-weight: 650; background: var(--info-bg); }
 .otr-flow__step.is-now .otr-flow__n { background: var(--accent); color: #fff; }
 
-.otr-info { position: relative; display: inline-flex; vertical-align: middle; }
-.otr-info__btn {
-  display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0;
-  border: 0; border-radius: 50%; background: transparent; color: var(--text-soft); cursor: pointer;
-}
-.otr-info__btn:hover, .otr-info__btn[aria-expanded='true'] { color: var(--accent); background: var(--bg-inset); }
-.otr-info__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.otr-info__pop {
-  position: absolute; z-index: 40; top: calc(100% + 6px); left: -8px;
-  display: flex; flex-direction: column; gap: 4px;
-  width: min(300px, 80vw); padding: var(--s3);
-  border: 1px solid var(--line); border-radius: var(--r-md);
-  background: var(--bg-raised, var(--bg-panel)); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  font-size: var(--fs-sm); font-weight: 400; line-height: 1.5; color: var(--text); text-align: left; white-space: normal;
-}
-.otr-info__title { font-size: var(--fs-sm); }
-.otr-info__next { color: var(--text-soft); }
 
 .otr-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s1); }
 .otr-steps { margin: 0 0 var(--s3); padding-left: 1.2em; font-size: var(--fs-sm); line-height: 1.6; }

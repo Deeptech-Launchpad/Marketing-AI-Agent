@@ -4,6 +4,8 @@ import { ArrowRight, Ban, CheckCircle2 } from 'lucide-react'
 import { ENGINE_BY_ID, PIPELINE, engineAccent, type EngineDef } from '../../lib/engines'
 import { useTheme } from '../../lib/theme'
 import { AgentMark, type AgentState } from '../agent/AgentMark'
+import { InfoTip } from '../ui/InfoTip'
+import { ENGINE_HELP } from '../../lib/engineHelp'
 import './shell.css'
 import './engine.css'
 
@@ -102,6 +104,7 @@ export function EnginePage({
             <div className="engine__titles">
               <div className="engine__titleline">
                 <h1 className="engine__title">{engine.title}</h1>
+                {ENGINE_HELP[engine.id] && <InfoTip help={ENGINE_HELP[engine.id]!} label={engine.title} />}
                 {PIPELINE.includes(engine) && (
                   <span className="engine__stage mono">Stage {engine.stage} of {PIPELINE.length}</span>
                 )}
