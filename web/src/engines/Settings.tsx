@@ -102,7 +102,7 @@ export function Settings() {
         </p>
       </header>
 
-      <Panel title="Profile" subtitle="Read from the Google account you signed in with">
+      <Panel title="Profile" subtitle="The account you signed in with">
         {principal ? (
           <div className="set__profile">
             <Avatar name={principal.name} email={principal.email} />
@@ -129,7 +129,8 @@ export function Settings() {
             upload control that silently discards the file would be worse than
             not offering one. The initials come from the account itself. */}
         <p className="note" style={{ marginTop: 'var(--s4)' }}>
-          <User size={12} aria-hidden="true" /> Your name and email come from the Google account you signed in with.
+          <User size={12} aria-hidden="true" /> Your name and email come from the account you created here. What you
+          can do follows the role you hold on this platform.
           Whether you are an administrator is set on the server, by email address — it is not something that can be
           changed from inside the platform.
         </p>

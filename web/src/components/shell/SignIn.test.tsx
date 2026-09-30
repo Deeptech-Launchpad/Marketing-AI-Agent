@@ -5,21 +5,15 @@ import { ThemeProvider } from '../../lib/theme'
 import { AuthProvider } from '../../lib/auth'
 import { SignIn } from './SignIn'
 
-// THE SIGN-IN SCREEN — THREE WAYS IN, ALL REACHABLE.
+// THE SIGN-IN SCREEN — TWO WAYS IN, BOTH REACHABLE.
 //
 // What matters here is that a person can actually get to each one, that
 // creating an account cannot skip the code, and that a refusal reaches the
-// screen in the server's own words rather than as "sign in failed". The Google
-// button itself is stood in for: it is Google's own iframe and there is nothing
-// of ours inside it to test.
-
-vi.mock('./GoogleButton', () => ({
-  GoogleButton: ({ onCredential }: { onCredential: (c: string) => void }) => (
-    <button type="button" onClick={() => onCredential('a-google-id-token')}>
-      Sign in with Google
-    </button>
-  ),
-}))
+// screen in the server's own words rather than as "sign in failed".
+//
+// There is deliberately no third-party sign-in on this screen: it was removed
+// until this platform has a domain, and the first test below is what keeps a
+// button for it from reappearing by accident.
 
 interface Call {
   url: string
@@ -31,8 +25,6 @@ let calls: Call[] = []
 const CAPABILITIES = {
   ready: true,
   reason: null,
-  googleClientId: 'test-client-id',
-  google: true,
   emailSignIn: true,
   mailConfigured: false,
   allowedDomains: ['altiusnxt.com'],
@@ -77,7 +69,6 @@ beforeEach(() => {
     if (path.includes('/auth/register/verify')) return json(SIGNED_IN, 201)
     if (path.includes('/auth/forgot/verify')) return json(SIGNED_IN)
     if (path.includes('/auth/login')) return json(SIGNED_IN)
-    if (path.includes('/auth/google')) return json(SIGNED_IN)
     if (path.endsWith('/me')) return json({ email: SIGNED_IN.email, name: SIGNED_IN.name, permissions: ['view', 'operate'], role: 'operator' })
     return json({ error: { code: 'not_found', message: `nothing routes ${path}` } }, 404)
   })
@@ -95,13 +86,16 @@ const render = () =>
 const sent = (fragment: string) => calls.find((c) => c.url.includes(fragment))
 
 describe('the sign-in screen', () => {
-  it('offers Google, a password, Create account and Forgot password together', async () => {
+  it('offers a password, Create account and Forgot password — and no third-party button', async () => {
     render()
-    expect(await screen.findByRole('button', { name: /sign in with google/i })).toBeInTheDocument()
-    expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument()
+    expect(await screen.findByLabelText(/^email$/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^create account$/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /forgot password/i })).toBeInTheDocument()
+
+    // Nothing offers a sign-in this server cannot perform.
+    expect(screen.queryByText(/google/i)).toBeNull()
+    for (const b of screen.getAllByRole('button')) expect(b).not.toHaveTextContent(/google/i)
   })
 
   it('says which addresses may have an account here', async () => {
@@ -120,13 +114,6 @@ describe('the sign-in screen', () => {
     // The token is kept, and the session is then re-read from the server rather
     // than assembled from the sign-in response.
     await waitFor(() => expect(sent('/me')).toBeTruthy())
-  })
-
-  it('hands the Google credential to the server and nowhere else', async () => {
-    render()
-    await userEvent.click(await screen.findByRole('button', { name: /sign in with google/i }))
-    await waitFor(() => expect(sent('/auth/google')).toBeTruthy())
-    expect(sent('/auth/google')!.body).toEqual({ credential: 'a-google-id-token' })
   })
 
   it('shows the server’s own words when a sign-in is refused', async () => {
@@ -150,11 +137,13 @@ describe('the sign-in screen', () => {
     expect(screen.queryByLabelText(/^password$/i)).toBeNull()
   })
 
-  it('still offers email sign-in when Google is not configured', async () => {
-    capabilities = { ...CAPABILITIES, google: false, googleClientId: null }
+  it('never calls a sign-in endpoint this server does not have', async () => {
     render()
-    expect(await screen.findByText(/google is not configured/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument()
+    await userEvent.type(await screen.findByLabelText(/^email$/i), 'newstarter@altiusnxt.com')
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'correct-horse-9')
+    await userEvent.click(screen.getByRole('button', { name: /^sign in$/i }))
+    await waitFor(() => expect(sent('/auth/login')).toBeTruthy())
+    expect(calls.every((c) => !c.url.includes('/auth/google'))).toBe(true)
   })
 })
 

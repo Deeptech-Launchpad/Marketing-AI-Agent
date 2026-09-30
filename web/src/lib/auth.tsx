@@ -4,18 +4,16 @@ import type { Permission, Principal } from './types'
 
 // WHO IS SIGNED IN, AND WHAT THEY MAY DO — TWO SEPARATE ANSWERS.
 //
-// Google proves who somebody is. What they may do is decided by the server on
-// every request, from the configured admin list, and arrives as the
-// permissions on the principal. Nothing here decides either one: the interface
-// asks who it is talking to and renders what that answer allows.
+// An email address and a password prove who somebody is. What they may do is
+// decided by the server on every request, from the configured admin list, and
+// arrives as the permissions on the principal. Nothing here decides either one:
+// the interface asks who it is talking to and renders what that answer allows.
 
 interface AuthValue {
   principal: Principal | null
   loading: boolean
   error: string | null
   capabilities: AuthCapabilities | null
-  /** A Google ID token from the browser, verified by the server. */
-  signInWithGoogle: (credential: string) => Promise<void>
   /** An email address and password, against an account created here. */
   signIn: (email: string, password: string) => Promise<void>
   /** Takes the session a completed sign-up or reset just returned. */
@@ -77,14 +75,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [load],
   )
 
-  const signInWithGoogle = useCallback(
-    async (credential: string) => {
-      setError(null)
-      await accept(await authApi.google(credential))
-    },
-    [accept],
-  )
-
   const signIn = useCallback(
     async (email: string, password: string) => {
       setError(null)
@@ -105,14 +95,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       capabilities,
-      signInWithGoogle,
       signIn,
       accept,
       signOut,
       can: (permission) => Boolean(principal?.permissions.includes(permission)),
       isAdmin: Boolean(principal?.permissions.includes('admin')),
     }),
-    [principal, loading, error, capabilities, signInWithGoogle, signIn, accept, signOut],
+    [principal, loading, error, capabilities, signIn, accept, signOut],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

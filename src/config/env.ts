@@ -687,9 +687,9 @@ const schema = z.object({
 
   // ── Signing in (2026-09-30) ─────────────────────────────────────────────
   //
-  // Google is the only way in. Identity is proved by Google and verified
-  // against Google's own keys; this platform stores no password, so there is
-  // none to leak, guess or reset.
+  // An account is created with an email address and a password, after a code
+  // sent to that address proves it. Nothing here needs a domain, a certificate
+  // or a third-party client, so this configuration is complete as it stands.
   //
   // Its own signing secret, deliberately NOT JWT_SECRET. Empty disables
   // sign-in entirely and the screen says so, rather than failing obscurely.
@@ -698,18 +698,12 @@ const schema = z.object({
   AUTH_SESSION_HOURS: z.coerce.number().int().min(1).max(720).default(12),
 
   /**
-   * Google sign-in. The OAuth 2.0 Client ID from Google Cloud Console
-   * (Credentials → OAuth client ID → Web application). Without it nobody can
-   * sign in at all, and the screen says exactly that.
-   */
-  GOOGLE_CLIENT_ID: z.string().default(''),
-
-  /**
-   * WHO MAY SIGN IN: work domains, comma separated — "altiusnxt.com".
+   * WHO MAY CREATE AN ACCOUNT: work domains, comma separated — "altiusnxt.com".
    *
-   * A Google account outside these domains is refused, unless it is named in
+   * An address outside these domains is refused, unless it is named in
    * AUTH_ADMIN_EMAILS below. EMPTY MEANS NOBODY EXCEPT THOSE ADMINS: this
-   * platform reads the whole CRM, so it is never open by default.
+   * platform reads the whole CRM, so it is never open by default. Widening this
+   * list is the one deliberate act that lets more people register.
    */
   AUTH_ALLOWED_EMAIL_DOMAINS: z.string().default('altiusnxt.com'),
 

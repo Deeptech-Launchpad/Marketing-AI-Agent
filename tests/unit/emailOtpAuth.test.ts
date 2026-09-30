@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 //   · it works once — spent on success, and spent by asking for a new one;
 //   · guessing is limited, and running out of guesses spends the code;
 //   · no account exists until the code has been entered correctly;
-//   · this path obeys the same allow-list as Google, so it is not a way round;
+//   · the configured allow-list decides who may register at all;
 //   · a wrong password and a missing account answer identically;
 //   · a reset says the same thing whether or not the address has an account.
 
@@ -82,7 +82,6 @@ const env: Record<string, any> = {
   AUTH_SESSION_HOURS: 12,
   AUTH_ALLOWED_EMAIL_DOMAINS: 'altiusnxt.com',
   AUTH_ADMIN_EMAILS: ADMINS,
-  GOOGLE_CLIENT_ID: 'test-client-id',
   AUTH_OTP_TTL_MINUTES: 10,
   AUTH_OTP_MAX_ATTEMPTS: 5,
   AUTH_DEV_RETURN_OTP: false,
@@ -248,7 +247,7 @@ describe('creating an account', () => {
     expect(db.appUser).toHaveLength(0)
   })
 
-  it('holds this path to the same allow-list as Google', async () => {
+  it('refuses an address outside the configured domains, at both steps', async () => {
     await expect(auth.startRegistration({ email: 'someone@gmail.com' })).rejects.toThrow()
     // Not even with a code: the list is checked again on the second step.
     await expect(
@@ -273,13 +272,15 @@ describe('creating an account', () => {
     await expect(auth.startRegistration({ email: PERSON })).rejects.toThrow(/already exists/i)
   })
 
-  it('adds a password to an account that arrived through Google, not a second account', async () => {
+  it('gives a password to an existing account without one, rather than a second account', async () => {
+    // An account with no password cannot arise from the current sign-in path.
+    // It is still what an imported or part-created row looks like, and the
+    // answer must be "this is the same person", not a unique-index collision.
     db.appUser.push({
-      id: 'u-google',
+      id: 'u-existing',
       tenantId: 't1',
       email: PERSON,
-      googleSub: 'sub-1',
-      name: 'From Google',
+      name: 'Already Known',
       passwordHash: null,
       emailVerified: true,
       status: 'active',
@@ -289,7 +290,7 @@ describe('creating an account', () => {
     await auth.completeRegistration({ email: PERSON, code, password: GOOD_PASSWORD })
 
     expect(db.appUser).toHaveLength(1)
-    expect(db.appUser[0]).toMatchObject({ id: 'u-google', googleSub: 'sub-1', signInCount: 4 })
+    expect(db.appUser[0]).toMatchObject({ id: 'u-existing', signInCount: 4 })
     expect(db.appUser[0]!.passwordHash).toMatch(/^\$2[aby]\$/)
     expect(audited.map((a) => a.action)).toContain('auth.password_added')
   })
@@ -333,13 +334,12 @@ describe('signing in with a password', () => {
     expect(db.appUser[0]!.signInCount).toBe(2)
   })
 
-  it('says the same thing for a wrong password, a missing account and a Google-only account', async () => {
+  it('says the same thing for a wrong password, a missing account and one with no password', async () => {
     await makeAccount()
     db.appUser.push({
-      id: 'u-g',
+      id: 'u-nopass',
       tenantId: 't1',
-      email: 'googleonly@altiusnxt.com',
-      googleSub: 'sub-2',
+      email: 'nopassword@altiusnxt.com',
       passwordHash: null,
       status: 'active',
     })
@@ -348,7 +348,7 @@ describe('signing in with a password', () => {
     for (const attempt of [
       { email: PERSON, password: 'wrong-password-1' },
       { email: 'nobody@altiusnxt.com', password: GOOD_PASSWORD },
-      { email: 'googleonly@altiusnxt.com', password: GOOD_PASSWORD },
+      { email: 'nopassword@altiusnxt.com', password: GOOD_PASSWORD },
     ]) {
       await auth.signInWithPassword(attempt).then(
         () => expect.unreachable('that sign-in should have been refused'),
@@ -456,10 +456,9 @@ describe('what the sign-in screen is told', () => {
     expect(JSON.stringify(caps)).not.toContain('dtlpmanikandan@gmail.com')
   })
 
-  it('still lets people sign in when Google is not configured', () => {
-    env.GOOGLE_CLIENT_ID = ''
+  it('offers no third-party sign-in, because there is none to offer', () => {
     const caps = auth.authCapabilities()
-    expect(caps).toMatchObject({ ready: true, google: false, googleClientId: null, emailSignIn: true })
-    env.GOOGLE_CLIENT_ID = 'test-client-id'
+    expect(caps).toMatchObject({ ready: true, emailSignIn: true })
+    expect(JSON.stringify(caps).toLowerCase()).not.toContain('google')
   })
 })

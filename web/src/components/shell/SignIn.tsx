@@ -3,16 +3,20 @@ import { ApiError, authApi, type CodeSent } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { AgentMark } from '../agent/AgentMark'
 import { Logo } from './Logo'
-import { GoogleButton } from './GoogleButton'
 import { PIPELINE, numberWord } from '../../lib/engines'
 import './signin.css'
 
-// THE FRONT DOOR — THREE WAYS IN, ALL ON ONE SCREEN.
+// THE FRONT DOOR — AN ACCOUNT ON THIS PLATFORM, AND NOTHING ELSE.
 //
-// Sign in with Google, sign in with an email address and password, or create an
-// account. Creating one and recovering one work the same way: the address is
-// proved with a code sent to it before any password is accepted, so an account
-// can only ever be made or taken back by somebody who reads that inbox.
+// Sign in with an email address and a password, or create an account. Creating
+// one and recovering one work the same way: the address is proved with a code
+// sent to it before any password is accepted, so an account can only ever be
+// made or taken back by somebody who reads that inbox.
+//
+// Signing in with Google was removed on 2026-09-30. It cannot be configured
+// without a registered domain over HTTPS — Google refuses a bare IP address as
+// an origin — and a button that cannot work is worse than no button. When there
+// is a domain it comes back alongside what is here, not instead of it.
 //
 // This screen holds no rules of its own. It does not decide who may sign in,
 // which addresses are allowed, or whether a code is still valid — the server
@@ -27,7 +31,7 @@ type Step = 'email' | 'code'
 const PASSWORD_RULE = 'At least 10 characters, including a letter and a number.'
 
 export function SignIn() {
-  const { signInWithGoogle, signIn, accept, capabilities, error: sessionError } = useAuth()
+  const { signIn, accept, capabilities, error: sessionError } = useAuth()
 
   const [view, setView] = useState<View>('signin')
   const [step, setStep] = useState<Step>('email')
@@ -123,22 +127,6 @@ export function SignIn() {
           </p>
         ) : view === 'signin' ? (
           <>
-            <div className="signin__googlewrap">
-              {capabilities?.googleClientId ? (
-                <GoogleButton
-                  clientId={capabilities.googleClientId}
-                  disabled={busy}
-                  onCredential={(c) => void run(() => signInWithGoogle(c))}
-                />
-              ) : (
-                <p className="signin__note" role="status">
-                  Signing in with Google is not configured on this server yet. Use your email address and password.
-                </p>
-              )}
-            </div>
-
-            <div className="signin__or">or</div>
-
             <form
               className="signin__form"
               onSubmit={(e) => {
@@ -250,9 +238,7 @@ export function SignIn() {
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               required
             />
-            <p className="signin__hint">
-              It works once and expires {minutes} minutes after it was sent.
-            </p>
+            <p className="signin__hint">It works once and expires {minutes} minutes after it was sent.</p>
 
             {view === 'register' && (
               <>

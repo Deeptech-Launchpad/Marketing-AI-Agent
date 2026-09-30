@@ -63,10 +63,9 @@ describe('the registered users panel', () => {
     expect(screen.getByText(/3 times/i)).toBeInTheDocument()
   })
 
-  it('says both ways in when an account has both', async () => {
-    accounts = [account({ signInMethods: ['google', 'password'] })]
+  it('says how they sign in', async () => {
     render()
-    expect(await screen.findByText(/google and password/i)).toBeInTheDocument()
+    expect(await screen.findByText(/^Password ·/)).toBeInTheDocument()
   })
 
   it('does not pretend somebody has signed in when they have not', async () => {

@@ -8,11 +8,10 @@ import { ForbiddenError, UnauthorizedError } from '../../platform/errors.js'
 
 // WHO IS CALLING, AND WHAT THEY MAY DO (2026-09-30).
 //
-// One kind of token: a session token this platform issued itself, after either
-// Google or a verified email address and password proved who somebody is. How
-// they signed in makes no difference here — there is exactly one thing to
-// verify, signed with this platform's own secret and carrying its own issuer,
-// so a token minted anywhere else cannot be presented.
+// One kind of token: a session token this platform issued itself, after a
+// verified email address and password proved who somebody is. There is exactly
+// one thing to verify, signed with this platform's own secret and carrying its
+// own issuer, so a token minted anywhere else cannot be presented.
 //
 // THE ADMIN LIST IS CHECKED ON EVERY REQUEST, NOT JUST AT SIGN-IN.
 //

@@ -2707,12 +2707,10 @@ model CrmSyncOutbox {
   @@index([externalKey])
 }
 
-// ── Who signs in, and what Google told us about them (2026-09-30) ─────────
+// ── Who signs in (2026-09-30) ──────────────────────────────────────────────
 //
-// Google is the only way in. There is no password here to steal, reset or
-// leak: identity is proved by Google and verified against Google's own keys
-// (src/auth/google.ts), and what is stored below is only what Google returned
-// about the person who signed in.
+// One account per person, created with an email address and a password once a
+// code sent to that address has proved they read it.
 //
 // Being signed in is still not the same as being allowed to do things. The
 // role is decided at every sign-in from the configured admin list, and written
@@ -2722,20 +2720,22 @@ model AppUser {
   id       String @id
   tenantId String
 
-  // Google's stable id, once this person has signed in with Google. Null for
-  // an account created with an email address and a password.
+  // RESERVED. Signing in with Google was removed until this platform has a
+  // registered domain, because Google will not accept a bare IP as an origin.
+  // Nothing writes this column today; it is kept, empty, so bringing that
+  // sign-in back needs no migration and no change to existing accounts.
   googleSub String?
   email     String
-  // Proven: by Google, or by entering a code sent to that address. An account
-  // is never created without one of the two, so this is always true in
-  // practice — it is kept explicit so the guarantee is visible.
+  // Proven by entering a code sent to that address. An account is never
+  // created without doing so, so this is always true in practice — it is kept
+  // explicit so the guarantee is visible.
   emailVerified Boolean @default(false)
 
-  // A bcrypt hash, for an account that signs in with a password. Null for a
-  // Google-only account. The password itself is never stored anywhere.
+  // A bcrypt hash. The password itself is never stored anywhere.
   passwordHash String?
 
-  // What Google returned about them, stored as given.
+  // Their own name, as they gave it. givenName, familyName, pictureUrl and
+  // locale are only filled by a third-party sign-in, so they are empty today.
   name       String?
   givenName  String?
   familyName String?

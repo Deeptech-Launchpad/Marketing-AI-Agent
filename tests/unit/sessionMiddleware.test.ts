@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // the load-bearing rule is the last one: admin is granted only when the
 // address is on the configured list, checked on EVERY request. A stored role
 // cannot hand somebody admin on its own, whoever wrote it.
+//
+// How the person signed in is of no interest here. The middleware verifies one
+// kind of token, whatever produced it.
 
 type Row = Record<string, any>
 const db: Record<string, Row[]> = { tenant: [], appUser: [], tenantMember: [] }
@@ -31,7 +34,6 @@ const env: Record<string, any> = {
   AUTH_SESSION_HOURS: 12,
   AUTH_ALLOWED_EMAIL_DOMAINS: 'altiusnxt.com',
   AUTH_ADMIN_EMAILS: 'manoj@altiusnxt.com,dtlpmanikandan@gmail.com',
-  GOOGLE_CLIENT_ID: 'test-client-id',
 }
 vi.mock('../../src/config/env.js', () => ({ env }))
 
@@ -163,7 +165,9 @@ describe('tokens that must not be accepted', () => {
     expect((await run(tokenFor('u1', 'someone@altiusnxt.com'))).error).toMatch(/disabled/i)
   })
 
-  it('no longer accepts an NXT Sales token, now that path is gone', async () => {
+  it('does not accept an NXT Sales token — that path was removed', async () => {
+    // The old implementation trusted a token signed with NXT Sales' secret.
+    // Nothing here does any more, and this is the test that keeps it that way.
     const nxtSales = jwt.sign({ id: 'crm-1', email: 'someone@altiusnxt.com', name: 'X' }, 'the-nxt-sales-secret')
     expect((await run(nxtSales)).error).toMatch(/invalid or expired/i)
   })

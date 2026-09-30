@@ -31,10 +31,10 @@ export async function hashPassword(password: string): Promise<string> {
 /**
  * Checks a password against a stored hash.
  *
- * A null hash means the account has no password — it was created by signing in
- * with Google. That answers false rather than throwing, so the caller says the
- * same thing it says for a wrong password and nothing about the account is
- * revealed by which error came back.
+ * A null hash means the account has no password to check against. That answers
+ * false rather than throwing, so the caller says the same thing it says for a
+ * wrong password and nothing about the account is revealed by which error came
+ * back.
  */
 export async function verifyPassword(password: string, hash: string | null): Promise<boolean> {
   if (!hash) return false

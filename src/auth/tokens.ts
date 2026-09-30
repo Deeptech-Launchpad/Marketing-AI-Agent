@@ -35,9 +35,8 @@ export function localAuthUnavailableReason(): string | null {
   if (env.AUTH_JWT_SECRET.trim().length < 16) {
     return 'AUTH_JWT_SECRET is too short to be a signing secret. Use at least 16 characters.'
   }
-  // Google not being configured no longer stops sign-in: an account can be
-  // created with an email address and a password. It only hides the Google
-  // button, and the Google endpoint says so on its own.
+  // Nothing else is required. An account is created with an email address and
+  // a password, so there is no third-party configuration that could be missing.
   return null
 }
 

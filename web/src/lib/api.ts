@@ -295,17 +295,15 @@ export const api = {
 
 // ── Signing in (2026-09-30) ────────────────────────────────────────────────
 //
-// Three ways to arrive: Google, an email and password, or a one-time code that
-// proves an address before an account exists for it. These are the only calls
-// made before there is a token, and each reads the server's own sentence on
-// failure — nothing here paraphrases a refusal.
+// Two ways to arrive: an email and password, or a one-time code that proves an
+// address before an account exists for it. These are the only calls made before
+// there is a token, and each reads the server's own sentence on failure —
+// nothing here paraphrases a refusal.
 
 export interface AuthCapabilities {
   /** False when the server cannot accept a sign-in at all, with the reason. */
   ready: boolean
   reason: string | null
-  googleClientId: string | null
-  google: boolean
   emailSignIn: boolean
   mailConfigured: boolean
   allowedDomains: string[]
@@ -365,7 +363,6 @@ export async function fetchAuthCapabilities(): Promise<AuthCapabilities | null> 
 }
 
 export const authApi = {
-  google: (credential: string) => authPost<SignedIn>('/google', { credential }),
   login: (email: string, password: string) => authPost<SignedIn>('/login', { email, password }),
   registerStart: (email: string) => authPost<CodeSent>('/register/start', { email }),
   registerVerify: (email: string, code: string, password: string, name?: string) =>

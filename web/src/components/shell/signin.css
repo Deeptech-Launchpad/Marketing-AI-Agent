@@ -80,7 +80,7 @@
   font-size: var(--fs-sm);
 }
 
-/* ── Create an account, forgot password, Google (2026-09-30) ───────────── */
+/* ── Create an account, forgot password (2026-09-30) ───────────────────── */
 
 .signin__hint {
   margin: -2px 0 var(--s2);
@@ -101,25 +101,6 @@
   color: var(--text-soft);
 }
 .signin__notice { border-color: var(--info-line); background: var(--info-bg); color: var(--text); }
-
-.signin__or {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  margin: var(--s3) 0;
-  color: var(--text-soft);
-  font-size: var(--fs-xs);
-}
-.signin__or::before,
-.signin__or::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--line);
-}
-
-.signin__google { display: flex; justify-content: center; min-height: 44px; }
-.signin__google.is-disabled { opacity: 0.6; pointer-events: none; }
 
 .signin__links {
   display: flex;
@@ -153,8 +134,6 @@
 .signin__pendingtitle { margin: 0 0 var(--s2); font-size: var(--fs-h3); color: var(--text); }
 .signin__pendingtext { margin: 0 0 var(--s2); font-size: var(--fs-sm); line-height: 1.55; color: var(--text-soft); }
 .signin__pendingtext:last-child { margin-bottom: 0; }
-
-.signin__googlewrap { display: flex; justify-content: center; margin: var(--s4) 0 var(--s3); min-height: 44px; }
 
 /* ── The one-time code (2026-09-30) ────────────────────────────────────── */
 

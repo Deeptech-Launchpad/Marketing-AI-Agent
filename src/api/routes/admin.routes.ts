@@ -187,9 +187,10 @@ adminRoutes.get(
         emailVerified: a.emailVerified,
         pictureUrl: a.pictureUrl,
         linkedToCrm: Boolean(a.crmUserId),
-        // How this person can get in. Both are possible at once: an address
-        // that signed in with Google and later set a password has the same one
-        // account, not two.
+        // How this person can get in. googleSub is always null for now —
+        // signing in with Google was removed until there is a domain for it —
+        // so in practice this reads ['password'], or nothing at all for an
+        // invited address that has not registered yet.
         signInMethods: [...(a.googleSub ? ['google'] : []), ...(a.passwordHash ? ['password'] : [])],
         // What the list says they are, which is what they actually get.
         role: isAdminEmail(a.email) ? 'admin' : (member?.role ?? 'operator'),

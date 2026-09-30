@@ -28,7 +28,7 @@ export function domainOf(email: string): string {
   return normalizeEmail(email).split('@')[1] ?? ''
 }
 
-/** The work domains whose Google accounts may sign in. */
+/** The work domains whose addresses may have an account here. */
 export function allowedDomains(): string[] {
   return split(env.AUTH_ALLOWED_EMAIL_DOMAINS).map((d) => d.replace(/^@/, '')).filter((d) => d.includes('.'))
 }
@@ -43,7 +43,7 @@ export function isAdminEmail(email: string): boolean {
 }
 
 /**
- * Why this Google account may not sign in, or null when it may.
+ * Why this address may not sign in, or null when it may.
  *
  * An address on the admin list is always allowed, whatever its domain — that
  * is how a named person on a personal address gets in without opening the
@@ -52,7 +52,7 @@ export function isAdminEmail(email: string): boolean {
  */
 export function signInProblem(email: string): string | null {
   const address = normalizeEmail(email)
-  if (!isEmailShaped(address)) return 'That Google account did not provide a usable email address.'
+  if (!isEmailShaped(address)) return 'That does not look like an email address.'
   if (isAdminEmail(address)) return null
 
   const domains = allowedDomains()

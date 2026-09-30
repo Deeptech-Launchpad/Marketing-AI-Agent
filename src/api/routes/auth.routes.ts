@@ -5,7 +5,6 @@ import {
   authCapabilities,
   completePasswordReset,
   completeRegistration,
-  signInWithGoogle,
   signInWithPassword,
   startPasswordReset,
   startRegistration,
@@ -15,9 +14,9 @@ import { validateBody } from '../middleware/validate.js'
 
 // SIGNING IN — THE ONLY UNAUTHENTICATED ROUTES UNDER /api/v1.
 //
-// Three ways to arrive: a Google token, an email and password, or a one-time
-// code that proves an address before an account exists for it. Everything else
-// stays behind the authenticate middleware.
+// Two ways to arrive: an email and password, or a one-time code that proves an
+// address before an account exists for it. Everything else stays behind the
+// authenticate middleware.
 //
 // These are the front door of a platform that can read the whole CRM, so they
 // are rate-limited harder than the rest of the service — separately for
@@ -52,16 +51,6 @@ authRoutes.get(
   '/capabilities',
   asyncHandler(async (_req, res) => {
     res.json(authCapabilities())
-  }),
-)
-
-authRoutes.post(
-  '/google',
-  guessLimit,
-  validateBody(z.object({ credential: z.string().min(10).max(8000) }).strict()),
-  asyncHandler(async (req, res) => {
-    const body = req.body as { credential: string }
-    res.json(await signInWithGoogle({ credential: body.credential, requestId: req.requestId ?? null }))
   }),
 )
 

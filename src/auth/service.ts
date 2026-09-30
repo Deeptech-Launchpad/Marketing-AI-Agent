@@ -5,29 +5,30 @@ import { newId, prisma } from '../platform/db.js'
 import { BadRequestError, ConflictError, ForbiddenError, UnauthorizedError } from '../platform/errors.js'
 import { logger } from '../platform/logger.js'
 import { adminEmails, allowedDomains, isAdminEmail, isEmailShaped, normalizeEmail, roleFor, signInProblem } from './accessList.js'
-import { verifyGoogleIdToken } from './google.js'
 import { mailConfigured, sendVerificationCode } from './mailer.js'
 import { issueCode, useCode, type OtpPurpose } from './otp.js'
 import { hashPassword, passwordProblem, verifyPassword } from './passwords.js'
 import { issueSessionToken, localAuthUnavailableReason } from './tokens.js'
 
-// TWO WAYS TO PROVE WHO YOU ARE, ONE WAY TO BE ALLOWED IN.
+// ONE WAY TO PROVE WHO YOU ARE, ONE WAY TO BE ALLOWED IN.
 //
-//   GOOGLE      hands over an ID token, verified against Google's own keys.
-//   EMAIL       creates an account with a password, after entering a code
-//               sent to that address — which is what proves the address is
-//               theirs, since anyone can type one.
+// An account is created with an email address and a password, after entering a
+// code sent to that address — which is what proves the address is theirs, since
+// anyone can type one. That is the whole of it: this platform needs no domain,
+// no OAuth client and no third party to let somebody in.
 //
-// Both end in the same place, and these rules hold for both:
+// Signing in with Google was removed on 2026-09-30 because it cannot work
+// without a registered domain over HTTPS. The account model still carries a
+// googleSub column for when it comes back, and nothing here writes it.
+//
+// Three rules hold throughout:
 //
 //   1. CONFIGURATION DECIDES WHETHER, AND AS WHAT. Whether an address may be
 //      here at all, and whether it is an admin, are read from the configured
-//      lists on EVERY sign-in — never from a stored row. The email path is
-//      held to exactly the same list as the Google one, so it cannot be used
-//      to get in around it.
+//      lists on EVERY sign-in — never from a stored row.
 //
-//   2. A FAILED SIGN-IN NEVER SAYS WHY. Wrong password, no such account, a
-//      Google-only account asked for a password — all answer identically.
+//   2. A FAILED SIGN-IN NEVER SAYS WHY. Wrong password, no such account, an
+//      account with no password at all — all answer identically.
 //
 //   3. NOTHING IS WRITTEN UNTIL THE ADDRESS IS PROVEN. A sign-up creates no
 //      account until the code is entered correctly.
@@ -139,8 +140,8 @@ export async function startRegistration(input: { email: string; ip?: string | nu
   assertReady()
   const email = normalizeEmail(input.email)
 
-  // The same list that governs Google sign-in, so this path cannot be used to
-  // get in around it.
+  // Who may be here at all, checked before a single row is written or a single
+  // email is sent.
   const refused = signInProblem(email)
   if (refused) throw new ForbiddenError(refused)
 
@@ -181,8 +182,8 @@ export async function completeRegistration(input: {
   const id = existing?.id ?? newId()
   const name = input.name?.trim() || existing?.name || null
 
-  // An address that already signed in with Google gains a password rather
-  // than a second account: same person, two ways in.
+  // Upsert rather than create: an address that somehow already has an account
+  // without a password gains one, rather than colliding on the unique index.
   const user = await prisma.appUser.upsert({
     where: { id },
     create: {
@@ -235,7 +236,7 @@ export async function signInWithPassword(input: { email: string; password: strin
   const user = await prisma.appUser.findUnique({ where: { tenantId_email: { tenantId: tid, email } } })
 
   // The same answer whether the account is missing, has no password, or the
-  // password is wrong.
+  // password is simply wrong.
   if (!user || !(await verifyPassword(input.password, user.passwordHash))) {
     throw new UnauthorizedError(SIGN_IN_REFUSED)
   }
@@ -323,77 +324,12 @@ export async function completePasswordReset(input: {
   return session(updated, role)
 }
 
-// ── Signing in with Google ─────────────────────────────────────────────────
-
-export async function signInWithGoogle(input: { credential: string; requestId?: string | null }): Promise<SignedIn> {
-  assertReady()
-  if (!env.GOOGLE_CLIENT_ID.trim()) {
-    throw new ConflictError('Google sign-in is not configured on this server (GOOGLE_CLIENT_ID is not set).')
-  }
-  const identity = await verifyGoogleIdToken(input.credential)
-
-  const refused = signInProblem(identity.email)
-  if (refused) throw new ForbiddenError(refused)
-
-  const tid = await tenantId()
-  // Matched on Google's own id first, then on the email, so a person whose
-  // address changed keeps their account rather than acquiring a second one.
-  const existing =
-    (await prisma.appUser.findFirst({ where: { tenantId: tid, googleSub: identity.sub } })) ??
-    (await prisma.appUser.findUnique({ where: { tenantId_email: { tenantId: tid, email: identity.email } } }))
-
-  if (existing && existing.status !== 'active') {
-    throw new UnauthorizedError('That account has been disabled. Ask an administrator.')
-  }
-
-  const crmUserId = existing?.crmUserId ?? (await findCrmUserId(identity.email))
-  const id = existing?.id ?? newId()
-
-  // Everything stored about the person comes from the verified token.
-  const profile = {
-    googleSub: identity.sub,
-    email: identity.email,
-    emailVerified: true,
-    name: identity.name ?? existing?.name ?? null,
-    givenName: identity.givenName,
-    familyName: identity.familyName,
-    pictureUrl: identity.pictureUrl,
-    locale: identity.locale,
-    crmUserId,
-    lastLoginAt: new Date(),
-  }
-
-  const user = await prisma.appUser.upsert({
-    where: { id },
-    create: { id, tenantId: tid, status: 'active', signInCount: 1, ...profile },
-    update: { ...profile, signInCount: { increment: 1 } },
-  })
-
-  const role = await applyRole(tid, identity.email, user.name, crmUserId)
-  if (!existing) {
-    await audit({
-      tenantId: tid,
-      actorType: 'user',
-      actorCrmUserId: crmUserId,
-      action: 'auth.account_created',
-      resourceType: 'AppUser',
-      resourceId: id,
-      dataClass: 'customer_pii',
-      summary: `First sign-in with Google: ${identity.email} (${role})`,
-      requestId: input.requestId ?? null,
-    })
-  }
-  return session(user, role)
-}
-
 /** What the sign-in screen needs to know before it draws itself. */
 export function authCapabilities() {
   const reason = localAuthUnavailableReason()
   return {
     ready: !reason,
     reason,
-    googleClientId: env.GOOGLE_CLIENT_ID.trim() || null,
-    google: Boolean(env.GOOGLE_CLIENT_ID.trim()),
     /** Creating an account and recovering one both need a code by email. */
     emailSignIn: true,
     mailConfigured: mailConfigured(),

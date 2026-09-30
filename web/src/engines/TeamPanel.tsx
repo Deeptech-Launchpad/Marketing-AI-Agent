@@ -10,8 +10,8 @@ import { ErrorState } from '../components/ui/states'
 // WHO HAS AN ACCOUNT HERE, AND WHAT THEY HOLD.
 //
 // This is the record of every registered user: the address, the name, whether
-// that address was ever proved, how they get in (Google, a password, or both),
-// whether the account is active, and when they were last here.
+// that address was ever proved, whether the account is active, and when they
+// were last here.
 //
 // Two different things decide access, and the panel is arranged to make that
 // obvious rather than to hide it:
@@ -23,9 +23,9 @@ import { ErrorState } from '../components/ui/states'
 //
 //   EVERYTHING ELSE is an ordinary role, and can be adjusted here.
 //
-// Anyone who signs in with a work Google account, or creates an account with a
-// verified email address, becomes an ordinary user automatically — so this is a
-// record of who has been in rather than a queue of people waiting to be let in.
+// Anyone who creates an account with a verified work email address becomes an
+// ordinary user automatically — so this is a record of who has been in rather
+// than a queue of people waiting to be let in.
 //
 // Disabling is the one control here that stops somebody getting in at all. It
 // is enforced by the server on every request, not just at sign-in, so an open
@@ -37,7 +37,11 @@ interface Account {
   name: string | null
   status: string
   emailVerified: boolean
-  /** 'google', 'password', or both. Empty when no account exists yet. */
+  /**
+   * How they get in — 'password' today. Empty when a role was granted to an
+   * address that has not registered. 'google' is still read from the server in
+   * case that sign-in returns; nothing produces it at the moment.
+   */
   signInMethods: string[]
   pictureUrl: string | null
   linkedToCrm: boolean
@@ -225,8 +229,8 @@ export function TeamPanel() {
           <div className="team__block">
             <p className="eyebrow">Everyone else ({others.length})</p>
             <p className="note">
-              Anyone who signs in with a work Google account, or creates an account with a verified work address, starts
-              as an operator: they can run the engines and prepare drafts, but cannot approve or send.
+              Anyone who creates an account with a verified work email address starts as an operator: they can run the
+              engines and prepare drafts, but cannot approve or send.
             </p>
             {others.length === 0 ? (
               <Unset what="Nobody else has an account yet" />
