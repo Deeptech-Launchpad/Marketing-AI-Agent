@@ -225,8 +225,8 @@ export function Outreach() {
               }
             >
               <p className="note">
-                Nothing is sent without approval. After you approve an email, send it from your own mail program (Copy email or Open in mail
-                app), then click Mark as sent — that starts the follow-up timer.
+                Nothing is sent without approval. After you approve an email, click Open in Gmail — the address, subject and text are filled
+                in for you — send it from your own account, then click Mark as sent, which starts the follow-up timer.
               </p>
               <p className="note">Test runs send only to the internal test inbox. They never reach a customer and never count as contact.</p>
             </Panel>
