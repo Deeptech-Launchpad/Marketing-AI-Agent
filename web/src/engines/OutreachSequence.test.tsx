@@ -176,6 +176,80 @@ describe('reviewing a draft', () => {
   })
 })
 
+describe('who the email goes to', () => {
+  // Sales can always change this. The platform fills it in when it can — the
+  // decision maker's own address, or a verified company mailbox — but often it
+  // cannot, and Sales may simply know better. Before this was editable the only
+  // way to correct an address was to give up on the draft.
+  const box = (dialog: HTMLElement) => within(dialog).getByLabelText(/recipient email address/i)
+
+  it('shows the address in an editable box, even when one was already found', async () => {
+    stub(view(draft()))
+    render(<Outreach />)
+    const dialog = await openReview()
+    expect(box(dialog)).toHaveValue('jane@acme.test')
+    expect(within(dialog).getByText(/from Decision Makers/i)).toBeInTheDocument()
+  })
+
+  it('saves a replacement address through the inputs endpoint, and nothing else with it', async () => {
+    stub(view(draft()))
+    render(<Outreach />)
+    const dialog = await openReview()
+    await userEvent.clear(box(dialog))
+    await userEvent.type(box(dialog), 'purchasing@acme.test')
+    await userEvent.click(within(dialog).getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/sequence/actions/a1/inputs'))).toBe(true))
+    // Only the address: entering it must not resubmit the SKUs or the report figure.
+    expect(posts().find((c) => c.url.endsWith('/inputs'))!.body).toEqual({ recipientEmail: 'purchasing@acme.test' })
+  })
+
+  it('will not save until the address has actually changed', async () => {
+    stub(view(draft()))
+    render(<Outreach />)
+    const dialog = await openReview()
+    expect(within(dialog).getByRole('button', { name: /^save$/i })).toBeDisabled()
+  })
+
+  it('offers the box, not a dead end, when nothing was found automatically', async () => {
+    stub(view(draft({ recipient: null, recipientSource: null })))
+    render(<Outreach />)
+    const dialog = await openReview()
+    expect(box(dialog)).toHaveValue('')
+    expect(within(dialog).getByText(/paste the address you want this to go to/i)).toBeInTheDocument()
+  })
+
+  it('stays editable after approval, since an approval can be corrected', async () => {
+    stub(
+      view(draft({ status: 'ready_to_send', gates: gate(true), approvedAt: '2026-09-25T11:00:00.000Z' }), {
+        sequence: {
+          phase: 'initial',
+          initialSentAt: null,
+          next: { stageKey: 'initial', text: 'Send it, then mark it sent.', window: null, overdue: false },
+          reminders: [],
+          stages: [
+            { stageKey: 'initial', label: 'Initial email', pdfRef: '1', track: 'initial', status: 'approved', window: null, reason: null, canPrepare: false },
+          ],
+        },
+      }),
+    )
+    render(<Outreach />)
+    const [open] = await screen.findAllByRole('button', { name: /open email/i })
+    await userEvent.click(open!)
+    const dialog = await screen.findByRole('dialog')
+    expect(box(dialog)).toHaveValue('jane@acme.test')
+  })
+
+  it('is read-only for someone who cannot operate', async () => {
+    perms.value = ['view']
+    stub(view(draft()))
+    render(<Outreach />)
+    const dialog = await openReview()
+    expect(within(dialog).queryByLabelText(/recipient email address/i)).toBeNull()
+    expect(within(dialog).getByText(/jane@acme\.test/)).toBeInTheDocument()
+  })
+})
+
 describe('an approved email is sent by a person', () => {
   const approved = () => view(draft({ status: 'ready_to_send', gates: gate(true), approvedAt: '2026-09-25T11:00:00.000Z' }), {
     sequence: {

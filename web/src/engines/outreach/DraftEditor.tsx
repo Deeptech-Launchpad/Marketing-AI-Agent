@@ -134,8 +134,24 @@ export function DraftEditor({
     }
   }
 
+  /** Saves just the address, so it can be changed without touching anything else. */
+  const saveRecipient = () =>
+    call.run('recipient', () => post(`/actions/${id}/inputs`, { recipientEmail: recipient.trim() || null }))
+
+  /** Where the address on record came from, in words. */
+  const recipientSourceNote =
+    draft.recipientSource === 'sales_entered'
+      ? 'entered by Sales'
+      : draft.recipientSource === 'company_mailbox'
+        ? `company mailbox — ${view.facts.decisionMaker?.fullName ?? 'the decision maker'} has no direct email; from ${
+            view.facts.decisionMaker?.companyContactEmail?.sourceLabel ?? 'a verified public source'
+          }`
+        : 'from Decision Makers'
+
   const attested = (key: string) => draft.attestations.find((a) => a.key === key) ?? null
-  const needsValues = draft.requiredInputs.length > 0 || unresolved.includes('product') || unresolved.includes('productCategory') || !draft.recipient
+  // The recipient is no longer counted here: it has its own field and its own
+  // Save button up beside "Goes to", where somebody looking for it will look.
+  const needsValues = draft.requiredInputs.length > 0 || unresolved.includes('product') || unresolved.includes('productCategory')
 
   return (
     <Drawer
@@ -167,27 +183,57 @@ export function DraftEditor({
             label="Decision maker"
             value={draft.contactName ? `${draft.contactName}${draft.contactTitle ? ` · ${draft.contactTitle}` : ''}` : <Unset />}
           />
+          {/*
+            WHERE THIS EMAIL GOES — ALWAYS SALES'S TO DECIDE.
+
+            The platform fills this in when it can: the decision maker's own
+            address, or a verified company mailbox when they have none. But it
+            often cannot, and Sales may simply know better — so the address is
+            editable here rather than fixed, including after the platform has
+            filled it and after the draft has been approved.
+
+            Changing it sends an approved draft back for re-approval, because
+            an approval is an approval to write to a particular person.
+          */}
           <Field
             label="Goes to"
             value={
-              draft.recipient ? (
-                <span>
-                  <InfoTip topic="recipient" />{' '}
-                  {draft.recipient}{' '}
-                  <span className="cell-dim">
-                    (
-                    {draft.recipientSource === 'sales_entered'
-                      ? 'entered by Sales'
-                      : draft.recipientSource === 'company_mailbox'
-                        ? `company mailbox — ${view.facts.decisionMaker?.fullName ?? 'the decision maker'} has no direct email; from ${
-                            view.facts.decisionMaker?.companyContactEmail?.sourceLabel ?? 'a verified public source'
-                          }`
-                        : 'from Decision Makers'}
-                    )
+              editable ? (
+                <span className="otr-goesto">
+                  <span className="otr-goesto__row">
+                    <input
+                      className="otr-input otr-goesto__input"
+                      type="email"
+                      value={recipient}
+                      placeholder="name@company.com"
+                      aria-label="Recipient email address"
+                      onChange={(e) => setRecipient(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      icon={Save}
+                      busy={call.busy === 'recipient'}
+                      disabled={recipient.trim() === (draft.recipient ?? '')}
+                      onClick={() => void saveRecipient()}
+                    >
+                      Save
+                    </Button>
+                    <InfoTip topic="recipient" />
+                  </span>
+                  <span className="cell-dim otr-goesto__note">
+                    {recipient.trim() !== (draft.recipient ?? '')
+                      ? 'Not saved yet.'
+                      : draft.recipient
+                        ? recipientSourceNote
+                        : 'Nothing was found automatically. Paste the address you want this to go to.'}
                   </span>
                 </span>
+              ) : draft.recipient ? (
+                <span>
+                  <InfoTip topic="recipient" /> {draft.recipient} <span className="cell-dim">({recipientSourceNote})</span>
+                </span>
               ) : (
-                <Unset what="No email address on record — enter one below" />
+                <Unset what="No email address on record" />
               )
             }
           />
@@ -387,12 +433,6 @@ export function DraftEditor({
             <p className="eyebrow">Values from Sales</p>
             <p className="note">These are never filled by the AI — they come from your own test, report or records.</p>
             <div className="otr-grid">
-              {!draft.recipient && (
-                <label>
-                  <span className="field-label">Recipient email</span>
-                  <input className="otr-input" type="email" value={recipient} onChange={(e) => setRecipient(e.target.value)} />
-                </label>
-              )}
               {draft.requiredInputs.includes('clientCompanyName') && (
                 <label>
                   <span className="field-label">Client Company Name</span>
