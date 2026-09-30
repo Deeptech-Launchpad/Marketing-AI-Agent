@@ -55,8 +55,8 @@ export const HELP = {
   },
   send: {
     title: 'Sending',
-    what: 'After approval, send the email from your own mail program (Copy email or Open in mail app), then click "Mark as sent" so the follow-ups can start.',
-    next: 'Copy or open it, send it, then mark it sent.',
+    what: 'After approval, send the email from your own account. "Open in Gmail" opens a compose window with the address, subject and text already filled in. Then click "Mark as sent" so the follow-ups can start.',
+    next: 'Open it in Gmail, send it, then mark it sent.',
   },
   followUp: {
     title: 'Follow-ups',
