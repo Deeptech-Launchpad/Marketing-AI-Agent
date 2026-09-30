@@ -104,7 +104,6 @@ export function DraftEditor({
   const attempts = draft.attempts ?? []
   const testMode = sending?.mode === 'test'
   const statusWord = emailStatus(draft.status, draft.statusReason, isTest).label
-  const productLink = draft.stageKey === 'initial' ? (p?.resolution ?? []).find((r) => r.placeholder === 'productPageUrl') ?? null : null
   const dirty = subject !== (draft.subject ?? '') || body !== (draft.body ?? '')
   const gates = draft.gates
   const signals = view.facts.signals ?? []
@@ -335,40 +334,27 @@ export function DraftEditor({
           )}
         </section>
 
-        {/* ── The product page link (first email only) ─────────────── */}
-        {draft.stageKey === 'initial' && (
-          <section className="otr-ed__block">
-            <p className="eyebrow row">
-              Product page link in this email <InfoTip topic="productPage" />
-            </p>
-            {productLink?.value ? (
-              <p className="note">
-                <a className="cell-link" href={productLink.value} target="_blank" rel="noreferrer noopener">
-                  {productLink.value}
-                </a>{' '}
-                — verified as this company’s own product page. Open it to check before approving.
-              </p>
-            ) : (
-              <p className="note">
-                No link in this email{productLink?.source ? ` — ${productLink.source}` : view.facts.productPageNote ? ` — ${view.facts.productPageNote}` : ''}. We never add
-                a guessed or other company’s link.
-              </p>
-            )}
-          </section>
-        )}
-
-        {/* ── What was personalised, and from what ──────────────────── */}
+        {/* ── What was filled in, and from what ─────────────────────── */}
         <section className="otr-ed__block">
-          <p className="eyebrow">Personalisation</p>
+          <p className="eyebrow">What was filled in</p>
+          {/*
+            Drafts prepared before 2026-09-30 may still carry an AI line, so it
+            is still shown when one is there — a reviewer must be able to see
+            every sentence in front of them. Nothing prepared since has one.
+          */}
           {aiLine?.status === 'added' && aiLine.text ? (
             <div className="otr-ai">
-              <Chip tone="accent">AI-added line</Chip>
+              <Chip tone="warn">AI-added line — from an older draft</Chip>
               <p className="otr-ai__text">{aiLine.text}</p>
-              <p className="cell-dim">Based on: {aiLine.factIds.join(', ')}. Every other sentence is the approved copy.</p>
+              <p className="cell-dim">
+                Based on: {aiLine.factIds.join(', ')}. Emails prepared now carry no AI-written line; delete this one if you
+                do not want it.
+              </p>
             </div>
           ) : (
             <p className="note">
-              No AI-written line in this email{aiLine?.reason ? ` — ${aiLine.reason}` : ''}. Every sentence is the approved copy.
+              Every sentence is the approved copy. The only things filled in are the values below — the company, the
+              product and what Sales entered.
             </p>
           )}
           {(p?.resolution ?? []).length > 0 && (

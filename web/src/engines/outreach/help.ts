@@ -74,9 +74,9 @@ export const HELP = {
     next: 'Nothing to do here. It is set on the server.',
   },
   productPage: {
-    title: 'Product page link',
-    what: 'The link to this company’s own product page that we checked. It is added to the first email only if it was verified. We never guess or use another site’s link.',
-    next: 'Click it to check it opens the right product before you approve.',
+    title: 'Product page',
+    what: 'The company’s own product page that Prospects checked, shown here so you can see what the email is about. No email includes a link — that line was removed from the approved copy.',
+    next: 'Click it to see the product the email refers to before you approve.',
   },
   recipient: {
     title: 'Decision maker and recipient',

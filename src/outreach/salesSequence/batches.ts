@@ -1,4 +1,5 @@
 import { env } from '../../config/env.js'
+import { isEmailShaped } from '../../auth/accessList.js'
 import { storedCompanyContactEmail } from '../../decisionmakers/companyContactEmail.js'
 import { audit } from '../../platform/audit.js'
 import { newId, prisma } from '../../platform/db.js'
@@ -81,6 +82,15 @@ export async function batchCandidates(tenantId: string) {
 export interface CreateBatchInput {
   name?: string
   crmCompanyIds: string[]
+  /**
+   * An address Sales typed for a company, keyed by crmCompanyId.
+   *
+   * It overrides whatever the platform worked out — the decision maker's own
+   * address, or a verified company mailbox — and is recorded as sales_entered
+   * so a reviewer can see it was a person's choice rather than a lookup. It is
+   * also the only way to include a company no address was found for.
+   */
+  recipients?: Record<string, string>
   firstSendAt: string
   timezone?: string
   sendDays?: number[]
@@ -142,10 +152,33 @@ export async function createTestBatch(actor: Actor, input: CreateBatchInput) {
   })
   const slots = plannedInitialSlots(firstSendAt, ids.length, spacingMinutes, windowOfBatch(batch))
 
+  // Addresses Sales typed on the way in. Checked for shape here, so a typo is
+  // refused before any draft is written rather than at approval time.
+  const overrides = new Map<string, string>()
+  for (const [id, raw] of Object.entries(input.recipients ?? {})) {
+    const email = String(raw ?? '').trim()
+    if (!email) continue
+    if (!isEmailShaped(email)) throw new BadRequestError(`"${email}" is not an email address.`)
+    overrides.set(String(id).trim(), email)
+  }
+
   const results: Array<{ crmCompanyId: string; ok: boolean; campaignId: string | null; plannedAt: string | null; error: string | null }> = []
   for (const [i, crmCompanyId] of ids.entries()) {
     try {
       const { campaignId } = await startSequence(actor, crmCompanyId, { isTest: true, batchId })
+
+      // An address Sales typed wins over the one worked out for them.
+      const chosen = overrides.get(crmCompanyId)
+      if (chosen) {
+        await prisma.outreachCampaign.update({
+          where: { id: campaignId },
+          data: { recipientEmail: chosen, recipientEmailSource: 'sales_entered' },
+        })
+        await prisma.outreachAction.updateMany({
+          where: { campaignId, status: { in: ['draft', 'ready_to_send'] } },
+          data: { destination: chosen, destinationKind: 'email' },
+        })
+      }
       // The initial draft carries its planned slot; it is sent only once approved.
       const slot = slots[i] ?? null
       if (slot) {

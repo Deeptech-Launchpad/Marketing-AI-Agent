@@ -285,6 +285,8 @@ const CreateBatchBody = z
   .object({
     name: z.string().max(120).optional(),
     crmCompanyIds: z.array(z.string().min(1).max(100)).min(1).max(MAX_BATCH_COMPANIES),
+    // An address Sales typed for a company, keyed by crmCompanyId.
+    recipients: z.record(z.string().min(1).max(100), z.string().trim().max(254)).optional(),
     firstSendAt: z.string().datetime(),
     timezone: z.string().max(64).optional(),
     sendDays: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),

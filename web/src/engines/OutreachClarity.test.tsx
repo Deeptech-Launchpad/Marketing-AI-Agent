@@ -116,7 +116,7 @@ describe('the outreach screen explains itself', () => {
     stub(view('https://acme.test/p/x200'))
     render(<Outreach />)
     await screen.findByText(/who we are emailing/i)
-    const [btn] = screen.getAllByRole('button', { name: /what is product page link\?/i })
+    const [btn] = screen.getAllByRole('button', { name: /what is product page\?/i })
     await userEvent.click(btn!)
     const note = screen.getByRole('note')
     expect(note.textContent).toContain(HELP.productPage.what)

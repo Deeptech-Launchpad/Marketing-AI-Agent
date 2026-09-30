@@ -26,23 +26,27 @@ import { EXPO, PRODUCT_PAGE_LINE, type StageKey, type StageTemplate } from './te
 //      or from Settings (the sender). One with no source stays visibly
 //      unfilled — "[Product]" — and blocks approval until Sales fills it.
 //
-//   2. PERSONALISE. A model reads the verified facts and may do exactly two
-//      things: pick a short, natural product term that appears word for word
-//      in the verified product facts, and write ONE personal line placed at a
-//      fixed point in the email, citing the facts it rests on. The line is
-//      checked — cited facts exist, no number or name the facts do not
-//      contain, the claim guard passes — and dropped if any check fails.
+//   2. CHOOSE THE PRODUCT WORD. A model picks a short, natural term for
+//      [Product] — "safety helmets" rather than "DEWALT DPG22 Type II Class E
+//      Safety Helmet" — and that term must appear WORD FOR WORD in the
+//      verified product facts or it is thrown away. It writes nothing.
 //
-// The model never sees the approved sentences as something to edit, and
-// nothing it returns can change one: the approved text is filled by code, and
-// the model's line is inserted between two approved paragraphs, marked as
-// AI-added so a reviewer sees exactly what is not Sales's own wording.
+// NO AI-WRITTEN SENTENCE EVER REACHES THE EMAIL (2026-09-30).
+//
+// The model used to be allowed one personal line, inserted between two
+// approved paragraphs and marked as AI-added. Sales asked for it to go: an
+// outreach email is now the approved copy and nothing else. Every sentence a
+// customer reads was written by Sales; the model's only remaining job is to
+// decide which of the company's own words fills a placeholder.
 
-/** Stages that may carry an AI personal line, and the paragraph it follows. */
-const PERSONAL_LINE_SLOT: Partial<Record<StageKey, number>> = {
-  initial: 1, // after "[Sender first name] here, from [Sender company]."
-  noreply_followup: 1, // after "Following up in case this got buried…"
-  expo_invite: 1, // after the expo paragraph
+// Sales asked for the AI's personal line to be removed, so there is no slot
+// for one any more. The shape below is kept on the stored personalisation so
+// existing drafts still read, and it now always says the same thing.
+const NO_AI_LINE: AiLine = {
+  status: 'not_offered',
+  text: null,
+  factIds: [],
+  reason: 'Personal lines are switched off — every sentence is the approved copy.',
 }
 
 const PersonalizeOut = z.object({
@@ -157,13 +161,14 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
   const resolution: Resolution[] = []
   let model: string | null = null
 
-  // ── 2 (first, because 1 needs its product term). The AI step. ──────────
+  // ── 2 (first, because 1 needs its product term). Choosing the word. ────
   let aiTerm: string | null = null
   let aiCategory: string | null = null
-  let aiLine: AiLine = { status: 'not_offered', text: null, factIds: [], reason: null }
-  const slot = PERSONAL_LINE_SLOT[template.key]
+  const aiLine: AiLine = NO_AI_LINE
   const wantsProduct = used.has('product') || used.has('productCategory')
-  const personalise = input.personalise !== false && (slot !== undefined || (wantsProduct && facts.product))
+  // Only worth a model call when the email actually has a product placeholder
+  // AND there is a verified product for a term to come from.
+  const personalise = input.personalise !== false && wantsProduct && Boolean(facts.product)
   if (personalise) {
     try {
       const result = await getLlm().generate({
@@ -171,7 +176,8 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
         variables: {
           stageLabel: `${template.pdfRef} ${template.label}`,
           approvedBody: template.body,
-          allowLine: slot !== undefined ? 'yes' : 'no',
+          // Never. The model chooses a word; it does not write a sentence.
+          allowLine: 'no',
           productName: facts.product?.name ?? '(none)',
           productCategory: facts.product?.category ?? '(none)',
           facts: facts.facts.map((f) => `${f.id} | ${f.label}: ${f.value}`).join('\n') || '(none)',
@@ -184,23 +190,17 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
       const out = PersonalizeOut.safeParse(result.data)
       if (out.success) {
         const sources = productSources(facts)
+        // A term is taken only if the company's own verified product data
+        // contains it word for word. Anything the model made up is dropped.
         if (out.data.productTerm && appearsIn(out.data.productTerm, sources)) aiTerm = out.data.productTerm.trim()
         if (out.data.productCategoryTerm && appearsIn(out.data.productCategoryTerm, sources)) aiCategory = out.data.productCategoryTerm.trim()
-        if (slot === undefined) {
-          aiLine = { status: 'not_offered', text: null, factIds: [], reason: 'This stage carries no personal line.' }
-        } else if (!out.data.line?.text?.trim()) {
-          aiLine = { status: 'none', text: null, factIds: [], reason: 'No verified fact fit this email naturally.' }
-        } else {
-          const allowed = [facts.companyName, companyDisplayName(facts.companyName) ?? '', facts.decisionMaker?.fullName ?? '']
-          const check = checkLine(out.data.line, facts.facts, allowed)
-          aiLine = check.ok
-            ? { status: 'added', text: out.data.line.text.trim(), factIds: out.data.line.factIds, reason: null }
-            : { status: 'rejected', text: out.data.line.text.trim(), factIds: out.data.line.factIds, reason: check.reason }
-        }
+        // out.data.line is ignored on purpose: nothing the model writes goes
+        // into an email any more.
       }
     } catch (err) {
-      logger.info({ err: (err as Error).message, stage: template.key }, 'personalisation step failed; the approved copy is filled without it')
-      aiLine = { status: 'none', text: null, factIds: [], reason: 'The personalisation step was unavailable; the approved copy is used as filled.' }
+      // Nothing is lost that a person cannot supply: [Product] simply stays
+      // visible and unfilled, and Sales types the word before approving.
+      logger.info({ err: (err as Error).message, stage: template.key }, 'product term step failed; the approved copy is filled without it')
     }
   }
 
@@ -236,36 +236,26 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
   set('senderFirstName', sender.firstName || null, 'The person who started this outreach (their NXT Sales login)')
   set('senderCompany', sender.companyName || null, 'Settings → Outreach sender')
 
-  // The product page line (Versions 1–3): this company's verified product
-  // page, or — when Prospects verified none — no line at all. Never another
-  // URL, and never a visible placeholder left for someone to fill.
+  // NO PRODUCT URL IN AN EMAIL, EVER (2026-09-30).
+  //
+  // Versions 1–3 used to end with "For reference, this is the product page I
+  // checked: [Product page URL]". Sales asked for it to go, so the line is
+  // taken out of every email rather than filled. That also closes the last
+  // route by which a wrong or stale link could reach a customer.
   let approvedBody = template.body
   if (used.has('productPageUrl')) {
-    const url = facts.productPageUrl ?? null
-    if (url) {
-      set(
-        'productPageUrl',
-        url,
-        `The genuine product page Prospects verified on this company’s own website${facts.productPageNote ? ` (${facts.productPageNote})` : ''}`,
-        'product.url',
-      )
-    } else {
-      approvedBody = withoutProductPageLine(approvedBody)
-      resolution.push({
-        placeholder: 'productPageUrl',
-        value: null,
-        source: `No verified product page — the product page line was left out${facts.productPageNote ? `: ${facts.productPageNote}` : '.'}`,
-        factId: null,
-      })
-    }
+    approvedBody = withoutProductPageLine(approvedBody)
+    resolution.push({
+      placeholder: 'productPageUrl',
+      value: null,
+      source: 'The product page line is not included in any email.',
+      factId: null,
+    })
   }
 
+  // The approved copy with its placeholders filled, and nothing inserted into
+  // it. The signature is the sender's own, from Settings.
   let body = fill(approvedBody, values)
-  if (aiLine.status === 'added' && slot !== undefined) {
-    const paragraphs = body.split('\n\n')
-    paragraphs.splice(slot + 1, 0, aiLine.text!)
-    body = paragraphs.join('\n\n')
-  }
   if (sender.signature.trim()) body = `${body}\n${sender.signature.trim()}`
 
   const subject = template.subject
@@ -275,7 +265,9 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
       : null
 
   const signalsConsidered = facts.signals.map((s) => s.id)
-  const signalsUsed = aiLine.status === 'added' ? aiLine.factIds.filter((id) => id.startsWith('signal.')).map((id) => id.slice(7)) : []
+  // Signals are shown to a reviewer as context. None of them reaches the email
+  // now that there is no written line for one to appear in.
+  const signalsUsed: string[] = []
 
   return {
     subject,

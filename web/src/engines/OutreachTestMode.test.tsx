@@ -148,6 +148,8 @@ function stub(opts: { sending?: unknown; draftStatus?: string } = {}) {
         max: 10,
         candidates: [
           { crmCompanyId: 'c-acme', companyName: 'Acme Safety', companyDomain: 'acme.test', decisionMaker: { fullName: 'Jane Smith', title: null }, intendedRecipient: 'jane@acme.test', recipientSource: 'decision_maker', ready: true, reason: null },
+          { crmCompanyId: 'c-mailbox', companyName: 'Bonnici Stores Ltd', companyDomain: 'bonnicistores.com', decisionMaker: { fullName: 'David Bonnici', title: null }, intendedRecipient: 'info@bonnicistores.com', recipientSource: 'company_mailbox', ready: true, reason: null },
+          { crmCompanyId: 'c-noemail', companyName: 'Central Cleaning', companyDomain: 'centralcleaning.com.au', decisionMaker: { fullName: 'Joe Camilleri', title: null }, intendedRecipient: null, recipientSource: null, ready: false, reason: 'No email for the decision maker and no verified company mailbox.' },
           { crmCompanyId: 'c-none', companyName: 'Nobody Inc', companyDomain: null, decisionMaker: null, intendedRecipient: null, recipientSource: null, ready: false, reason: 'No shortlisted decision maker.' },
         ],
       })
@@ -223,6 +225,110 @@ describe('test batches', () => {
     const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
     expect(body).toMatchObject({ crmCompanyIds: ['c-acme'], timezone: 'America/New_York', sendDays: [1, 2, 3, 4, 5], sendStart: '09:00', sendEnd: '17:00', spacingMinutes: 10, dailyCap: 20 })
     expect(await screen.findByText(/test batch created/i)).toBeInTheDocument()
+  })
+})
+
+describe('choosing companies for a batch', () => {
+  // Two things Sales asked for on this screen: find a company in a long list
+  // without scrolling, and correct the address before the drafts are written
+  // rather than one draft at a time afterwards.
+  const openPicker = async () => {
+    stub()
+    render(<Outreach />)
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies \(test run\)$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /new test batch/i }))
+    await screen.findByLabelText(/search companies/i)
+  }
+
+  it('narrows the list by company name', async () => {
+    await openPicker()
+    await userEvent.type(screen.getByLabelText(/search companies/i), 'bonnici')
+    expect(screen.getByText('Bonnici Stores Ltd')).toBeInTheDocument()
+    expect(screen.queryByText('Acme Safety')).toBeNull()
+    expect(screen.queryByText('Central Cleaning')).toBeNull()
+  })
+
+  it('searches the decision maker and the email address too', async () => {
+    await openPicker()
+    const box = screen.getByLabelText(/search companies/i)
+    await userEvent.type(box, 'camilleri')
+    expect(screen.getByText('Central Cleaning')).toBeInTheDocument()
+
+    await userEvent.clear(box)
+    await userEvent.type(box, 'jane@acme')
+    expect(screen.getByText('Acme Safety')).toBeInTheDocument()
+    expect(screen.queryByText('Central Cleaning')).toBeNull()
+  })
+
+  it('says so plainly when nothing matches', async () => {
+    await openPicker()
+    await userEvent.type(screen.getByLabelText(/search companies/i), 'zzzz')
+    expect(screen.getByText(/no company matches/i)).toBeInTheDocument()
+  })
+
+  it('shows the address that was found, and where it came from', async () => {
+    await openPicker()
+    expect(screen.getByLabelText(/email address for Acme Safety/i)).toHaveValue('jane@acme.test')
+    expect(screen.getByLabelText(/email address for Bonnici Stores Ltd/i)).toHaveValue('info@bonnicistores.com')
+    expect(screen.getByText('company mailbox')).toBeInTheDocument()
+    expect(screen.getByText('from Decision Makers')).toBeInTheDocument()
+  })
+
+  it('sends a corrected address with the batch, and only for the companies chosen', async () => {
+    await openPicker()
+    const box = screen.getByLabelText(/email address for Acme Safety/i)
+    await userEvent.clear(box)
+    await userEvent.type(box, 'purchasing@acme.test')
+    await userEvent.click(screen.getByRole('checkbox', { name: /acme safety/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
+
+    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
+    const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
+    expect(body.crmCompanyIds).toEqual(['c-acme'])
+    expect(body.recipients).toEqual({ 'c-acme': 'purchasing@acme.test' })
+  })
+
+  it('sends no recipients at all when nothing was retyped', async () => {
+    await openPicker()
+    await userEvent.click(screen.getByRole('checkbox', { name: /acme safety/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
+
+    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
+    expect((posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>).recipients).toBeUndefined()
+  })
+
+  it('lets a typed address bring in a company no address was found for', async () => {
+    await openPicker()
+    // Nothing was found, so it cannot be chosen yet.
+    expect(screen.getByRole('checkbox', { name: /central cleaning/i })).toBeDisabled()
+    expect(screen.getByText(/nothing was found — type one to include this company/i)).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText(/email address for Central Cleaning/i), 'joe@centralcleaning.com.au')
+    expect(screen.getByRole('checkbox', { name: /central cleaning/i })).toBeEnabled()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /central cleaning/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
+
+    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
+    const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
+    expect(body.crmCompanyIds).toEqual(['c-noemail'])
+    expect(body.recipients).toEqual({ 'c-noemail': 'joe@centralcleaning.com.au' })
+  })
+
+  it('will not accept something that is not an email address', async () => {
+    await openPicker()
+    await userEvent.type(screen.getByLabelText(/email address for Central Cleaning/i), 'not-an-address')
+    expect(screen.getByRole('checkbox', { name: /central cleaning/i })).toBeDisabled()
+  })
+
+  it('still cannot choose a company with no decision maker, whatever is typed', async () => {
+    await openPicker()
+    expect(screen.getByRole('checkbox', { name: /nobody inc/i })).toBeDisabled()
+    // There is no address box for it either: the email is addressed to a person.
+    expect(screen.queryByLabelText(/email address for Nobody Inc/i)).toBeNull()
   })
 })
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowLeft, FileEdit, FlaskConical, Pause, Play, Plus, Square } from 'lucide-react'
+import { ArrowLeft, FileEdit, FlaskConical, Pause, Play, Plus, Search, Square } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync } from '../../lib/hooks'
 import { Button, Chip, Panel, Unset } from '../../components/ui/primitives'
@@ -198,6 +198,10 @@ function CreateBatch({ sending, onCancel, onCreated }: { sending: SendingStatus 
   const max = Number((candidates.data as { max?: number } | null)?.max ?? 10)
 
   const [picked, setPicked] = useState<string[]>([])
+  /** What Sales typed into the search box, to narrow a long list. */
+  const [query, setQuery] = useState('')
+  /** Addresses Sales typed, by crmCompanyId. Empty means "use what was found". */
+  const [emails, setEmails] = useState<Record<string, string>>({})
   const [name, setName] = useState('')
   const [firstSend, setFirstSend] = useState(defaultFirstSend())
   const [timezone, setTimezone] = useState('America/New_York')
@@ -213,11 +217,43 @@ function CreateBatch({ sending, onCancel, onCreated }: { sending: SendingStatus 
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= max ? p : [...p, id]))
   const nameOf = (id: string) => list.find((c) => c.crmCompanyId === id)?.companyName ?? id
 
+  /** The address that would actually be used: what Sales typed, or what was found. */
+  const emailOf = (c: Candidate) => (emails[c.crmCompanyId] ?? '').trim() || c.intendedRecipient || ''
+  const looksLikeEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
+  /**
+   * A company can go in the batch once it has a decision maker and an address.
+   * Typing one is therefore enough to include a company the platform found no
+   * address for — which is the whole point of the box being there.
+   */
+  const canPick = (c: Candidate) => Boolean(c.decisionMaker) && looksLikeEmail(emailOf(c))
+
+  const q = query.trim().toLowerCase()
+  const shown = q
+    ? list.filter((c) =>
+        [c.companyName, c.companyDomain ?? '', c.decisionMaker?.fullName ?? '', c.intendedRecipient ?? '', emails[c.crmCompanyId] ?? '']
+          .join(' ')
+          .toLowerCase()
+          .includes(q),
+      )
+    : list
+  // Anything picked then filtered out still goes in the batch, so say so
+  // rather than letting the count disagree with what is on screen.
+  const hiddenPicked = picked.filter((id) => !shown.some((c) => c.crmCompanyId === id)).length
+
+  /** Addresses Sales typed for companies in the batch, and nothing else. */
+  const typedRecipients = Object.fromEntries(
+    picked
+      .map((id) => [id, (emails[id] ?? '').trim()] as const)
+      .filter(([, v]) => v.length > 0 && looksLikeEmail(v)),
+  )
+
   const create = () =>
     void call.run('create', async () => {
       const r = (await api.post('/outreach/sequence/batches', {
         ...(name.trim() ? { name: name.trim() } : {}),
         crmCompanyIds: picked,
+        // Only the ones Sales actually typed; the rest use what was found.
+        ...(Object.keys(typedRecipients).length ? { recipients: typedRecipients } : {}),
         firstSendAt: new Date(firstSend).toISOString(),
         timezone: timezone.trim(),
         sendDays: days,
@@ -278,34 +314,87 @@ function CreateBatch({ sending, onCancel, onCreated }: { sending: SendingStatus 
 
       {!reviewing ? (
         <>
-          <p className="eyebrow">1. Companies (up to {max})</p>
+          <p className="eyebrow">
+            1. Companies ({picked.length} of {max} chosen)
+          </p>
+          {list.length > 0 && (
+            <label className="otr-search">
+              <Search size={14} aria-hidden="true" />
+              <input
+                className="otr-input"
+                type="search"
+                value={query}
+                placeholder="Search by company, decision maker or email"
+                aria-label="Search companies"
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
+          )}
           {candidates.loading && !candidates.data ? (
             <LoadingState what="Reading companies with a decision maker" />
           ) : candidates.error ? (
             <ErrorState error={candidates.error} what="The companies could not be read" onRetry={candidates.refresh} />
           ) : list.length === 0 ? (
             <Unset what="No company has a completed Decision Makers run yet" />
+          ) : shown.length === 0 ? (
+            <Unset what={`No company matches “${query.trim()}”`} />
           ) : (
             <ul className="otr-pick">
-              {list.map((c) => (
-                <li key={c.crmCompanyId}>
-                  <label className="otr-check">
-                    <input
-                      type="checkbox"
-                      checked={picked.includes(c.crmCompanyId)}
-                      disabled={!c.ready || (!picked.includes(c.crmCompanyId) && picked.length >= max)}
-                      onChange={() => toggle(c.crmCompanyId)}
-                    />
-                    <span>
-                      {c.companyName}
-                      {c.decisionMaker && <span className="cell-dim"> · {c.decisionMaker.fullName}</span>}
-                      {c.intendedRecipient && <span className="cell-dim"> · would go to {c.intendedRecipient}{c.recipientSource === 'company_mailbox' ? ' (company mailbox)' : ''}</span>}
-                      {!c.ready && c.reason && <span className="cell-dim"> — {c.reason}</span>}
-                    </span>
-                  </label>
-                </li>
-              ))}
+              {shown.map((c) => {
+                const chosen = picked.includes(c.crmCompanyId)
+                const typed = (emails[c.crmCompanyId] ?? '').trim()
+                const usable = canPick(c)
+                return (
+                  <li key={c.crmCompanyId}>
+                    <label className="otr-check">
+                      <input
+                        type="checkbox"
+                        checked={chosen}
+                        disabled={!usable || (!chosen && picked.length >= max)}
+                        onChange={() => toggle(c.crmCompanyId)}
+                      />
+                      <span>
+                        {c.companyName}
+                        {c.decisionMaker && <span className="cell-dim"> · {c.decisionMaker.fullName}</span>}
+                        {!c.decisionMaker && c.reason && <span className="cell-dim"> — {c.reason}</span>}
+                      </span>
+                    </label>
+                    {/*
+                      The address, always editable before the batch is made.
+                      Typing one also makes a company selectable that had none,
+                      which is the only way to include it at all.
+                    */}
+                    {c.decisionMaker && (
+                      <div className="otr-pick__email">
+                        <span className="field-label">Goes to</span>
+                        <input
+                          className="otr-input"
+                          type="email"
+                          value={emails[c.crmCompanyId] ?? c.intendedRecipient ?? ''}
+                          placeholder="name@company.com"
+                          aria-label={`Email address for ${c.companyName}`}
+                          onChange={(e) => setEmails((prev) => ({ ...prev, [c.crmCompanyId]: e.target.value }))}
+                        />
+                        <span className="cell-dim">
+                          {typed && typed !== (c.intendedRecipient ?? '')
+                            ? 'you typed this'
+                            : c.recipientSource === 'company_mailbox'
+                              ? 'company mailbox'
+                              : c.intendedRecipient
+                                ? 'from Decision Makers'
+                                : 'nothing was found — type one to include this company'}
+                        </span>
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
+          )}
+          {hiddenPicked > 0 && (
+            <p className="note">
+              {hiddenPicked} chosen {hiddenPicked === 1 ? 'company is' : 'companies are'} hidden by the search. {hiddenPicked === 1 ? 'It is' : 'They are'} still in the batch.
+            </p>
           )}
 
           <p className="eyebrow row" style={{ marginTop: 'var(--s4)' }}>

@@ -147,6 +147,13 @@
 .otr-ed__send { padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-inset); }
 .otr-body { font-family: var(--font-ui); line-height: 1.55; min-height: 280px; }
 
+/* Picking companies for a test batch: search, and an address per company. */
+.otr-search { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); color: var(--text-soft); }
+.otr-search .otr-input { flex: 1; }
+.otr-pick__email { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: 4px 0 var(--s2) 26px; }
+.otr-pick__email .otr-input { flex: 1 1 220px; min-width: 0; }
+.otr-pick__email .field-label { margin: 0; }
+
 /* "Goes to" — an address Sales can always change, so it is a field, not text. */
 .otr-goesto { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .otr-goesto__row { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }

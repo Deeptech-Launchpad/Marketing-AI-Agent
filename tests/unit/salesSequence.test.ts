@@ -12,7 +12,11 @@ vi.mock('../../src/platform/db.js', () => ({ prisma: {} }))
 vi.mock('../../src/config/env.js', () => ({ env: { OUTREACH_SEQUENCE_TIMEZONE: 'America/New_York' } }))
 const quiet = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 vi.mock('../../src/platform/logger.js', () => ({ logger: { ...quiet, child: () => quiet } }))
-vi.mock('../../src/llm/index.js', () => ({ getLlm: () => ({ generate: vi.fn() }) }))
+// The model, stood in for. What it returns is deliberately hostile: a made-up
+// product term and a written sentence, so the tests below show that neither
+// can reach a customer.
+const generate = vi.fn()
+vi.mock('../../src/llm/index.js', () => ({ getLlm: () => ({ generate }) }))
 
 const { STAGE_TEMPLATES, templateFor, EXPO, REPLY_FOLLOWUP_EXPO_PARAGRAPH, PRODUCT_PAGE_LINE } = await import('../../src/outreach/salesSequence/templates.js')
 const { fill, findUnresolved, firstName, companyDisplayName, placeholdersIn } = await import('../../src/outreach/salesSequence/placeholders.js')
@@ -71,23 +75,37 @@ describe('the product page in Versions 1–3', () => {
       personalise: false,
     })
 
-  it('puts the verified product page in the draft, right after the product paragraph, for every version', async () => {
+  // SALES ASKED FOR THE PRODUCT URL TO GO (2026-09-30).
+  //
+  // Versions 1-3 used to end with "For reference, this is the product page I
+  // checked: [Product page URL]". No email carries it now — not the verified
+  // page, not a placeholder, not anything. That also closes the last route by
+  // which a wrong or stale link could reach a customer.
+  it('leaves the product page line out of every version, even when a verified page exists', async () => {
     for (const v of ['v1', 'v2', 'v3'] as const) {
       const r = await compose(v, 'https://www.medinahealthcare.com/products/vio3')
-      expect(r.body, v).toContain('For reference, this is the product page I checked: https://www.medinahealthcare.com/products/vio3')
+      expect(r.body, v).not.toContain('product page I checked')
+      expect(r.body, v).not.toContain('https://www.medinahealthcare.com/products/vio3')
+      expect(r.body, v).not.toContain('[Product page URL]')
+      // No hole where the line used to be.
+      expect(r.body, v).not.toMatch(/\n{3,}/)
       expect(r.unresolved, v).toEqual([])
-      expect(r.resolution.find((x) => x.placeholder === 'productPageUrl')).toMatchObject({ value: 'https://www.medinahealthcare.com/products/vio3', factId: 'product.url' })
+      expect(r.resolution.find((x) => x.placeholder === 'productPageUrl')?.source).toMatch(/not included in any email/)
     }
   })
 
-  it('with no verified product page, leaves the line out — the approved copy exactly as before, no URL and no placeholder', async () => {
+  it('carries no URL at all — of this company or any other', async () => {
     for (const v of ['v1', 'v2', 'v3'] as const) {
-      const r = await compose(v, null)
-      expect(r.body, v).not.toContain('product page I checked')
-      expect(r.body, v).not.toContain('[Product page URL]')
-      expect(r.body, v).not.toMatch(/\n{3,}/)
-      expect(r.unresolved, v).toEqual([])
-      expect(r.resolution.find((x) => x.placeholder === 'productPageUrl')?.source).toMatch(/left out/)
+      const r = await compose(v, 'https://www.medinahealthcare.com/products/vio3')
+      expect(r.body, v).not.toMatch(/https?:\/\//)
+    }
+  })
+
+  it('reads the same whether or not Prospects verified a page', async () => {
+    for (const v of ['v1', 'v2', 'v3'] as const) {
+      const withPage = await compose(v, 'https://www.medinahealthcare.com/products/vio3')
+      const without = await compose(v, null)
+      expect(without.body, v).toBe(withPage.body)
     }
     expect(withoutProductPageLine(templateFor('initial', 'v1').body)).not.toContain(PRODUCT_PAGE_LINE)
   })

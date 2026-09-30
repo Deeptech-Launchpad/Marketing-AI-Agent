@@ -488,8 +488,9 @@ function WhoPanel({ view }: { view: CompanySequence }) {
           )
         }
       />
+      {/* Reference for the reviewer — no email carries a link any more. */}
       <Field
-        label="Product page link"
+        label="Product page (for your reference)"
         value={
           <span className="row">
             {f.productPageUrl ? (
@@ -497,7 +498,7 @@ function WhoPanel({ view }: { view: CompanySequence }) {
                 {f.productPageUrl}
               </a>
             ) : (
-              <Unset what={f.productPageNote ?? 'No verified product page — the email will not include a link'} />
+              <Unset what={f.productPageNote ?? 'No verified product page for this company'} />
             )}
             <InfoTip topic="productPage" />
           </span>
