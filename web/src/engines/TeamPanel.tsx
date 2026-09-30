@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { Ban, Check, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/hooks'
 import { useAuth } from '../lib/auth'
@@ -7,10 +7,14 @@ import { Panel, Button, Chip, Unset } from '../components/ui/primitives'
 import { InfoTip } from '../components/ui/InfoTip'
 import { ErrorState } from '../components/ui/states'
 
-// WHO HAS SIGNED IN, AND WHAT THEY HOLD.
+// WHO HAS AN ACCOUNT HERE, AND WHAT THEY HOLD.
 //
-// Two different things decide access here, and the panel is arranged to make
-// that obvious rather than to hide it:
+// This is the record of every registered user: the address, the name, whether
+// that address was ever proved, how they get in (Google, a password, or both),
+// whether the account is active, and when they were last here.
+//
+// Two different things decide access, and the panel is arranged to make that
+// obvious rather than to hide it:
 //
 //   ADMIN comes from the server's configured list of email addresses and from
 //   nowhere else. It cannot be granted from this screen — there is deliberately
@@ -19,15 +23,22 @@ import { ErrorState } from '../components/ui/states'
 //
 //   EVERYTHING ELSE is an ordinary role, and can be adjusted here.
 //
-// Anyone who signs in with a work Google account becomes an ordinary user
-// automatically, so this is a record of who has been in rather than a queue of
-// people waiting to be let in.
+// Anyone who signs in with a work Google account, or creates an account with a
+// verified email address, becomes an ordinary user automatically — so this is a
+// record of who has been in rather than a queue of people waiting to be let in.
+//
+// Disabling is the one control here that stops somebody getting in at all. It
+// is enforced by the server on every request, not just at sign-in, so an open
+// session ends at its next call.
 
 interface Account {
   id: string | null
   email: string
   name: string | null
   status: string
+  emailVerified: boolean
+  /** 'google', 'password', or both. Empty when no account exists yet. */
+  signInMethods: string[]
   pictureUrl: string | null
   linkedToCrm: boolean
   role: string | null
@@ -44,9 +55,24 @@ const ROLES = [
 ] as const
 
 const HELP = {
-  title: 'Team access',
-  what: 'Everyone who has signed in with Google. Anyone with a work account becomes an ordinary user automatically; administrators are set on the server by email address.',
-  next: 'Adjust an ordinary role here. To make someone an administrator, add their address to AUTH_ADMIN_EMAILS on the server.',
+  title: 'Registered users',
+  what: 'Every account on this platform, with the address, how they sign in, whether the account is active, and when they were last here. Anyone with an allowed work address becomes an ordinary user automatically; administrators are set on the server by email address.',
+  next: 'Adjust an ordinary role or disable an account here. To make someone an administrator, add their address to AUTH_ADMIN_EMAILS on the server.',
+}
+
+/** How this person gets in, in words rather than field names. */
+function methodsText(a: Account): string {
+  if (a.signInMethods.length === 2) return 'Google and password'
+  if (a.signInMethods.includes('google')) return 'Google'
+  if (a.signInMethods.includes('password')) return 'Password'
+  return 'No account yet'
+}
+
+function lastSeen(a: Account): string {
+  if (!a.lastLoginAt) return 'Has not signed in yet'
+  const when = new Date(a.lastLoginAt)
+  const times = `${a.signInCount} time${a.signInCount === 1 ? '' : 's'}`
+  return `Last in ${when.toLocaleString()} · ${times}`
 }
 
 export function TeamPanel() {
@@ -82,15 +108,27 @@ export function TeamPanel() {
           <span className="team__name">{a.name ?? a.email}</span>
           <span className="cell-dim">{a.email}</span>
           <span className="team__meta">
-            {a.signInCount > 0
-              ? `Signed in ${a.signInCount} time${a.signInCount === 1 ? '' : 's'}`
-              : 'Has not signed in yet'}
-            {a.lastLoginAt ? ` · last ${new Date(a.lastLoginAt).toLocaleDateString()}` : ''}
+            {methodsText(a)} · {lastSeen(a)}
             {a.linkedToCrm ? ' · linked to NXT Sales' : ''}
           </span>
         </span>
       </span>
       <span className="team__actions">
+        {a.status === 'disabled' && (
+          <Chip tone="danger" title="Refused at sign-in and on every request.">
+            Disabled
+          </Chip>
+        )}
+        {a.status === 'no_account' && (
+          <Chip tone="warn" title="A role was granted to this address, but nobody has signed in with it.">
+            Invited
+          </Chip>
+        )}
+        {a.signInMethods.includes('password') && !a.emailVerified && (
+          <Chip tone="warn" title="This address has not been proved with a code.">
+            Unverified
+          </Chip>
+        )}
         {a.isAdmin ? (
           <Chip tone="ok" title="Set on the server, by email address">
             Admin
@@ -122,6 +160,28 @@ export function TeamPanel() {
             </Button>
           </>
         ) : null}
+        {a.id && a.email !== principal?.email && (
+          <Button
+            size="sm"
+            variant="quiet"
+            icon={a.status === 'disabled' ? Check : Ban}
+            busy={busy === `status:${a.email}`}
+            title={
+              a.status === 'disabled'
+                ? 'Let them sign in again. Their role is unchanged.'
+                : 'Stop them signing in, and end any open session at its next request.'
+            }
+            onClick={() =>
+              void act(`status:${a.email}`, () =>
+                api.patch(`/admin/accounts/${encodeURIComponent(a.id!)}/status`, {
+                  status: a.status === 'disabled' ? 'active' : 'disabled',
+                }),
+              )
+            }
+          >
+            {a.status === 'disabled' ? 'Enable' : 'Disable'}
+          </Button>
+        )}
         {a.email === principal?.email && <Chip>You</Chip>}
       </span>
     </li>
@@ -131,10 +191,10 @@ export function TeamPanel() {
     <Panel
       title={
         <span className="row">
-          Team access <InfoTip help={HELP} label="team access" />
+          Registered users <InfoTip help={HELP} label="registered users" />
         </span>
       }
-      subtitle="Everyone who has signed in with Google, and what they hold"
+      subtitle="Every account on this platform, how they sign in, and what they hold"
     >
       {error && (
         <p className="otr-err" role="alert">
@@ -165,11 +225,11 @@ export function TeamPanel() {
           <div className="team__block">
             <p className="eyebrow">Everyone else ({others.length})</p>
             <p className="note">
-              Anyone signing in with a work Google account starts as an operator: they can run the engines and prepare
-              drafts, but cannot approve or send.
+              Anyone who signs in with a work Google account, or creates an account with a verified work address, starts
+              as an operator: they can run the engines and prepare drafts, but cannot approve or send.
             </p>
             {others.length === 0 ? (
-              <Unset what="Nobody else has signed in yet" />
+              <Unset what="Nobody else has an account yet" />
             ) : (
               <ul className="team__list">{others.map((a) => row(a, true))}</ul>
             )}

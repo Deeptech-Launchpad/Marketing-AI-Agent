@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, ApiError, fetchAuthCapabilities, getToken, setToken, signInWithGoogleCredential, type AuthCapabilities } from './api'
+import { api, ApiError, authApi, fetchAuthCapabilities, getToken, setToken, type AuthCapabilities, type SignedIn } from './api'
 import type { Permission, Principal } from './types'
 
 // WHO IS SIGNED IN, AND WHAT THEY MAY DO — TWO SEPARATE ANSWERS.
@@ -16,6 +16,10 @@ interface AuthValue {
   capabilities: AuthCapabilities | null
   /** A Google ID token from the browser, verified by the server. */
   signInWithGoogle: (credential: string) => Promise<void>
+  /** An email address and password, against an account created here. */
+  signIn: (email: string, password: string) => Promise<void>
+  /** Takes the session a completed sign-up or reset just returned. */
+  accept: (result: SignedIn) => Promise<void>
   signOut: () => void
   can: (permission: Permission) => boolean
   /** Admin-only features, asked as a question rather than inferred in ten places. */
@@ -63,15 +67,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void load()
   }, [load])
 
-  const signInWithGoogle = useCallback(
-    async (credential: string) => {
-      setError(null)
-      const result = await signInWithGoogleCredential(credential)
+  /** Every sign-in path ends here: take the token, then ask who we are. */
+  const accept = useCallback(
+    async (result: SignedIn) => {
       setToken(result.token)
       setLoading(true)
       await load()
     },
     [load],
+  )
+
+  const signInWithGoogle = useCallback(
+    async (credential: string) => {
+      setError(null)
+      await accept(await authApi.google(credential))
+    },
+    [accept],
+  )
+
+  const signIn = useCallback(
+    async (email: string, password: string) => {
+      setError(null)
+      await accept(await authApi.login(email.trim(), password))
+    },
+    [accept],
   )
 
   const signOut = useCallback(() => {
@@ -87,11 +106,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error,
       capabilities,
       signInWithGoogle,
+      signIn,
+      accept,
       signOut,
       can: (permission) => Boolean(principal?.permissions.includes(permission)),
       isAdmin: Boolean(principal?.permissions.includes('admin')),
     }),
-    [principal, loading, error, capabilities, signInWithGoogle, signOut],
+    [principal, loading, error, capabilities, signInWithGoogle, signIn, accept, signOut],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

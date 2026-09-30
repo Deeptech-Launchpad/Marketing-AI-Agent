@@ -727,6 +727,21 @@ const schema = z.object({
   AUTH_ADMIN_EMAILS: z
     .string()
     .default('manoj@altiusnxt.com,mohanapriya@altiusnxt.com,govind@altiusnxt.com,dtlpmanikandan@gmail.com'),
+
+  /**
+   * Creating an account with an email address and a password, proven by a
+   * one-time code sent to that address. The code is short-lived, single-use,
+   * and only its hash is ever stored.
+   */
+  AUTH_OTP_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
+  /** Wrong guesses before the code is spent. Six digits needs a low number. */
+  AUTH_OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+  /**
+   * DEVELOPMENT ONLY: return the code in the API response when no mail server
+   * is configured, so the flow can be tested locally. Refused in production —
+   * there it would hand anyone an account on any address they can name.
+   */
+  AUTH_DEV_RETURN_OTP: bool.default('false'),
 })
 
 const parsed = schema.safeParse(process.env)
@@ -817,6 +832,21 @@ if (env.NODE_ENV === 'production' && env.REPORT_ALLOW_UNAPPROVED) {
   console.error(
     '\nREPORT_ALLOW_UNAPPROVED is a development-only flag and cannot be enabled in production.\n' +
       'A customer report must be generated from a report approved in Task #980.\n',
+  )
+  process.exit(1)
+}
+
+// A one-time code handed back over the API is an account on any address the
+// caller can name. It exists so the sign-up flow can be exercised locally with
+// no mail server, and it is refused in production rather than trusted to be
+// turned off by whoever last edited the file.
+if (env.NODE_ENV === 'production' && env.AUTH_DEV_RETURN_OTP) {
+  // eslint-disable-next-line no-console
+  console.error(
+    '\nAUTH_DEV_RETURN_OTP is a development-only flag and cannot be enabled in production.\n' +
+      'It returns the email verification code in the API response, which would let anyone\n' +
+      'create or take over an account by knowing only its email address. Configure a mail\n' +
+      'server instead (SMTP_HOST).\n',
   )
   process.exit(1)
 }

@@ -159,6 +159,10 @@ adminRoutes.get(
           status: true,
           emailVerified: true,
           googleSub: true,
+          // Read only to answer "does this account have a password" as a
+          // boolean below. The hash itself never leaves this function, and
+          // Prisma has no way to ask for the presence of a column without it.
+          passwordHash: true,
           pictureUrl: true,
           crmUserId: true,
           signInCount: true,
@@ -183,6 +187,10 @@ adminRoutes.get(
         emailVerified: a.emailVerified,
         pictureUrl: a.pictureUrl,
         linkedToCrm: Boolean(a.crmUserId),
+        // How this person can get in. Both are possible at once: an address
+        // that signed in with Google and later set a password has the same one
+        // account, not two.
+        signInMethods: [...(a.googleSub ? ['google'] : []), ...(a.passwordHash ? ['password'] : [])],
         // What the list says they are, which is what they actually get.
         role: isAdminEmail(a.email) ? 'admin' : (member?.role ?? 'operator'),
         isAdmin: isAdminEmail(a.email),
@@ -205,6 +213,7 @@ adminRoutes.get(
         emailVerified: false,
         pictureUrl: null,
         linkedToCrm: Boolean(m.crmUserId),
+        signInMethods: [] as string[],
         role: isAdminEmail(m.email) ? 'admin' : m.role,
         isAdmin: isAdminEmail(m.email),
         signInCount: 0,
@@ -213,6 +222,41 @@ adminRoutes.get(
       }))
 
     res.json({ accounts: [...rows, ...withoutAccount] })
+  }),
+)
+
+/**
+ * Turns an account off, or back on.
+ *
+ * Disabling is the stronger of the two controls here: withdrawing a role leaves
+ * somebody able to sign in and see nothing, while a disabled account is refused
+ * at the door — by the sign-in service, by the reset flow, and on every request
+ * that presents an already-issued token, so an open session dies at its next
+ * call rather than running until it expires.
+ */
+adminRoutes.patch(
+  '/accounts/:id/status',
+  requirePermission('admin'),
+  validateBody(z.object({ status: z.enum(['active', 'disabled']) }).strict()),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const { status } = req.body as { status: 'active' | 'disabled' }
+    const account = await prisma.appUser.findFirst({
+      where: { id: String(req.params.id ?? ''), tenantId: p.tenantId },
+      select: { id: true, email: true, status: true },
+    })
+    if (!account) throw new NotFoundError('There is no such account here.')
+    if (account.email.toLowerCase() === p.email.toLowerCase()) {
+      // Locking yourself out is not a recoverable mistake: the control that
+      // would undo it is behind the account you just disabled.
+      throw new BadRequestError('You cannot disable your own account.')
+    }
+    const updated = await prisma.appUser.update({
+      where: { id: account.id },
+      data: { status },
+      select: { id: true, email: true, status: true },
+    })
+    res.json(updated)
   }),
 )
 

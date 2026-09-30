@@ -155,3 +155,23 @@
 .signin__pendingtext:last-child { margin-bottom: 0; }
 
 .signin__googlewrap { display: flex; justify-content: center; margin: var(--s4) 0 var(--s3); min-height: 44px; }
+
+/* ── The one-time code (2026-09-30) ────────────────────────────────────── */
+
+/* Six digits read back more easily spaced out, in the font that doesn't
+   confuse a zero with an O. */
+.signin__code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-h3);
+  letter-spacing: 0.35em;
+  text-align: center;
+}
+
+.signin__optional {
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-soft);
+}
+
+.signin__link:disabled { color: var(--text-dim); cursor: default; text-decoration: none; }

@@ -2722,12 +2722,18 @@ model AppUser {
   id       String @id
   tenantId String
 
-  // Google's stable id for this person. The real identity: an email address
-  // can be renamed or reassigned, this cannot.
-  googleSub String
+  // Google's stable id, once this person has signed in with Google. Null for
+  // an account created with an email address and a password.
+  googleSub String?
   email     String
-  // Google has verified the address itself; we refuse a sign-in where it has not.
-  emailVerified Boolean @default(true)
+  // Proven: by Google, or by entering a code sent to that address. An account
+  // is never created without one of the two, so this is always true in
+  // practice — it is kept explicit so the guarantee is visible.
+  emailVerified Boolean @default(false)
+
+  // A bcrypt hash, for an account that signs in with a password. Null for a
+  // Google-only account. The password itself is never stored anywhere.
+  passwordHash String?
 
   // What Google returned about them, stored as given.
   name       String?
@@ -2752,4 +2758,36 @@ model AppUser {
   @@unique([tenantId, googleSub])
   @@unique([tenantId, email])
   @@index([tenantId, status])
+}
+
+// A one-time code sent to an email address, to prove somebody reads it.
+//
+// Used when creating an account and when recovering one. Three things make it
+// safe, and all three are enforced in code rather than assumed:
+//
+//   · only a HASH of the code is stored, so the database never holds anything
+//     that could be used to complete a sign-up or a reset;
+//   · it expires, and expiry is checked at the moment it is used;
+//   · it is single-use, and a wrong guess is counted — after a few, the code
+//     is spent, so a six-digit code cannot be worked through.
+model EmailOtp {
+  id       String @id
+  tenantId String
+
+  email String
+  // register | reset — a code for one is not accepted for the other.
+  purpose String
+
+  // sha256 of the code. The code itself exists only in the email.
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  usedAt    DateTime?
+
+  // Recorded for the audit trail, never shown to the requester.
+  requestedIp String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, email, purpose, createdAt])
+  @@index([expiresAt])
 }

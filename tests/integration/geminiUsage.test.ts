@@ -16,6 +16,19 @@ import jwt from 'jsonwebtoken'
 //
 // Read-only throughout: this endpoint writes nothing.
 
+// WHO THIS TEST SIGNS IN AS (2026-09-30).
+//
+// This dashboard is administrators-only, and admin comes from the configured
+// list of addresses and nowhere else — a stored role cannot grant it. So the
+// test puts its own address on that list, in this process only, before any
+// application module is loaded. dotenv does not overwrite a variable that is
+// already set, which is what makes this work and also what keeps it from
+// touching the real list on any server.
+const ADMIN = { id: `usage-admin-${Date.now().toString(36)}`, email: `usage-admin@altiusnxt.test` }
+const ORDINARY = { id: `usage-plain-${Date.now().toString(36)}`, email: `usage-plain@altiusnxt.test` }
+process.env.AUTH_ADMIN_EMAILS = `${process.env.AUTH_ADMIN_EMAILS ?? ''},${ADMIN.email}`
+process.env.AUTH_ALLOWED_EMAIL_DOMAINS = `${process.env.AUTH_ALLOWED_EMAIL_DOMAINS ?? ''},altiusnxt.test`
+
 async function ready(): Promise<string | null> {
   try {
     const { prisma } = await import('../../src/platform/db.js')
@@ -23,7 +36,7 @@ async function ready(): Promise<string | null> {
   } catch (err) {
     return `marketing database unavailable: ${(err as Error).message}`
   }
-  if (!process.env.JWT_SECRET) return 'JWT_SECRET is not set'
+  if (!process.env.AUTH_JWT_SECRET) return 'AUTH_JWT_SECRET is not set'
   return null
 }
 
@@ -32,7 +45,6 @@ const describeIfReady = skipReason ? describe.skip : describe
 if (skipReason) console.warn(`\n[geminiUsage] SKIPPED — ${skipReason}\n`)
 
 const PREFIX = `usage-${Date.now().toString(36)}`
-const VIEWER = { id: `${PREFIX}-viewer`, email: `${PREFIX}@altiusnxt.test` }
 
 let server: Server
 let base = ''
@@ -43,11 +55,24 @@ describeIfReady('Gemini usage — counted, never estimated', () => {
     const { prisma, newId } = await import('../../src/platform/db.js')
     const tenant = await prisma.tenant.findFirstOrThrow({ where: { slug: process.env.DEFAULT_TENANT_SLUG } })
     tenantId = tenant.id
-    await prisma.tenantMember.upsert({
-      where: { tenantId_email: { tenantId, email: VIEWER.email } },
-      create: { id: newId(), tenantId, crmUserId: VIEWER.id, email: VIEWER.email, name: VIEWER.email, role: 'viewer' },
-      update: { crmUserId: VIEWER.id, role: 'viewer' },
-    })
+
+    // An account and a role for each of the two callers. The token names the
+    // account; the role and the admin list decide what it may reach.
+    for (const [who, role] of [
+      [ADMIN, 'admin'],
+      [ORDINARY, 'operator'],
+    ] as const) {
+      await prisma.appUser.upsert({
+        where: { id: who.id },
+        create: { id: who.id, tenantId, email: who.email, name: who.email, emailVerified: true, status: 'active' },
+        update: { status: 'active' },
+      })
+      await prisma.tenantMember.upsert({
+        where: { tenantId_email: { tenantId, email: who.email } },
+        create: { id: newId(), tenantId, email: who.email, name: who.email, role },
+        update: { role },
+      })
+    }
     const { createServer } = await import('../../src/server.js')
     const app = createServer()
     server = await new Promise<Server>((resolve) => {
@@ -59,17 +84,33 @@ describeIfReady('Gemini usage — counted, never estimated', () => {
   afterAll(async () => {
     const { prisma } = await import('../../src/platform/db.js')
     await prisma.llmCall.deleteMany({ where: { feature: { startsWith: PREFIX } } })
-    await prisma.tenantMember.deleteMany({ where: { email: VIEWER.email } })
+    const emails = [ADMIN.email, ORDINARY.email]
+    await prisma.tenantMember.deleteMany({ where: { email: { in: emails } } })
+    await prisma.appUser.deleteMany({ where: { email: { in: emails } } })
     await new Promise<void>((r) => server.close(() => r()))
   })
 
-  const get = async (path: string) => {
-    const token = jwt.sign({ id: VIEWER.id, email: VIEWER.email, name: VIEWER.email }, process.env.JWT_SECRET!, {
+  /**
+   * A session token of the kind this platform issues, for one of the two
+   * accounts above. Signed with AUTH_JWT_SECRET and carrying this platform's
+   * own issuer, because a token signed with anything else is refused.
+   */
+  const get = async (path: string, who = ADMIN) => {
+    const { AUTH_ISSUER } = await import('../../src/auth/tokens.js')
+    const token = jwt.sign({ email: who.email, iss: AUTH_ISSUER }, process.env.AUTH_JWT_SECRET!, {
+      subject: who.id,
       expiresIn: 300,
     })
     const res = await fetch(`${base}/api/v1${path}`, { headers: { Authorization: `Bearer ${token}` } })
     return { status: res.status, body: (await res.json()) as Record<string, unknown> }
   }
+
+  // Since 2026-09-30 this is an administrators-only dashboard: what Gemini has
+  // cost is not something every operator sees.
+  it('is refused to somebody who is not an administrator', async () => {
+    const r = await get('/usage/gemini?days=30', ORDINARY)
+    expect(r.status).toBe(403)
+  })
 
   it('is reachable, and says which provider it is reporting on', async () => {
     const r = await get('/usage/gemini?days=30')

@@ -87,11 +87,30 @@ describe('development bypasses are refused in production', () => {
     expect(r.output).toMatch(/approved in Task #980/)
   })
 
+  it('refuses AUTH_DEV_RETURN_OTP in production', () => {
+    // The earlier guards are switched off explicitly so this one is the reason
+    // the process exits, rather than passing because another flag tripped
+    // first. AUTH_DEV_RETURN_OTP is TRUE in the project's .env.
+    const r = loadConfig({
+      NODE_ENV: 'production',
+      WORKBENCH_ALLOW_UNAPPROVED: 'false',
+      REPORT_ALLOW_UNAPPROVED: 'false',
+      AUTH_DEV_RETURN_OTP: 'true',
+    })
+    expect(r.code).toBe(1)
+    expect(r.output).toMatch(/AUTH_DEV_RETURN_OTP is a development-only flag/)
+    // And it says what the flag would have let somebody do, which is take over
+    // an account knowing only its email address.
+    expect(r.output).toMatch(/create or take over an account/)
+    expect(r.output).not.toContain('CONFIG_LOADED')
+  })
+
   it('starts in production when every development flag is off', () => {
     const r = loadConfig({
       NODE_ENV: 'production',
       WORKBENCH_ALLOW_UNAPPROVED: 'false',
       REPORT_ALLOW_UNAPPROVED: 'false',
+      AUTH_DEV_RETURN_OTP: 'false',
     })
     expect(r.output).toContain('CONFIG_LOADED')
     expect(r.code).toBe(0)
@@ -101,7 +120,12 @@ describe('development bypasses are refused in production', () => {
   it('keeps the development capability outside production', () => {
     // The point is not to remove the bypass — it is deliberately useful
     // locally. It must simply be impossible to ship.
-    const r = loadConfig({ NODE_ENV: 'development', WORKBENCH_ALLOW_UNAPPROVED: 'true', REPORT_ALLOW_UNAPPROVED: 'true' })
+    const r = loadConfig({
+      NODE_ENV: 'development',
+      WORKBENCH_ALLOW_UNAPPROVED: 'true',
+      REPORT_ALLOW_UNAPPROVED: 'true',
+      AUTH_DEV_RETURN_OTP: 'true',
+    })
     expect(r.output).toContain('CONFIG_LOADED')
     expect(r.code).toBe(0)
   })

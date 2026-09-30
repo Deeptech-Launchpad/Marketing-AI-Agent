@@ -2,29 +2,35 @@ import { env } from '../config/env.js'
 import { getCrm } from '../crm/index.js'
 import { audit } from '../platform/audit.js'
 import { newId, prisma } from '../platform/db.js'
-import { ConflictError, ForbiddenError, UnauthorizedError } from '../platform/errors.js'
+import { BadRequestError, ConflictError, ForbiddenError, UnauthorizedError } from '../platform/errors.js'
 import { logger } from '../platform/logger.js'
-import { adminEmails, allowedDomains, isAdminEmail, roleFor, signInProblem } from './accessList.js'
+import { adminEmails, allowedDomains, isAdminEmail, isEmailShaped, normalizeEmail, roleFor, signInProblem } from './accessList.js'
 import { verifyGoogleIdToken } from './google.js'
+import { mailConfigured, sendVerificationCode } from './mailer.js'
+import { issueCode, useCode, type OtpPurpose } from './otp.js'
+import { hashPassword, passwordProblem, verifyPassword } from './passwords.js'
 import { issueSessionToken, localAuthUnavailableReason } from './tokens.js'
 
-// SIGNING IN WITH GOOGLE — THE ONLY WAY IN.
+// TWO WAYS TO PROVE WHO YOU ARE, ONE WAY TO BE ALLOWED IN.
 //
-// One path, and these rules run through all of it:
+//   GOOGLE      hands over an ID token, verified against Google's own keys.
+//   EMAIL       creates an account with a password, after entering a code
+//               sent to that address — which is what proves the address is
+//               theirs, since anyone can type one.
 //
-//   1. GOOGLE PROVES WHO. The browser hands over an ID token; it is verified
-//      against Google's own keys before a single field is believed. Nothing
-//      the browser claims about the person is trusted.
+// Both end in the same place, and these rules hold for both:
 //
-//   2. CONFIGURATION DECIDES WHETHER, AND AS WHAT. Whether this address may
-//      sign in at all, and whether it is an admin, are read from the
-//      configured lists on EVERY sign-in — never from a stored row. So the
-//      lists are the truth, and changing one takes effect immediately.
+//   1. CONFIGURATION DECIDES WHETHER, AND AS WHAT. Whether an address may be
+//      here at all, and whether it is an admin, are read from the configured
+//      lists on EVERY sign-in — never from a stored row. The email path is
+//      held to exactly the same list as the Google one, so it cannot be used
+//      to get in around it.
 //
-//   3. THE ROLE IS WRITTEN DOWN, BUT THE LIST STILL RULES. TenantMember is
-//      kept in step at each sign-in so the rest of the platform can read a
-//      role the way it always has, while the admin list remains the only
-//      thing that decides who holds admin.
+//   2. A FAILED SIGN-IN NEVER SAYS WHY. Wrong password, no such account, a
+//      Google-only account asked for a password — all answer identically.
+//
+//   3. NOTHING IS WRITTEN UNTIL THE ADDRESS IS PROVEN. A sign-up creates no
+//      account until the code is entered correctly.
 
 export interface SignedIn {
   token: string
@@ -36,10 +42,26 @@ export interface SignedIn {
   isAdmin: boolean
 }
 
+export interface CodeSent {
+  /** Always the same sentence, whether or not an account exists. */
+  message: string
+  /** Minutes until it expires, so the screen can say so. */
+  expiresInMinutes: number
+  /** DEVELOPMENT ONLY, and only with AUTH_DEV_RETURN_OTP on. */
+  devCode?: string
+}
+
+const SIGN_IN_REFUSED = 'That email and password do not match an account here.'
+
 async function tenantId(): Promise<string> {
   const tenant = await prisma.tenant.findUnique({ where: { slug: env.DEFAULT_TENANT_SLUG }, select: { id: true } })
   if (!tenant) throw new ConflictError('No tenant is configured on this server. Run npm run db:seed.')
   return tenant.id
+}
+
+function assertReady(): void {
+  const reason = localAuthUnavailableReason()
+  if (reason) throw new ConflictError(reason)
 }
 
 /**
@@ -63,8 +85,8 @@ async function findCrmUserId(email: string): Promise<string | null> {
 /**
  * Writes the role the admin list says this person has.
  *
- * Done on every sign-in, so somebody removed from the list loses admin the
- * next time they sign in rather than keeping it because a row once said so.
+ * Done at every sign-in, so somebody removed from the list loses admin rather
+ * than keeping it because a row once said so.
  */
 async function applyRole(tid: string, email: string, name: string | null, crmUserId: string | null) {
   const role = roleFor(email)
@@ -76,13 +98,240 @@ async function applyRole(tid: string, email: string, name: string | null, crmUse
   return role
 }
 
-export async function signInWithGoogle(input: { credential: string; requestId?: string | null }): Promise<SignedIn> {
-  const unavailable = localAuthUnavailableReason()
-  if (unavailable) throw new ConflictError(unavailable)
+async function session(user: { id: string; email: string; name: string | null; pictureUrl: string | null }, role: 'admin' | 'operator'): Promise<SignedIn> {
+  const { token, expiresAt } = issueSessionToken({ id: user.id, email: user.email })
+  return {
+    token,
+    expiresAt: expiresAt.toISOString(),
+    email: user.email,
+    name: user.name,
+    pictureUrl: user.pictureUrl,
+    role,
+    isAdmin: role === 'admin',
+  }
+}
 
+/** Sends a code, and reports what the caller may tell the person. */
+async function deliverCode(tid: string, email: string, purpose: OtpPurpose, ip: string | null): Promise<CodeSent> {
+  const { code } = await issueCode({ tenantId: tid, email, purpose, ip })
+  const mail = await sendVerificationCode({ to: email, code, minutes: env.AUTH_OTP_TTL_MINUTES, purpose })
+
+  const message = mail.sent
+    ? `A ${String(env.AUTH_OTP_TTL_MINUTES)}-minute code has been sent to ${email}. Enter it below.`
+    : env.AUTH_DEV_RETURN_OTP
+      ? 'No mail server is configured, so the code is shown here for testing.'
+      : 'The code could not be emailed. Ask an administrator to configure the mail server.'
+
+  if (!mail.sent && !env.AUTH_DEV_RETURN_OTP) {
+    logger.warn({ email, purpose, reason: mail.reason }, 'verification code could not be delivered')
+  }
+  return {
+    message,
+    expiresInMinutes: env.AUTH_OTP_TTL_MINUTES,
+    ...(!mail.sent && env.AUTH_DEV_RETURN_OTP ? { devCode: code } : {}),
+  }
+}
+
+// ── Creating an account ────────────────────────────────────────────────────
+
+/** Step one: prove the address is yours. No account exists until step two. */
+export async function startRegistration(input: { email: string; ip?: string | null; requestId?: string | null }): Promise<CodeSent> {
+  assertReady()
+  const email = normalizeEmail(input.email)
+
+  // The same list that governs Google sign-in, so this path cannot be used to
+  // get in around it.
+  const refused = signInProblem(email)
+  if (refused) throw new ForbiddenError(refused)
+
+  const tid = await tenantId()
+  const existing = await prisma.appUser.findUnique({
+    where: { tenantId_email: { tenantId: tid, email } },
+    select: { passwordHash: true },
+  })
+  if (existing?.passwordHash) {
+    throw new ConflictError('An account with that email already exists. Sign in instead, or use “Forgot password”.')
+  }
+
+  return deliverCode(tid, email, 'register', input.ip ?? null)
+}
+
+/** Step two: the code proves the address, and the account is created. */
+export async function completeRegistration(input: {
+  email: string
+  code: string
+  password: string
+  name?: string | null
+  requestId?: string | null
+}): Promise<SignedIn> {
+  assertReady()
+  const email = normalizeEmail(input.email)
+  const refused = signInProblem(email)
+  if (refused) throw new ForbiddenError(refused)
+
+  const weak = passwordProblem(input.password)
+  if (weak) throw new BadRequestError(weak)
+
+  const tid = await tenantId()
+  const check = await useCode({ tenantId: tid, email, purpose: 'register', code: input.code })
+  if (!check.ok) throw new BadRequestError(check.reason)
+
+  const existing = await prisma.appUser.findUnique({ where: { tenantId_email: { tenantId: tid, email } } })
+  const crmUserId = existing?.crmUserId ?? (await findCrmUserId(email))
+  const id = existing?.id ?? newId()
+  const name = input.name?.trim() || existing?.name || null
+
+  // An address that already signed in with Google gains a password rather
+  // than a second account: same person, two ways in.
+  const user = await prisma.appUser.upsert({
+    where: { id },
+    create: {
+      id,
+      tenantId: tid,
+      email,
+      name,
+      passwordHash: await hashPassword(input.password),
+      emailVerified: true,
+      status: 'active',
+      crmUserId,
+      signInCount: 1,
+      lastLoginAt: new Date(),
+    },
+    update: {
+      name,
+      passwordHash: await hashPassword(input.password),
+      emailVerified: true,
+      crmUserId,
+      signInCount: { increment: 1 },
+      lastLoginAt: new Date(),
+    },
+  })
+
+  const role = await applyRole(tid, email, name, crmUserId)
+  await audit({
+    tenantId: tid,
+    actorType: 'user',
+    actorCrmUserId: crmUserId,
+    action: existing ? 'auth.password_added' : 'auth.account_created',
+    resourceType: 'AppUser',
+    resourceId: id,
+    dataClass: 'customer_pii',
+    summary: existing
+      ? `Password added to the existing account for ${email} (${role})`
+      : `Account created with a verified email address: ${email} (${role})`,
+    requestId: input.requestId ?? null,
+  })
+  return session(user, role)
+}
+
+// ── Signing in with a password ─────────────────────────────────────────────
+
+export async function signInWithPassword(input: { email: string; password: string }): Promise<SignedIn> {
+  assertReady()
+  const email = normalizeEmail(input.email)
+  if (!isEmailShaped(email)) throw new UnauthorizedError(SIGN_IN_REFUSED)
+
+  const tid = await tenantId()
+  const user = await prisma.appUser.findUnique({ where: { tenantId_email: { tenantId: tid, email } } })
+
+  // The same answer whether the account is missing, has no password, or the
+  // password is wrong.
+  if (!user || !(await verifyPassword(input.password, user.passwordHash))) {
+    throw new UnauthorizedError(SIGN_IN_REFUSED)
+  }
+  if (user.status !== 'active') throw new UnauthorizedError('That account has been disabled. Ask an administrator.')
+
+  // Checked again at sign-in: an address removed from the allow-list cannot
+  // keep getting in on an account it created earlier.
+  const refused = signInProblem(email)
+  if (refused) throw new ForbiddenError(refused)
+
+  const crmUserId = user.crmUserId ?? (await findCrmUserId(email))
+  const updated = await prisma.appUser.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date(), signInCount: { increment: 1 }, crmUserId },
+  })
+  const role = await applyRole(tid, email, updated.name, crmUserId)
+  return session(updated, role)
+}
+
+// ── Recovering an account ──────────────────────────────────────────────────
+
+export async function startPasswordReset(input: { email: string; ip?: string | null }): Promise<CodeSent> {
+  assertReady()
+  const email = normalizeEmail(input.email)
+  const tid = await tenantId()
+  const user = isEmailShaped(email)
+    ? await prisma.appUser.findUnique({ where: { tenantId_email: { tenantId: tid, email } }, select: { status: true } })
+    : null
+
+  // Whether an address has an account here is not something this endpoint
+  // will tell an anonymous caller, so the answer is the same either way and
+  // no code is created for an address that has none.
+  const generic: CodeSent = {
+    message: `If an account exists for ${email}, a code has been sent to it. It expires in ${String(env.AUTH_OTP_TTL_MINUTES)} minutes.`,
+    expiresInMinutes: env.AUTH_OTP_TTL_MINUTES,
+  }
+  if (!user || user.status !== 'active') return generic
+
+  const sent = await deliverCode(tid, email, 'reset', input.ip ?? null)
+  return { ...generic, ...(sent.devCode ? { devCode: sent.devCode } : {}) }
+}
+
+export async function completePasswordReset(input: {
+  email: string
+  code: string
+  password: string
+  requestId?: string | null
+}): Promise<SignedIn> {
+  assertReady()
+  const email = normalizeEmail(input.email)
+  const weak = passwordProblem(input.password)
+  if (weak) throw new BadRequestError(weak)
+
+  const tid = await tenantId()
+  const check = await useCode({ tenantId: tid, email, purpose: 'reset', code: input.code })
+  if (!check.ok) throw new BadRequestError(check.reason)
+
+  const user = await prisma.appUser.findUnique({ where: { tenantId_email: { tenantId: tid, email } } })
+  if (!user || user.status !== 'active') {
+    throw new BadRequestError('That code is not valid any more. Ask for a new one.')
+  }
+
+  const updated = await prisma.appUser.update({
+    where: { id: user.id },
+    data: {
+      passwordHash: await hashPassword(input.password),
+      // Completing a reset proves the person reads that mailbox.
+      emailVerified: true,
+      lastLoginAt: new Date(),
+      signInCount: { increment: 1 },
+    },
+  })
+  const role = await applyRole(tid, email, updated.name, updated.crmUserId)
+  await audit({
+    tenantId: tid,
+    actorType: 'user',
+    actorCrmUserId: updated.crmUserId,
+    action: 'auth.password_reset',
+    resourceType: 'AppUser',
+    resourceId: updated.id,
+    dataClass: 'customer_pii',
+    summary: `Password reset completed for ${email}`,
+    requestId: input.requestId ?? null,
+  })
+  return session(updated, role)
+}
+
+// ── Signing in with Google ─────────────────────────────────────────────────
+
+export async function signInWithGoogle(input: { credential: string; requestId?: string | null }): Promise<SignedIn> {
+  assertReady()
+  if (!env.GOOGLE_CLIENT_ID.trim()) {
+    throw new ConflictError('Google sign-in is not configured on this server (GOOGLE_CLIENT_ID is not set).')
+  }
   const identity = await verifyGoogleIdToken(input.credential)
 
-  // Whether this account may sign in at all — configuration, not the browser.
   const refused = signInProblem(identity.email)
   if (refused) throw new ForbiddenError(refused)
 
@@ -105,7 +354,7 @@ export async function signInWithGoogle(input: { credential: string; requestId?: 
     googleSub: identity.sub,
     email: identity.email,
     emailVerified: true,
-    name: identity.name,
+    name: identity.name ?? existing?.name ?? null,
     givenName: identity.givenName,
     familyName: identity.familyName,
     pictureUrl: identity.pictureUrl,
@@ -120,8 +369,7 @@ export async function signInWithGoogle(input: { credential: string; requestId?: 
     update: { ...profile, signInCount: { increment: 1 } },
   })
 
-  const role = await applyRole(tid, identity.email, identity.name, crmUserId)
-
+  const role = await applyRole(tid, identity.email, user.name, crmUserId)
   if (!existing) {
     await audit({
       tenantId: tid,
@@ -135,17 +383,7 @@ export async function signInWithGoogle(input: { credential: string; requestId?: 
       requestId: input.requestId ?? null,
     })
   }
-
-  const { token, expiresAt } = issueSessionToken({ id: user.id, email: user.email })
-  return {
-    token,
-    expiresAt: expiresAt.toISOString(),
-    email: user.email,
-    name: user.name,
-    pictureUrl: user.pictureUrl,
-    role,
-    isAdmin: role === 'admin',
-  }
+  return session(user, role)
 }
 
 /** What the sign-in screen needs to know before it draws itself. */
@@ -155,7 +393,12 @@ export function authCapabilities() {
     ready: !reason,
     reason,
     googleClientId: env.GOOGLE_CLIENT_ID.trim() || null,
+    google: Boolean(env.GOOGLE_CLIENT_ID.trim()),
+    /** Creating an account and recovering one both need a code by email. */
+    emailSignIn: true,
+    mailConfigured: mailConfigured(),
     allowedDomains: allowedDomains(),
+    otpMinutes: env.AUTH_OTP_TTL_MINUTES,
     // How many, never who: the sign-in screen has no business listing the
     // organisation's administrators to anonymous callers.
     adminCount: adminEmails().length,

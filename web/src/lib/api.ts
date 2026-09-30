@@ -281,6 +281,8 @@ export const api = {
     request<T>(path, { ...opts, method: 'GET' }),
   post: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, 'method' | 'body'>) =>
     request<T>(path, { ...opts, method: 'POST', body }),
+  patch: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, 'method' | 'body'>) =>
+    request<T>(path, { ...opts, method: 'PATCH', body }),
   del: <T>(path: string, opts?: Omit<RequestOptions, 'method'>) =>
     request<T>(path, { ...opts, method: 'DELETE' }),
   /**
@@ -291,18 +293,23 @@ export const api = {
     requestResource<T>(path, { ...opts, method: 'GET' }),
 }
 
-// ── Signing in with Google (2026-09-30) ────────────────────────────────────
+// ── Signing in (2026-09-30) ────────────────────────────────────────────────
 //
-// The only way in. These are the only endpoints called before there is a
-// token, and each reads the server's own sentence on failure — nothing here
-// paraphrases a refusal.
+// Three ways to arrive: Google, an email and password, or a one-time code that
+// proves an address before an account exists for it. These are the only calls
+// made before there is a token, and each reads the server's own sentence on
+// failure — nothing here paraphrases a refusal.
 
 export interface AuthCapabilities {
   /** False when the server cannot accept a sign-in at all, with the reason. */
   ready: boolean
   reason: string | null
   googleClientId: string | null
+  google: boolean
+  emailSignIn: boolean
+  mailConfigured: boolean
   allowedDomains: string[]
+  otpMinutes: number
   adminCount: number
 }
 
@@ -316,23 +323,20 @@ export interface SignedIn {
   isAdmin: boolean
 }
 
-export async function fetchAuthCapabilities(): Promise<AuthCapabilities | null> {
-  try {
-    const res = await fetch('/api/v1/auth/capabilities', { headers: { Accept: 'application/json' } })
-    return res.ok ? ((await res.json()) as AuthCapabilities) : null
-  } catch {
-    return null
-  }
+export interface CodeSent {
+  message: string
+  expiresInMinutes: number
+  /** Only when the server has no mail configured AND is in development. */
+  devCode?: string
 }
 
-/** Hands a verified Google credential to the server, which decides the rest. */
-export async function signInWithGoogleCredential(credential: string): Promise<SignedIn> {
+async function authPost<T>(path: string, body: unknown): Promise<T> {
   let res: Response
   try {
-    res = await fetch('/api/v1/auth/google', {
+    res = await fetch(`/api/v1/auth${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ credential }),
+      body: JSON.stringify(body),
     })
   } catch {
     throw new ApiError(0, 'unreachable', 'The server could not be reached. Check it is running, then try again.')
@@ -342,11 +346,31 @@ export async function signInWithGoogleCredential(credential: string): Promise<Si
     throw new ApiError(
       res.status,
       parsed.error?.code ?? 'sign_in_failed',
-      parsed.error?.message ?? 'That sign-in was not accepted.',
+      parsed.error?.message ?? 'That did not work. Try again.',
       undefined,
       undefined,
       true,
     )
   }
-  return parsed as SignedIn
+  return parsed as T
+}
+
+export async function fetchAuthCapabilities(): Promise<AuthCapabilities | null> {
+  try {
+    const res = await fetch('/api/v1/auth/capabilities', { headers: { Accept: 'application/json' } })
+    return res.ok ? ((await res.json()) as AuthCapabilities) : null
+  } catch {
+    return null
+  }
+}
+
+export const authApi = {
+  google: (credential: string) => authPost<SignedIn>('/google', { credential }),
+  login: (email: string, password: string) => authPost<SignedIn>('/login', { email, password }),
+  registerStart: (email: string) => authPost<CodeSent>('/register/start', { email }),
+  registerVerify: (email: string, code: string, password: string, name?: string) =>
+    authPost<SignedIn>('/register/verify', { email, code, password, ...(name?.trim() ? { name: name.trim() } : {}) }),
+  forgotStart: (email: string) => authPost<CodeSent>('/forgot/start', { email }),
+  forgotVerify: (email: string, code: string, password: string) =>
+    authPost<SignedIn>('/forgot/verify', { email, code, password }),
 }

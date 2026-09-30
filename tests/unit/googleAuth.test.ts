@@ -63,6 +63,11 @@ const env: Record<string, any> = {
   AUTH_ALLOWED_EMAIL_DOMAINS: 'altiusnxt.com',
   AUTH_ADMIN_EMAILS: ADMINS,
   GOOGLE_CLIENT_ID: 'test-client-id',
+  // Read by authCapabilities(), which now also reports on the email path.
+  AUTH_OTP_TTL_MINUTES: 10,
+  AUTH_OTP_MAX_ATTEMPTS: 5,
+  AUTH_DEV_RETURN_OTP: false,
+  SMTP_HOST: '',
 }
 vi.mock('../../src/config/env.js', () => ({ env }))
 const quiet = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
