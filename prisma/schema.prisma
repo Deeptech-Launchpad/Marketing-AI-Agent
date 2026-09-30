@@ -2707,65 +2707,49 @@ model CrmSyncOutbox {
   @@index([externalKey])
 }
 
-// ── Sign-in accounts of this platform itself (2026-09-30) ──────────────────
+// ── Who signs in, and what Google told us about them (2026-09-30) ─────────
 //
-// Until now identity came only from NXT Sales: its login, its token, its
-// password. This adds accounts that belong to the Marketing AI Agent — email
-// and password, or Google — so someone can be given access here without
-// needing a CRM login at all.
+// Google is the only way in. There is no password here to steal, reset or
+// leak: identity is proved by Google and verified against Google's own keys
+// (src/auth/google.ts), and what is stored below is only what Google returned
+// about the person who signed in.
 //
-// It sits BESIDE the NXT Sales path, which still works unchanged. Neither
-// knows about the other: what a person may DO is still decided only by their
-// TenantMember role, exactly as before, so an account with no role sees
-// nothing until an admin grants one.
+// Being signed in is still not the same as being allowed to do things. The
+// role is decided at every sign-in from the configured admin list, and written
+// to TenantMember — so the list is the single source of truth, and removing an
+// address from it removes that person's admin the next time they sign in.
 model AppUser {
   id       String @id
   tenantId String
 
-  email String
-  name  String?
+  // Google's stable id for this person. The real identity: an email address
+  // can be renamed or reassigned, this cannot.
+  googleSub String
+  email     String
+  // Google has verified the address itself; we refuse a sign-in where it has not.
+  emailVerified Boolean @default(true)
 
-  // Null for a Google-only account. A bcrypt hash, never a password.
-  passwordHash String?
-  // Google's stable subject id, set once an account signs in with Google.
-  // Null for a password-only account; an account may have both.
-  googleSub String?
-
-  // Proven by a Google sign-in, or by completing a password reset.
-  emailVerified Boolean @default(false)
+  // What Google returned about them, stored as given.
+  name       String?
+  givenName  String?
+  familyName String?
+  pictureUrl String?
+  locale     String?
 
   // active | disabled. A disabled account is refused at sign-in with a reason.
   status String @default("active")
 
-  // The NXT Sales user with this same email, when one exists. Set at sign-up
-  // and refreshed at each sign-in. It is what lets this person own a company
-  // in the CRM; without it that one action is refused, and nothing else is.
+  // The NXT Sales user with this same email, when one exists. It is what lets
+  // this person own a company they add to the CRM; without it that one action
+  // is refused, and nothing else is.
   crmUserId String?
 
+  signInCount Int       @default(0)
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  resetTokens PasswordResetToken[]
-
+  @@unique([tenantId, googleSub])
   @@unique([tenantId, email])
   @@index([tenantId, status])
-  @@index([googleSub])
-}
-
-// One password-reset link. The link itself is never stored — only its hash —
-// so a leaked database row cannot be used to take an account over.
-model PasswordResetToken {
-  id        String    @id
-  appUserId String
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  // Recorded for the audit trail, never shown to the requester.
-  requestedIp String?
-  createdAt DateTime  @default(now())
-
-  user AppUser @relation(fields: [appUserId], references: [id], onDelete: Cascade)
-
-  @@index([appUserId, createdAt])
 }

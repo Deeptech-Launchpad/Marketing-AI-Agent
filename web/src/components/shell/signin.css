@@ -153,3 +153,5 @@
 .signin__pendingtitle { margin: 0 0 var(--s2); font-size: var(--fs-h3); color: var(--text); }
 .signin__pendingtext { margin: 0 0 var(--s2); font-size: var(--fs-sm); line-height: 1.55; color: var(--text-soft); }
 .signin__pendingtext:last-child { margin-bottom: 0; }
+
+.signin__googlewrap { display: flex; justify-content: center; margin: var(--s4) 0 var(--s3); min-height: 44px; }

@@ -81,8 +81,13 @@ export function Settings() {
   const navigate = useNavigate()
   const [days, setDays] = useState<number>(30)
 
+  // Admin only (2026-09-30): what the platform has spent is an admin's
+  // business. Asking for it as an ordinary user would only earn a 403.
   const usage = useAsync<GeminiUsage>(
-    (signal) => api.get<GeminiUsage>(`/usage/gemini?days=${days}`, { signal }),
+    (signal) =>
+      can('admin')
+        ? api.get<GeminiUsage>(`/usage/gemini?days=${days}`, { signal })
+        : Promise.resolve(null as unknown as GeminiUsage),
     [days],
   )
 
@@ -90,10 +95,14 @@ export function Settings() {
     <div className="set">
       <header className="set__head">
         <h1 className="set__title">Settings</h1>
-        <p className="set__sub">Your account, and what this platform has spent against its configured API keys.</p>
+        <p className="set__sub">
+          {can('admin')
+            ? 'Your account, and what this platform has spent against its configured API keys.'
+            : 'Your account.'}
+        </p>
       </header>
 
-      <Panel title="Profile" subtitle="Read from the NXT Sales account you signed in with">
+      <Panel title="Profile" subtitle="Read from the Google account you signed in with">
         {principal ? (
           <div className="set__profile">
             <Avatar name={principal.name} email={principal.email} />
@@ -120,8 +129,9 @@ export function Settings() {
             upload control that silently discards the file would be worse than
             not offering one. The initials come from the account itself. */}
         <p className="note" style={{ marginTop: 'var(--s4)' }}>
-          <User size={12} aria-hidden="true" /> Your name, email and role come from your NXT Sales account. Change them
-          there and they change here; this platform keeps no separate copy and stores no profile picture.
+          <User size={12} aria-hidden="true" /> Your name and email come from the Google account you signed in with.
+          Whether you are an administrator is set on the server, by email address — it is not something that can be
+          changed from inside the platform.
         </p>
       </Panel>
 
@@ -152,6 +162,7 @@ export function Settings() {
         </div>
       </Panel>
 
+      {can('admin') && (
       <Panel
         title="Gemini API usage"
         subtitle="Marketing AI project usage"
@@ -284,6 +295,7 @@ export function Settings() {
           }
         </AsyncBoundary>
       </Panel>
+      )}
     </div>
   )
 }

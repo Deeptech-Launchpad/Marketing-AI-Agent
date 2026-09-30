@@ -36,7 +36,9 @@ const startOfDayUtc = (d: Date): Date => new Date(Date.UTC(d.getUTCFullYear(), d
 
 usageRoutes.get(
   '/gemini',
-  requirePermission('view'),
+  // 2026-09-30: what the platform has spent is an admin's business, not
+  // everyone's. Ordinary users run the engines; the bill is not theirs to see.
+  requirePermission('admin'),
   asyncHandler(async (req, res) => {
     const p = req.principal!
     const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365)

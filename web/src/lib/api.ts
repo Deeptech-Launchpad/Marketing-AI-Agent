@@ -291,58 +291,19 @@ export const api = {
     requestResource<T>(path, { ...opts, method: 'GET' }),
 }
 
-/**
- * Signs in against NXT Sales, which is the identity provider for both
- * services. The marketing agent verifies the same token with the same secret,
- * so there is no second user directory to keep in step.
- */
-export async function loginWithNxtSales(email: string, password: string): Promise<string> {
-  let res: Response
-  try {
-    res = await fetch('/nxt/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ email, password }),
-    })
-  } catch {
-    throw new ApiError(
-      0,
-      'unreachable',
-      'NXT Sales could not be reached to sign you in. It may not be running on port 4000.',
-    )
-  }
-
-  const body = (await res.json().catch(() => ({}))) as { token?: string; message?: string }
-  if (!res.ok || !body.token) {
-    // NXT Sales answered; this is its verdict, not a transport failure.
-    throw new ApiError(
-      res.status,
-      'login_failed',
-      body.message ?? 'Those credentials were not accepted by NXT Sales.',
-      undefined,
-      undefined,
-      true,
-    )
-  }
-  return body.token
-}
-
-// ── This platform's own sign-in (2026-09-30) ───────────────────────────────
+// ── Signing in with Google (2026-09-30) ────────────────────────────────────
 //
-// Accounts that belong to the Marketing AI Agent, beside the NXT Sales path
-// above. These are the only endpoints called before there is a token, so each
-// one posts to /api/v1/auth and reads the server's own sentence on failure —
-// nothing here paraphrases a refusal.
+// The only way in. These are the only endpoints called before there is a
+// token, and each reads the server's own sentence on failure — nothing here
+// paraphrases a refusal.
 
 export interface AuthCapabilities {
-  localSignIn: boolean
-  localSignInReason: string | null
-  google: boolean
+  /** False when the server cannot accept a sign-in at all, with the reason. */
+  ready: boolean
+  reason: string | null
   googleClientId: string | null
-  nxtSales: boolean
-  registrationOpen: boolean
   allowedDomains: string[]
-  mailConfigured: boolean
+  adminCount: number
 }
 
 export interface SignedIn {
@@ -350,33 +311,9 @@ export interface SignedIn {
   expiresAt: string
   email: string
   name: string | null
-  /** False when no admin has granted this account a role yet. */
-  hasAccess: boolean
-}
-
-async function authPost<T>(path: string, body: unknown): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(`/api/v1/auth${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(body),
-    })
-  } catch {
-    throw new ApiError(0, 'unreachable', 'The server could not be reached. Check it is running, then try again.')
-  }
-  const parsed = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } }
-  if (!res.ok) {
-    throw new ApiError(
-      res.status,
-      parsed.error?.code ?? 'request_failed',
-      parsed.error?.message ?? 'That did not work. Try again.',
-      undefined,
-      undefined,
-      true,
-    )
-  }
-  return parsed as T
+  pictureUrl: string | null
+  role: 'admin' | 'operator'
+  isAdmin: boolean
 }
 
 export async function fetchAuthCapabilities(): Promise<AuthCapabilities | null> {
@@ -388,12 +325,28 @@ export async function fetchAuthCapabilities(): Promise<AuthCapabilities | null> 
   }
 }
 
-export const authApi = {
-  register: (email: string, password: string, name?: string) =>
-    authPost<SignedIn>('/register', { email, password, ...(name?.trim() ? { name: name.trim() } : {}) }),
-  login: (email: string, password: string) => authPost<SignedIn>('/login', { email, password }),
-  google: (credential: string) => authPost<SignedIn>('/google', { credential }),
-  forgotPassword: (email: string) =>
-    authPost<{ message: string; devResetLink?: string }>('/forgot-password', { email }),
-  resetPassword: (token: string, password: string) => authPost<{ email: string }>('/reset-password', { token, password }),
+/** Hands a verified Google credential to the server, which decides the rest. */
+export async function signInWithGoogleCredential(credential: string): Promise<SignedIn> {
+  let res: Response
+  try {
+    res = await fetch('/api/v1/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ credential }),
+    })
+  } catch {
+    throw new ApiError(0, 'unreachable', 'The server could not be reached. Check it is running, then try again.')
+  }
+  const parsed = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } }
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      parsed.error?.code ?? 'sign_in_failed',
+      parsed.error?.message ?? 'That sign-in was not accepted.',
+      undefined,
+      undefined,
+      true,
+    )
+  }
+  return parsed as SignedIn
 }

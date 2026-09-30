@@ -92,25 +92,11 @@ describe('development bypasses are refused in production', () => {
       NODE_ENV: 'production',
       WORKBENCH_ALLOW_UNAPPROVED: 'false',
       REPORT_ALLOW_UNAPPROVED: 'false',
-      AUTH_DEV_RETURN_RESET_LINK: 'false',
     })
     expect(r.output).toContain('CONFIG_LOADED')
     expect(r.code).toBe(0)
   })
 
-  // 2026-09-30: a reset link handed back over the API is a way into any
-  // account by knowing only its email address. It exists for local testing
-  // with no mail server, and must never survive into production.
-  it('refuses AUTH_DEV_RETURN_RESET_LINK in production', () => {
-    const r = loadConfig({
-      NODE_ENV: 'production',
-      WORKBENCH_ALLOW_UNAPPROVED: 'false',
-      REPORT_ALLOW_UNAPPROVED: 'false',
-      AUTH_DEV_RETURN_RESET_LINK: 'true',
-    })
-    expect(r.code).toBe(1)
-    expect(r.output).toMatch(/AUTH_DEV_RETURN_RESET_LINK is a development-only flag/)
-  })
 
   it('keeps the development capability outside production', () => {
     // The point is not to remove the bypass — it is deliberately useful

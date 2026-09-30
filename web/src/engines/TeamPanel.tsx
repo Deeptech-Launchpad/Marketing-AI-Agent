@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { UserPlus, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/hooks'
 import { useAuth } from '../lib/auth'
@@ -7,47 +7,46 @@ import { Panel, Button, Chip, Unset } from '../components/ui/primitives'
 import { InfoTip } from '../components/ui/InfoTip'
 import { ErrorState } from '../components/ui/states'
 
-// WHO MAY USE THIS PLATFORM — AND WHO IS STILL WAITING.
+// WHO HAS SIGNED IN, AND WHAT THEY HOLD.
 //
-// Signing in and being allowed in are two different things, and this is where
-// the second one is decided. Somebody who creates an account can do nothing at
-// all until an admin gives them a role here; until then they appear as
-// "waiting for approval", which is the only way an admin would know to act.
+// Two different things decide access here, and the panel is arranged to make
+// that obvious rather than to hide it:
 //
-// The four roles, and why they are separate: an operator runs the engines, an
-// approver signs work off, and they are deliberately not the same person —
-// whoever prepares a campaign should not be the one who approves it.
+//   ADMIN comes from the server's configured list of email addresses and from
+//   nowhere else. It cannot be granted from this screen — there is deliberately
+//   no button for it — because a list that anyone with admin could add to
+//   would stop being the thing that decides who holds admin.
+//
+//   EVERYTHING ELSE is an ordinary role, and can be adjusted here.
+//
+// Anyone who signs in with a work Google account becomes an ordinary user
+// automatically, so this is a record of who has been in rather than a queue of
+// people waiting to be let in.
 
 interface Account {
   id: string | null
   email: string
   name: string | null
   status: string
-  emailVerified: boolean
-  signInMethods: string[]
+  pictureUrl: string | null
   linkedToCrm: boolean
   role: string | null
+  isAdmin: boolean
+  signInCount: number
   lastLoginAt: string | null
   createdAt: string
 }
 
 const ROLES = [
-  { value: 'viewer', label: 'Viewer', what: 'Can look at everything. Cannot run, approve or send anything.' },
-  { value: 'operator', label: 'Operator', what: 'Can run the engines and prepare drafts. Cannot approve or send.' },
+  { value: 'viewer', label: 'Viewer', what: 'Can look at everything. Cannot run anything.' },
+  { value: 'operator', label: 'Operator', what: 'Can run the engines and prepare drafts. Cannot approve.' },
   { value: 'approver', label: 'Approver', what: 'Can approve and send what an operator prepared.' },
-  { value: 'admin', label: 'Admin', what: 'Everything, including granting access to other people.' },
 ] as const
-
-const METHOD_LABEL: Record<string, string> = {
-  password: 'Email & password',
-  google: 'Google',
-  nxt_sales: 'NXT Sales',
-}
 
 const HELP = {
   title: 'Team access',
-  what: 'Everyone who can sign in. Creating an account grants nothing on its own — a person sees no data at all until you give them a role here.',
-  next: 'Give a role to anyone marked "Waiting for approval", or remove access you no longer want.',
+  what: 'Everyone who has signed in with Google. Anyone with a work account becomes an ordinary user automatically; administrators are set on the server by email address.',
+  next: 'Adjust an ordinary role here. To make someone an administrator, add their address to AUTH_ADMIN_EMAILS on the server.',
 }
 
 export function TeamPanel() {
@@ -55,12 +54,10 @@ export function TeamPanel() {
   const list = useAsync<{ accounts: Account[] }>((signal) => api.get('/admin/accounts', { signal }), [])
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState<string>('viewer')
 
   const accounts = list.data?.accounts ?? []
-  const waiting = accounts.filter((a) => !a.role)
-  const allowed = accounts.filter((a) => a.role)
+  const admins = accounts.filter((a) => a.isAdmin)
+  const others = accounts.filter((a) => !a.isAdmin)
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key)
@@ -75,11 +72,60 @@ export function TeamPanel() {
     }
   }
 
-  const setRole = (email: string, role: string) =>
-    act(`role:${email}`, () => api.post('/admin/members', { email, role }))
-
-  const removeAccess = (email: string) =>
-    act(`remove:${email}`, () => api.del(`/admin/members/${encodeURIComponent(email)}`))
+  const row = (a: Account, controls: boolean) => (
+    <li key={a.email} className="team__row">
+      <span className="team__who">
+        {a.pictureUrl ? (
+          <img className="team__avatar" src={a.pictureUrl} alt="" referrerPolicy="no-referrer" />
+        ) : null}
+        <span className="team__whotext">
+          <span className="team__name">{a.name ?? a.email}</span>
+          <span className="cell-dim">{a.email}</span>
+          <span className="team__meta">
+            {a.signInCount > 0
+              ? `Signed in ${a.signInCount} time${a.signInCount === 1 ? '' : 's'}`
+              : 'Has not signed in yet'}
+            {a.lastLoginAt ? ` · last ${new Date(a.lastLoginAt).toLocaleDateString()}` : ''}
+            {a.linkedToCrm ? ' · linked to NXT Sales' : ''}
+          </span>
+        </span>
+      </span>
+      <span className="team__actions">
+        {a.isAdmin ? (
+          <Chip tone="ok" title="Set on the server, by email address">
+            Admin
+          </Chip>
+        ) : controls ? (
+          <>
+            <select
+              className="otr-input team__role"
+              value={a.role ?? 'operator'}
+              disabled={busy === `role:${a.email}`}
+              onChange={(e) => void act(`role:${a.email}`, () => api.post('/admin/members', { email: a.email, role: e.target.value }))}
+              aria-label={`Role for ${a.email}`}
+            >
+              {ROLES.map((r) => (
+                <option key={r.value} value={r.value} title={r.what}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="quiet"
+              icon={X}
+              busy={busy === `remove:${a.email}`}
+              title="They can sign in again, and come back as an ordinary user."
+              onClick={() => void act(`remove:${a.email}`, () => api.del(`/admin/members/${encodeURIComponent(a.email)}`))}
+            >
+              Remove
+            </Button>
+          </>
+        ) : null}
+        {a.email === principal?.email && <Chip>You</Chip>}
+      </span>
+    </li>
+  )
 
   return (
     <Panel
@@ -88,7 +134,7 @@ export function TeamPanel() {
           Team access <InfoTip help={HELP} label="team access" />
         </span>
       }
-      subtitle="Who can sign in, and what each person is allowed to do"
+      subtitle="Everyone who has signed in with Google, and what they hold"
     >
       {error && (
         <p className="otr-err" role="alert">
@@ -102,134 +148,31 @@ export function TeamPanel() {
         <ErrorState error={list.error} what="The team list could not be read" onRetry={list.refresh} />
       ) : (
         <>
-          {waiting.length > 0 && (
-            <div className="team__block">
-              <p className="eyebrow">Waiting for approval ({waiting.length})</p>
-              <p className="note">
-                These people have created an account but can see nothing yet. Give each one a role, or leave them
-                without one.
-              </p>
-              <ul className="team__list">
-                {waiting.map((a) => (
-                  <li key={a.email} className="team__row">
-                    <span className="team__who">
-                      <span className="team__name">{a.name ?? a.email}</span>
-                      <span className="cell-dim">{a.email}</span>
-                      <span className="team__meta">
-                        {a.signInMethods.map((m) => METHOD_LABEL[m] ?? m).join(', ') || 'No sign-in method'}
-                        {a.emailVerified ? ' · email verified' : ''}
-                        {a.linkedToCrm ? ' · linked to NXT Sales' : ''}
-                      </span>
-                    </span>
-                    <span className="team__actions">
-                      {ROLES.map((r) => (
-                        <Button
-                          key={r.value}
-                          size="sm"
-                          variant={r.value === 'viewer' ? 'primary' : 'ghost'}
-                          busy={busy === `role:${a.email}`}
-                          title={r.what}
-                          onClick={() => void setRole(a.email, r.value)}
-                        >
-                          {r.label}
-                        </Button>
-                      ))}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
           <div className="team__block">
-            <p className="eyebrow">Has access ({allowed.length})</p>
-            {allowed.length === 0 ? (
-              <Unset what="Nobody has been granted a role yet" />
+            <p className="eyebrow">Administrators ({admins.length})</p>
+            <p className="note">
+              Set on the server, by email address. They are the only people who can approve work, see what Gemini has
+              cost, and manage access. To change this list, edit <code>AUTH_ADMIN_EMAILS</code> on the server — it takes
+              effect the next time that person signs in.
+            </p>
+            {admins.length === 0 ? (
+              <Unset what="No configured administrator has signed in yet" />
             ) : (
-              <ul className="team__list">
-                {allowed.map((a) => (
-                  <li key={a.email} className="team__row">
-                    <span className="team__who">
-                      <span className="team__name">{a.name ?? a.email}</span>
-                      <span className="cell-dim">{a.email}</span>
-                      <span className="team__meta">
-                        {a.signInMethods.map((m) => METHOD_LABEL[m] ?? m).join(', ') || 'Has not signed in yet'}
-                        {a.lastLoginAt ? ` · last signed in ${new Date(a.lastLoginAt).toLocaleDateString()}` : ''}
-                      </span>
-                    </span>
-                    <span className="team__actions">
-                      <select
-                        className="otr-input team__role"
-                        value={a.role ?? 'viewer'}
-                        disabled={busy === `role:${a.email}` || a.email === principal?.email}
-                        onChange={(e) => void setRole(a.email, e.target.value)}
-                        aria-label={`Role for ${a.email}`}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r.value} value={r.value}>
-                            {r.label}
-                          </option>
-                        ))}
-                      </select>
-                      {a.email === principal?.email ? (
-                        <Chip>You</Chip>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="quiet"
-                          icon={X}
-                          busy={busy === `remove:${a.email}`}
-                          onClick={() => void removeAccess(a.email)}
-                        >
-                          Remove
-                        </Button>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <ul className="team__list">{admins.map((a) => row(a, false))}</ul>
             )}
           </div>
 
           <div className="team__block">
-            <p className="eyebrow">Give access to someone who has not signed in yet</p>
+            <p className="eyebrow">Everyone else ({others.length})</p>
             <p className="note">
-              Their role is waiting for them: the next time they sign in with that email — by any method — they come
-              straight in with it.
+              Anyone signing in with a work Google account starts as an operator: they can run the engines and prepare
+              drafts, but cannot approve or send.
             </p>
-            <div className="row">
-              <input
-                className="otr-input team__email"
-                type="email"
-                placeholder="name@altiusnxt.com"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                aria-label="Email address"
-              />
-              <select
-                className="otr-input team__role"
-                value={inviteRole}
-                onChange={(e) => setInviteRole(e.target.value)}
-                aria-label="Role"
-              >
-                {ROLES.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-              <Button
-                size="sm"
-                icon={UserPlus}
-                busy={busy === `role:${inviteEmail.trim().toLowerCase()}`}
-                disabled={!inviteEmail.trim()}
-                onClick={() =>
-                  void setRole(inviteEmail.trim().toLowerCase(), inviteRole).then(() => setInviteEmail(''))
-                }
-              >
-                Give access
-              </Button>
-            </div>
+            {others.length === 0 ? (
+              <Unset what="Nobody else has signed in yet" />
+            ) : (
+              <ul className="team__list">{others.map((a) => row(a, true))}</ul>
+            )}
           </div>
         </>
       )}

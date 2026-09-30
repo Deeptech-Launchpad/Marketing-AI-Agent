@@ -81,7 +81,10 @@ cp .env.example .env
 | `MARKETING_ADMIN_URL` | Superuser URL, used only by `db:extensions` / `db:indexes` |
 | `JWT_SECRET` | **Must be byte-identical to `../project/server/.env`** — already synced |
 | `NXT_SALES_SERVICE_USER_ID` | See *Service account* below |
-| `BOOTSTRAP_ADMIN_EMAIL` | First login with this email is granted the tenant admin role |
+| `GOOGLE_CLIENT_ID` | Google OAuth client id. Sign-in is Google-only; without it nobody can sign in |
+| `AUTH_JWT_SECRET` | This platform's own session-signing secret (not NXT Sales') |
+| `AUTH_ALLOWED_EMAIL_DOMAINS` | Work domains whose Google accounts may sign in |
+| `AUTH_ADMIN_EMAILS` | The only addresses granted admin. Read at every sign-in and every request |
 | `GEMINI_API_KEY` | Already set |
 
 Every value is validated at boot. A missing or malformed one **stops the

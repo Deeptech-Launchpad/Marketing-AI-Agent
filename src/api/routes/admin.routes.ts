@@ -1,10 +1,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { addEntry } from '../../campaign/suppressionService.js'
+import { isAdminEmail } from '../../auth/accessList.js'
 import { env } from '../../config/env.js'
 import { MEMBER_ROLES } from '../../domain/enums.js'
 import { prisma, newId } from '../../platform/db.js'
-import { NotFoundError } from '../../platform/errors.js'
+import { BadRequestError, NotFoundError } from '../../platform/errors.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -93,6 +94,16 @@ adminRoutes.post(
     const body = req.body as z.infer<typeof MemberBody>
     const email = body.email.toLowerCase().trim()
 
+    // Admin comes from the configured list and nowhere else (2026-09-30).
+    // Without this an admin could promote anyone here, and the list would
+    // stop being the thing that decides who holds admin.
+    if (body.role === 'admin' && !isAdminEmail(email)) {
+      throw new BadRequestError(
+        `Admin is granted by configuration, not here. Add ${email} to AUTH_ADMIN_EMAILS on the server, and they ` +
+          'become an admin the next time they sign in.',
+      )
+    }
+
     const member = await prisma.tenantMember.upsert({
       where: { tenantId_email: { tenantId: p.tenantId, email } },
       create: {
@@ -124,7 +135,7 @@ adminRoutes.get(
 )
 
 /**
- * Everyone who can sign in, and whether they have been let in yet.
+ * Everyone who has signed in, and what they hold.
  *
  * Two independent things, shown together because that is the question an admin
  * actually has: accounts created on this platform (AppUser), and roles granted
@@ -148,8 +159,9 @@ adminRoutes.get(
           status: true,
           emailVerified: true,
           googleSub: true,
-          passwordHash: true,
+          pictureUrl: true,
           crmUserId: true,
+          signInCount: true,
           lastLoginAt: true,
           createdAt: true,
         },
@@ -169,10 +181,12 @@ adminRoutes.get(
         name: a.name,
         status: a.status,
         emailVerified: a.emailVerified,
-        // How they sign in — never the hash itself, only whether one exists.
-        signInMethods: [a.passwordHash ? 'password' : null, a.googleSub ? 'google' : null].filter(Boolean),
+        pictureUrl: a.pictureUrl,
         linkedToCrm: Boolean(a.crmUserId),
-        role: member?.role ?? null,
+        // What the list says they are, which is what they actually get.
+        role: isAdminEmail(a.email) ? 'admin' : (member?.role ?? 'operator'),
+        isAdmin: isAdminEmail(a.email),
+        signInCount: a.signInCount,
         lastLoginAt: a.lastLoginAt,
         createdAt: a.createdAt,
       }
@@ -189,9 +203,11 @@ adminRoutes.get(
         name: m.name,
         status: 'no_account',
         emailVerified: false,
-        signInMethods: m.crmUserId ? ['nxt_sales'] : [],
+        pictureUrl: null,
         linkedToCrm: Boolean(m.crmUserId),
-        role: m.role,
+        role: isAdminEmail(m.email) ? 'admin' : m.role,
+        isAdmin: isAdminEmail(m.email),
+        signInCount: 0,
         lastLoginAt: null,
         createdAt: m.createdAt,
       }))

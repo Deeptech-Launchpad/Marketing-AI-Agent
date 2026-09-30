@@ -22,6 +22,10 @@ export interface GoogleIdentity {
   email: string
   emailVerified: boolean
   name: string | null
+  givenName: string | null
+  familyName: string | null
+  pictureUrl: string | null
+  locale: string | null
 }
 
 export function googleConfigured(): boolean {
@@ -68,10 +72,16 @@ export async function verifyGoogleIdToken(credential: string): Promise<GoogleIde
     throw new Error('That Google account’s email address is not verified with Google.')
   }
 
+  // Everything below is copied from the VERIFIED token, never from anything
+  // the browser said about itself.
   return {
     sub: payload.sub,
     email: payload.email.toLowerCase(),
     emailVerified: true,
     name: payload.name?.trim() || null,
+    givenName: payload.given_name?.trim() || null,
+    familyName: payload.family_name?.trim() || null,
+    pictureUrl: payload.picture?.trim() || null,
+    locale: payload.locale?.trim() || null,
   }
 }

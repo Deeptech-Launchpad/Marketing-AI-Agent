@@ -24,7 +24,6 @@ const schema = z.object({
   // tokens NXT Sales issues, and mints the service-account token it uses to
   // call back into the CRM.
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be set and at least 16 chars'),
-  BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional().or(z.literal('')),
 
   NXT_SALES_BASE_URL: z.string().url(),
   NXT_SALES_SERVICE_USER_ID: z.string().default(''),
@@ -686,45 +685,48 @@ const schema = z.object({
   CRM_DRIVER: z.enum(['real', 'fake']).default('real'),
   LLM_DRIVER: z.enum(['real', 'fake']).default('real'),
 
-  // ── This platform's own sign-in (2026-09-30) ────────────────────────────
+  // ── Signing in (2026-09-30) ─────────────────────────────────────────────
   //
-  // Accounts that belong to the Marketing AI Agent — email and password, or
-  // Google — beside the existing NXT Sales sign-in, which is unchanged.
+  // Google is the only way in. Identity is proved by Google and verified
+  // against Google's own keys; this platform stores no password, so there is
+  // none to leak, guess or reset.
   //
-  // Its own secret, deliberately NOT JWT_SECRET. NXT Sales tokens are signed
-  // with that one, and a single secret for both would let a token minted for
-  // one system be presented to the other. Empty disables this sign-in
-  // entirely, and the routes say so rather than failing obscurely.
+  // Its own signing secret, deliberately NOT JWT_SECRET. Empty disables
+  // sign-in entirely and the screen says so, rather than failing obscurely.
   AUTH_JWT_SECRET: z.string().default(''),
   /** How long a sign-in lasts before the person signs in again. */
   AUTH_SESSION_HOURS: z.coerce.number().int().min(1).max(720).default(12),
 
   /**
-   * Who may create an account, as a comma-separated domain list —
-   * "altiusnxt.com,deeptechskills.com". EMPTY MEANS NOBODY: this platform
-   * reads the whole CRM, so open registration is never the default. An
-   * address outside the list is refused, and the refusal says so.
-   */
-  AUTH_ALLOWED_EMAIL_DOMAINS: z.string().default(''),
-
-  /**
    * Google sign-in. The OAuth 2.0 Client ID from Google Cloud Console
-   * (Credentials → OAuth client ID → Web application). Empty hides the Google
-   * button and refuses the endpoint, so nothing half-configured is offered.
+   * (Credentials → OAuth client ID → Web application). Without it nobody can
+   * sign in at all, and the screen says exactly that.
    */
   GOOGLE_CLIENT_ID: z.string().default(''),
 
-  /** How long a password-reset link stays valid. */
-  AUTH_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
-  /** Where reset links point, e.g. https://marketing.example.com. */
-  AUTH_PUBLIC_BASE_URL: z.string().default(''),
   /**
-   * DEVELOPMENT ONLY: return the reset link in the API response when no mail
-   * server is configured, so the flow can be tested locally. Refused outright
-   * in production — there it would hand anyone a way into any account by
-   * knowing only an email address.
+   * WHO MAY SIGN IN: work domains, comma separated — "altiusnxt.com".
+   *
+   * A Google account outside these domains is refused, unless it is named in
+   * AUTH_ADMIN_EMAILS below. EMPTY MEANS NOBODY EXCEPT THOSE ADMINS: this
+   * platform reads the whole CRM, so it is never open by default.
    */
-  AUTH_DEV_RETURN_RESET_LINK: bool.default('false'),
+  AUTH_ALLOWED_EMAIL_DOMAINS: z.string().default('altiusnxt.com'),
+
+  /**
+   * WHO IS AN ADMIN — the only people who may approve work, see what Gemini
+   * has cost, and grant access to others. Everyone else who signs in is an
+   * ordinary user who can run the engines and prepare drafts, and nothing more.
+   *
+   * Read at EVERY sign-in, so this list is the single source of truth:
+   * removing an address takes that person's admin away the next time they
+   * sign in, and an admin cannot grant admin to an address that is not here.
+   *
+   * These four are the agreed initial list. Override with AUTH_ADMIN_EMAILS.
+   */
+  AUTH_ADMIN_EMAILS: z
+    .string()
+    .default('manoj@altiusnxt.com,mohanapriya@altiusnxt.com,govind@altiusnxt.com,dtlpmanikandan@gmail.com'),
 })
 
 const parsed = schema.safeParse(process.env)
@@ -815,20 +817,6 @@ if (env.NODE_ENV === 'production' && env.REPORT_ALLOW_UNAPPROVED) {
   console.error(
     '\nREPORT_ALLOW_UNAPPROVED is a development-only flag and cannot be enabled in production.\n' +
       'A customer report must be generated from a report approved in Task #980.\n',
-  )
-  process.exit(1)
-}
-
-// A reset link handed back over the API is a way into any account by knowing
-// only an email address. It exists so the flow can be exercised locally with
-// no mail server, and it is refused in production rather than trusted to be
-// turned off by whoever last edited the file.
-if (env.NODE_ENV === 'production' && env.AUTH_DEV_RETURN_RESET_LINK) {
-  // eslint-disable-next-line no-console
-  console.error(
-    '\nAUTH_DEV_RETURN_RESET_LINK is a development-only flag and cannot be enabled in production.\n' +
-      'It returns a password-reset link in the API response, which would let anyone reset\n' +
-      "any account by knowing its email address. Configure a mail server instead.\n",
   )
   process.exit(1)
 }
