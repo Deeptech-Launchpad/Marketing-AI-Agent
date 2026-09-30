@@ -3,7 +3,7 @@ import { AlertTriangle, CalendarClock, CheckCircle2, Copy, FlaskConical, Mail, R
 import { api } from '../../lib/api'
 import { Button, Chip, Field, StatusBadge, Unset, toUiStatus } from '../../components/ui/primitives'
 import { Drawer } from '../../components/ui/Evidence'
-import { asPlainText, buildMailto } from './mailto'
+import { asPlainText, buildGmailCompose, buildMailto, copyText } from './mailto'
 import { useCall } from './useCall'
 import { InfoTip } from './InfoTip'
 import { emailStatus } from './status'
@@ -65,7 +65,8 @@ export function DraftEditor({
   const [category, setCategory] = useState('')
   const [rejectReason, setRejectReason] = useState('')
   const [sentAt, setSentAt] = useState('')
-  const [copied, setCopied] = useState(false)
+  /** null = not tried, true = on the clipboard, false = it did not work. */
+  const [copied, setCopied] = useState<boolean | null>(null)
 
   // Reset the form whenever a different draft, or a new revision of it, opens.
   useEffect(() => {
@@ -81,7 +82,8 @@ export function DraftEditor({
     setCategory(draft.inputs?.productCategory ?? '')
     setRejectReason('')
     setSentAt('')
-    setCopied(false)
+    // null, not false: false means "the copy failed" and shows a warning.
+    setCopied(null)
     setPreview(null)
     call.clearError()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -125,14 +127,9 @@ export function DraftEditor({
     return call.run('inputs', () => post(`/actions/${id}/inputs`, patch))
   }
 
-  const copy = async () => {
-    try {
-      await navigator.clipboard?.writeText(asPlainText(draft.recipient, draft.subject, draft.body))
-      setCopied(true)
-    } catch {
-      setCopied(false)
-    }
-  }
+  // Reports what actually happened. The clipboard API does not exist over
+  // plain HTTP, so claiming success without checking would be a lie — and was.
+  const copy = async () => setCopied(await copyText(asPlainText(draft.recipient, draft.subject, draft.body)))
 
   /** Saves just the address, so it can be changed without touching anything else. */
   const saveRecipient = () =>
@@ -693,18 +690,32 @@ export function DraftEditor({
               Send it <InfoTip topic="send" />
             </p>
             <ol className="otr-steps">
-              <li>Click Copy email or Open in mail app.</li>
-              <li>Send it from your own mail program.</li>
+              <li>Click Open in Gmail — the address, subject and text are filled in for you.</li>
+              <li>Read it once more and press send in Gmail.</li>
               <li>Come back and click Mark as sent — this starts the follow-up timer.</li>
             </ol>
             <div className="row">
-              <Button icon={Copy} size="sm" onClick={() => void copy()}>
-                {copied ? 'Copied' : 'Copy email'}
+              <a
+                className="btn btn--primary btn--sm"
+                href={buildGmailCompose(draft.recipient, draft.subject, draft.body)}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <Mail size={14} aria-hidden="true" /> Open in Gmail
+              </a>
+              <Button icon={Copy} size="sm" variant="ghost" onClick={() => void copy()}>
+                {copied === true ? 'Copied' : 'Copy email'}
               </Button>
               <a className="btn btn--ghost btn--sm" href={buildMailto(draft.recipient, draft.subject, draft.body)}>
-                <Mail size={14} aria-hidden="true" /> Open in mail app
+                <Mail size={14} aria-hidden="true" /> Other mail app
               </a>
             </div>
+            {copied === false && (
+              <p className="otr-err" role="alert">
+                <AlertTriangle size={13} aria-hidden="true" /> This browser would not let the page copy for you. Select the
+                text in the boxes above and copy it yourself, or use Open in Gmail.
+              </p>
+            )}
             {canOperate && (
               <>
                 <label className="field-label" htmlFor={`sent-${id}`} style={{ marginTop: 'var(--s3)' }}>

@@ -5,7 +5,7 @@ import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { ThemeProvider } from '../lib/theme'
 import { Outreach } from './Outreach'
-import { buildMailto } from './outreach/mailto'
+import { asPlainText, buildGmailCompose, buildMailto, copyText } from './outreach/mailto'
 
 // THE SALES REVIEW SCREEN.
 //
@@ -261,14 +261,22 @@ describe('an approved email is sent by a person', () => {
     },
   })
 
-  it('offers Copy, Open in mail app and Mark as sent — and marking sent is the only request', async () => {
+  it('offers Gmail, Copy, a mail-app link and Mark as sent — and marking sent is the only request', async () => {
     stub(approved())
     render(<Outreach />)
     const [open] = await screen.findAllByRole('button', { name: /open email/i })
     await userEvent.click(open!)
     const dialog = await screen.findByRole('dialog')
 
-    const link = within(dialog).getByRole('link', { name: /open in mail app/i })
+    // Gmail first: most of this team has no desktop mail client, so a mailto:
+    // link on its own opened nothing at all.
+    const gmail = within(dialog).getByRole('link', { name: /open in gmail/i })
+    expect(gmail.getAttribute('href')).toBe(
+      buildGmailCompose('jane@acme.test', 'Who AI recommends instead of Acme Safety for Hard Hat?', BODY),
+    )
+    expect(gmail.getAttribute('target')).toBe('_blank')
+
+    const link = within(dialog).getByRole('link', { name: /other mail app/i })
     expect(link.getAttribute('href')).toBe(buildMailto('jane@acme.test', 'Who AI recommends instead of Acme Safety for Hard Hat?', BODY))
     expect(within(dialog).getByRole('button', { name: /copy email/i })).toBeInTheDocument()
 
@@ -287,6 +295,93 @@ describe('the mail link', () => {
   it('encodes subject and body without turning spaces into plus signs', () => {
     const href = buildMailto('jane@acme.test', 'Hi & welcome?', 'Line one\nLine 2 = 100%')
     expect(href).toBe('mailto:jane@acme.test?subject=Hi%20%26%20welcome%3F&body=Line%20one%0D%0ALine%202%20%3D%20100%25')
+  })
+
+  it('fills Gmail’s To, Subject and body, with spaces encoded as spaces', () => {
+    const href = buildGmailCompose('jane@acme.test', 'Hi & welcome?', 'Line one\nLine 2 = 100%')
+    expect(href).toContain('https://mail.google.com/mail/?view=cm')
+    expect(href).toContain('to=jane%40acme.test')
+    expect(href).toContain('su=Hi%20%26%20welcome%3F')
+    expect(href).toContain('body=Line%20one%0ALine%202%20%3D%20100%25')
+    // A "+" here would show up literally in Gmail's subject line.
+    expect(href).not.toContain('+')
+  })
+
+  it('leaves To out rather than writing an empty one when there is no address', () => {
+    expect(buildGmailCompose(null, 'S', 'B')).not.toContain('to=')
+  })
+})
+
+describe('copying the email', () => {
+  // THE BUG THIS PINS DOWN.
+  //
+  // navigator.clipboard exists only in a secure context. Served over plain
+  // HTTP the live site has none, so `navigator.clipboard?.writeText(...)`
+  // quietly evaluated to undefined: nothing was copied, nothing threw, and the
+  // button still said "Copied". Reporting success you have not had is worse
+  // than failing, because the person then pastes an empty clipboard.
+  const clipboard = (impl: unknown) => Object.defineProperty(navigator, 'clipboard', { value: impl, configurable: true })
+  const execCommand = (result: boolean) =>
+    Object.defineProperty(document, 'execCommand', { value: vi.fn(() => result), configurable: true })
+
+  it('copies through the clipboard API when the browser has one', async () => {
+    const writeText = vi.fn(async () => undefined)
+    clipboard({ writeText })
+    expect(await copyText('the email')).toBe(true)
+    expect(writeText).toHaveBeenCalledWith('the email')
+  })
+
+  it('still copies over plain HTTP, where there is no clipboard API', async () => {
+    clipboard(undefined)
+    execCommand(true)
+    expect(await copyText('the email')).toBe(true)
+    expect(document.execCommand).toHaveBeenCalledWith('copy')
+  })
+
+  it('falls back when the clipboard API exists but refuses', async () => {
+    clipboard({
+      writeText: vi.fn(async () => {
+        throw new Error('denied')
+      }),
+    })
+    execCommand(true)
+    expect(await copyText('the email')).toBe(true)
+  })
+
+  it('answers false when neither way worked, rather than claiming success', async () => {
+    clipboard(undefined)
+    execCommand(false)
+    expect(await copyText('the email')).toBe(false)
+  })
+
+  it('shows no warning until a copy has actually been tried', async () => {
+    // The state is tri-state on purpose: "not tried" must not look like
+    // "failed", or every draft would open with a red warning on it.
+    stub(
+      view(draft({ status: 'ready_to_send', gates: gate(true), approvedAt: '2026-09-25T11:00:00.000Z' }), {
+        sequence: {
+          phase: 'initial',
+          initialSentAt: null,
+          next: { stageKey: 'initial', text: 'Send it, then mark it sent.', window: null, overdue: false },
+          reminders: [],
+          stages: [
+            { stageKey: 'initial', label: 'Initial email', pdfRef: '1', track: 'initial', status: 'approved', window: null, reason: null, canPrepare: false },
+          ],
+        },
+      }),
+    )
+    render(<Outreach />)
+    const [open] = await screen.findAllByRole('button', { name: /open email/i })
+    await userEvent.click(open!)
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByText(/would not let the page copy/i)).toBeNull()
+    expect(within(dialog).getByRole('button', { name: /copy email/i })).toBeInTheDocument()
+  })
+
+  it('puts the recipient, subject and body on the clipboard', () => {
+    expect(asPlainText('jane@acme.test', 'A subject', 'The body')).toBe(
+      'To: jane@acme.test\nSubject: A subject\n\nThe body',
+    )
   })
 })
 
