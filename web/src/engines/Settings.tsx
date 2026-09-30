@@ -8,6 +8,7 @@ import { Panel, Chip, Button, Field, Unset } from '../components/ui/primitives'
 import { AsyncBoundary, EmptyState } from '../components/ui/states'
 import { OutreachSenderPanel } from './OutreachSenderPanel'
 import { EmailSendingPanel } from './EmailSendingPanel'
+import { TeamPanel } from './TeamPanel'
 import './settings.css'
 
 // SETTINGS — who is signed in, how to leave, and what the platform spent.
@@ -76,7 +77,7 @@ function Avatar({ name, email }: { name: string | null; email: string }) {
 }
 
 export function Settings() {
-  const { principal, signOut } = useAuth()
+  const { principal, signOut, can } = useAuth()
   const navigate = useNavigate()
   const [days, setDays] = useState<number>(30)
 
@@ -138,6 +139,7 @@ export function Settings() {
         </div>
       </Panel>
 
+      {can('admin') && <TeamPanel />}
       <OutreachSenderPanel />
       <EmailSendingPanel />
 

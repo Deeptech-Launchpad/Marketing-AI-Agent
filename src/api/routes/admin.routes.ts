@@ -123,6 +123,105 @@ adminRoutes.get(
   }),
 )
 
+/**
+ * Everyone who can sign in, and whether they have been let in yet.
+ *
+ * Two independent things, shown together because that is the question an admin
+ * actually has: accounts created on this platform (AppUser), and roles granted
+ * on it (TenantMember). Someone who registered but has no role appears here as
+ * pending — which is the only way an admin would ever know to grant them one.
+ * Someone granted a role by email who has never signed in appears as invited.
+ */
+adminRoutes.get(
+  '/accounts',
+  requirePermission('admin'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const [accounts, members] = await Promise.all([
+      prisma.appUser.findMany({
+        where: { tenantId: p.tenantId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          status: true,
+          emailVerified: true,
+          googleSub: true,
+          passwordHash: true,
+          crmUserId: true,
+          lastLoginAt: true,
+          createdAt: true,
+        },
+      }),
+      prisma.tenantMember.findMany({
+        where: { tenantId: p.tenantId },
+        select: { email: true, role: true, name: true, crmUserId: true, createdAt: true },
+      }),
+    ])
+    const roleOf = new Map(members.map((m) => [m.email.toLowerCase(), m]))
+
+    const rows = accounts.map((a) => {
+      const member = roleOf.get(a.email.toLowerCase())
+      return {
+        id: a.id,
+        email: a.email,
+        name: a.name,
+        status: a.status,
+        emailVerified: a.emailVerified,
+        // How they sign in — never the hash itself, only whether one exists.
+        signInMethods: [a.passwordHash ? 'password' : null, a.googleSub ? 'google' : null].filter(Boolean),
+        linkedToCrm: Boolean(a.crmUserId),
+        role: member?.role ?? null,
+        lastLoginAt: a.lastLoginAt,
+        createdAt: a.createdAt,
+      }
+    })
+
+    // Roles granted to an email that has no account here yet (including every
+    // NXT Sales user who signs in through that path).
+    const accountEmails = new Set(accounts.map((a) => a.email.toLowerCase()))
+    const withoutAccount = members
+      .filter((m) => !accountEmails.has(m.email.toLowerCase()))
+      .map((m) => ({
+        id: null,
+        email: m.email,
+        name: m.name,
+        status: 'no_account',
+        emailVerified: false,
+        signInMethods: m.crmUserId ? ['nxt_sales'] : [],
+        linkedToCrm: Boolean(m.crmUserId),
+        role: m.role,
+        lastLoginAt: null,
+        createdAt: m.createdAt,
+      }))
+
+    res.json({ accounts: [...rows, ...withoutAccount] })
+  }),
+)
+
+/** Withdraws a role. The account can still sign in; it just sees nothing. */
+adminRoutes.delete(
+  '/members/:email',
+  requirePermission('admin'),
+  asyncHandler(async (req, res) => {
+    const p = req.principal!
+    const email = String(req.params.email ?? '').toLowerCase().trim()
+    if (email === p.email.toLowerCase()) {
+      // Removing your own admin role can leave a tenant with no admin at all,
+      // and nobody able to grant one back.
+      throw new NotFoundError('You cannot remove your own access.')
+    }
+    const member = await prisma.tenantMember.findUnique({
+      where: { tenantId_email: { tenantId: p.tenantId, email } },
+      select: { id: true },
+    })
+    if (!member) throw new NotFoundError('That person has no role to remove.')
+    await prisma.tenantMember.delete({ where: { id: member.id } })
+    res.json({ email, removed: true })
+  }),
+)
+
 // ── Prompts ─────────────────────────────────────────────────────────────────
 
 adminRoutes.get(

@@ -326,3 +326,74 @@ export async function loginWithNxtSales(email: string, password: string): Promis
   }
   return body.token
 }
+
+// ── This platform's own sign-in (2026-09-30) ───────────────────────────────
+//
+// Accounts that belong to the Marketing AI Agent, beside the NXT Sales path
+// above. These are the only endpoints called before there is a token, so each
+// one posts to /api/v1/auth and reads the server's own sentence on failure —
+// nothing here paraphrases a refusal.
+
+export interface AuthCapabilities {
+  localSignIn: boolean
+  localSignInReason: string | null
+  google: boolean
+  googleClientId: string | null
+  nxtSales: boolean
+  registrationOpen: boolean
+  allowedDomains: string[]
+  mailConfigured: boolean
+}
+
+export interface SignedIn {
+  token: string
+  expiresAt: string
+  email: string
+  name: string | null
+  /** False when no admin has granted this account a role yet. */
+  hasAccess: boolean
+}
+
+async function authPost<T>(path: string, body: unknown): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(`/api/v1/auth${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new ApiError(0, 'unreachable', 'The server could not be reached. Check it is running, then try again.')
+  }
+  const parsed = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } }
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      parsed.error?.code ?? 'request_failed',
+      parsed.error?.message ?? 'That did not work. Try again.',
+      undefined,
+      undefined,
+      true,
+    )
+  }
+  return parsed as T
+}
+
+export async function fetchAuthCapabilities(): Promise<AuthCapabilities | null> {
+  try {
+    const res = await fetch('/api/v1/auth/capabilities', { headers: { Accept: 'application/json' } })
+    return res.ok ? ((await res.json()) as AuthCapabilities) : null
+  } catch {
+    return null
+  }
+}
+
+export const authApi = {
+  register: (email: string, password: string, name?: string) =>
+    authPost<SignedIn>('/register', { email, password, ...(name?.trim() ? { name: name.trim() } : {}) }),
+  login: (email: string, password: string) => authPost<SignedIn>('/login', { email, password }),
+  google: (credential: string) => authPost<SignedIn>('/google', { credential }),
+  forgotPassword: (email: string) =>
+    authPost<{ message: string; devResetLink?: string }>('/forgot-password', { email }),
+  resetPassword: (token: string, password: string) => authPost<{ email: string }>('/reset-password', { token, password }),
+}

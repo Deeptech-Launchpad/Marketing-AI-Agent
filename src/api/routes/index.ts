@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { authenticate } from '../middleware/auth.js'
 import { adminRoutes } from './admin.routes.js'
+import { authRoutes } from './auth.routes.js'
 import { approvalRoutes } from './approvals.routes.js'
 import { auditApprovalRoutes } from './auditApproval.routes.js'
 import { campaignRoutes } from './campaigns.routes.js'
@@ -28,6 +29,12 @@ import { workbenchRoutes } from './workbench.routes.js'
 // so a readiness probe does not need a token.
 
 export const apiRoutes = Router()
+
+// EXCEPT signing in, which happens before there is a token to present. These
+// are the only unauthenticated routes here, they are rate-limited on their own
+// terms, and they grant no access by themselves — what an account may DO is
+// still decided by its TenantMember role, below.
+apiRoutes.use('/auth', authRoutes)
 
 apiRoutes.use(authenticate)
 

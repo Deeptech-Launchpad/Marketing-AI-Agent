@@ -2706,3 +2706,66 @@ model CrmSyncOutbox {
   @@index([syncRecordId, createdAt])
   @@index([externalKey])
 }
+
+// ── Sign-in accounts of this platform itself (2026-09-30) ──────────────────
+//
+// Until now identity came only from NXT Sales: its login, its token, its
+// password. This adds accounts that belong to the Marketing AI Agent — email
+// and password, or Google — so someone can be given access here without
+// needing a CRM login at all.
+//
+// It sits BESIDE the NXT Sales path, which still works unchanged. Neither
+// knows about the other: what a person may DO is still decided only by their
+// TenantMember role, exactly as before, so an account with no role sees
+// nothing until an admin grants one.
+model AppUser {
+  id       String @id
+  tenantId String
+
+  email String
+  name  String?
+
+  // Null for a Google-only account. A bcrypt hash, never a password.
+  passwordHash String?
+  // Google's stable subject id, set once an account signs in with Google.
+  // Null for a password-only account; an account may have both.
+  googleSub String?
+
+  // Proven by a Google sign-in, or by completing a password reset.
+  emailVerified Boolean @default(false)
+
+  // active | disabled. A disabled account is refused at sign-in with a reason.
+  status String @default("active")
+
+  // The NXT Sales user with this same email, when one exists. Set at sign-up
+  // and refreshed at each sign-in. It is what lets this person own a company
+  // in the CRM; without it that one action is refused, and nothing else is.
+  crmUserId String?
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  resetTokens PasswordResetToken[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, status])
+  @@index([googleSub])
+}
+
+// One password-reset link. The link itself is never stored — only its hash —
+// so a leaked database row cannot be used to take an account over.
+model PasswordResetToken {
+  id        String    @id
+  appUserId String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  // Recorded for the audit trail, never shown to the requester.
+  requestedIp String?
+  createdAt DateTime  @default(now())
+
+  user AppUser @relation(fields: [appUserId], references: [id], onDelete: Cascade)
+
+  @@index([appUserId, createdAt])
+}
