@@ -221,11 +221,13 @@ function CreateBatch({ sending, onCancel, onCreated }: { sending: SendingStatus 
   const emailOf = (c: Candidate) => (emails[c.crmCompanyId] ?? '').trim() || c.intendedRecipient || ''
   const looksLikeEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
   /**
-   * A company can go in the batch once it has a decision maker and an address.
-   * Typing one is therefore enough to include a company the platform found no
-   * address for — which is the whole point of the box being there.
+   * A company can go in the batch once it has an address. Typing one is enough
+   * to include a company the platform found no address for — and, since
+   * 2026-10-01, one with no shortlisted decision maker at all: Sales found the
+   * contact themselves. The greeting's [Name] then stays unfilled in the draft
+   * and approval waits until Sales writes it.
    */
-  const canPick = (c: Candidate) => Boolean(c.decisionMaker) && looksLikeEmail(emailOf(c))
+  const canPick = (c: Candidate) => looksLikeEmail(emailOf(c))
 
   const q = query.trim().toLowerCase()
   const shown = q
@@ -360,32 +362,31 @@ function CreateBatch({ sending, onCancel, onCreated }: { sending: SendingStatus 
                       </span>
                     </label>
                     {/*
-                      The address, always editable before the batch is made.
-                      Typing one also makes a company selectable that had none,
-                      which is the only way to include it at all.
+                      The address, always editable before the batch is made —
+                      for every company, decision maker or not. Typing one also
+                      makes a company selectable that had none, which is the
+                      only way to include it at all.
                     */}
-                    {c.decisionMaker && (
-                      <div className="otr-pick__email">
-                        <span className="field-label">Goes to</span>
-                        <input
-                          className="otr-input"
-                          type="email"
-                          value={emails[c.crmCompanyId] ?? c.intendedRecipient ?? ''}
-                          placeholder="name@company.com"
-                          aria-label={`Email address for ${c.companyName}`}
-                          onChange={(e) => setEmails((prev) => ({ ...prev, [c.crmCompanyId]: e.target.value }))}
-                        />
-                        <span className="cell-dim">
-                          {typed && typed !== (c.intendedRecipient ?? '')
-                            ? 'you typed this'
-                            : c.recipientSource === 'company_mailbox'
-                              ? 'company mailbox'
-                              : c.intendedRecipient
-                                ? 'from Decision Makers'
-                                : 'nothing was found — type one to include this company'}
-                        </span>
-                      </div>
-                    )}
+                    <div className="otr-pick__email">
+                      <span className="field-label">Goes to</span>
+                      <input
+                        className="otr-input"
+                        type="email"
+                        value={emails[c.crmCompanyId] ?? c.intendedRecipient ?? ''}
+                        placeholder="name@company.com"
+                        aria-label={`Email address for ${c.companyName}`}
+                        onChange={(e) => setEmails((prev) => ({ ...prev, [c.crmCompanyId]: e.target.value }))}
+                      />
+                      <span className="cell-dim">
+                        {typed && typed !== (c.intendedRecipient ?? '')
+                          ? 'you typed this'
+                          : c.recipientSource === 'company_mailbox'
+                            ? 'company mailbox'
+                            : c.intendedRecipient
+                              ? 'from Decision Makers'
+                              : 'nothing was found — type one to include this company'}
+                      </span>
+                    </div>
                   </li>
                 )
               })}

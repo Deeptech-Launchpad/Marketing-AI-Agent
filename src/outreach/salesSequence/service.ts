@@ -201,7 +201,7 @@ async function nextRotationVersion(tenantId: string): Promise<InitialVersion> {
 export async function startSequence(
   actor: Actor,
   crmCompanyId: string,
-  opts: { version?: InitialVersion; isTest?: boolean; batchId?: string } = {},
+  opts: { version?: InitialVersion; isTest?: boolean; batchId?: string; recipientEmail?: string | null } = {},
 ) {
   const isTest = Boolean(opts.isTest)
   // A real sequence is one per company. A test campaign belongs to its batch,
@@ -217,22 +217,33 @@ export async function startSequence(
 
   let facts = await loadProspectFacts(actor.tenantId, crmCompanyId)
   if (!facts) throw new NotFoundError('Company not found.')
-  if (!facts.decisionMaker) {
+
+  // An address Sales typed in. It wins over anything worked out, and it is the
+  // one thing that lets a company with no shortlisted decision maker be
+  // reached at all (2026-10-01): Sales found the contact themselves.
+  const typed = opts.recipientEmail?.trim() || null
+
+  if (!facts.decisionMaker && !typed) {
     throw new ConflictError(
       'No decision maker has been shortlisted for this company yet. Run Decision Makers first — every approved email is addressed to a named person.',
     )
   }
   // No direct email and no company mailbox stored yet (a run made before the
-  // fallback existed): look for one now, once, and read the facts again.
-  if (!facts.decisionMaker.email && !facts.decisionMaker.companyContactEmail) {
+  // fallback existed): look for one now, once, and read the facts again. Not
+  // needed when Sales already gave the address.
+  if (!typed && facts.decisionMaker && !facts.decisionMaker.email && !facts.decisionMaker.companyContactEmail) {
     if (await ensureCompanyContactEmail(actor.tenantId, crmCompanyId)) {
       facts = (await loadProspectFacts(actor.tenantId, crmCompanyId)) ?? facts
     }
   }
-  const dm = facts.decisionMaker!
-  // The decision maker's own address first; a verified company mailbox only when they have none.
-  const recipientEmail = dm.email ?? dm.companyContactEmail?.email ?? null
-  const recipientEmailSource = dm.email ? 'decision_maker' : dm.companyContactEmail ? 'company_mailbox' : null
+  // Null when Sales is writing to the company without a named person. The
+  // greeting's [Name] then stays visibly unfilled, and approval is blocked
+  // until Sales writes it — nothing invents a name.
+  const dm = facts.decisionMaker
+  // What Sales typed first; then the decision maker's own address; a verified
+  // company mailbox only when they have none.
+  const recipientEmail = typed ?? dm?.email ?? dm?.companyContactEmail?.email ?? null
+  const recipientEmailSource = typed ? 'sales_entered' : dm?.email ? 'decision_maker' : dm?.companyContactEmail ? 'company_mailbox' : null
 
   const version = opts.version ?? (await nextRotationVersion(actor.tenantId))
   const campaignId = newId()
@@ -244,7 +255,7 @@ export async function startSequence(
       discoveredCompanyId: facts.discoveredCompanyId,
       companyName: facts.companyName,
       companyDomain: facts.companyDomain,
-      decisionMakerId: dm.id,
+      decisionMakerId: dm?.id ?? null,
       status: 'active',
       flow: FLOW,
       initialVersion: version,

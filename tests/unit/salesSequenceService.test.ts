@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // THE SALES SEQUENCE SERVICE — end to end over an in-memory store.
 //
@@ -181,6 +181,70 @@ describe('starting outreach', () => {
     expect(ensureMailbox).toHaveBeenCalledWith('t1', 'c1')
     expect(store.outreachCampaign![0]).toMatchObject({ recipientEmail: null, recipientEmailSource: null })
     loadFacts.mockImplementation(async () => FACTS as unknown)
+  })
+})
+
+// NO SHORTLISTED DECISION MAKER, BUT AN ADDRESS SALES FOUND (2026-10-01).
+//
+// Sales asked to reach these companies with a contact they looked up
+// themselves. Without that address the refusal stands exactly as before; with
+// it, outreach starts, writes to that address, and invents nothing — the
+// greeting's [Name] stays visibly unfilled until Sales writes it.
+describe('starting outreach with an address Sales typed', () => {
+  // Every facts lookup — starting, then drafting — sees no decision maker, as
+  // it would from the database. A one-shot mock would let drafting fall back
+  // to the fixture's Jane and hide the very thing being tested.
+  const noDm = () => loadFacts.mockResolvedValue({ ...FACTS, decisionMaker: null })
+  afterEach(() => {
+    loadFacts.mockImplementation(async () => FACTS as unknown)
+  })
+
+  it('still refuses a company with no decision maker when no address is given', async () => {
+    noDm()
+    await expect(svc.startSequence(actor, 'c1')).rejects.toThrow(/No decision maker has been shortlisted/)
+    expect(store.outreachCampaign).toHaveLength(0)
+  })
+
+  it('starts for a company with no decision maker once Sales gives the address', async () => {
+    noDm()
+    const r = await svc.startSequence(actor, 'c1', { recipientEmail: 'buyer@acmesafety.test' })
+    expect(r.created).toBe(true)
+    expect(store.outreachCampaign![0]).toMatchObject({
+      recipientEmail: 'buyer@acmesafety.test',
+      recipientEmailSource: 'sales_entered',
+      decisionMakerId: null,
+    })
+    // The first draft goes to that address.
+    expect(initialAction()).toMatchObject({ destination: 'buyer@acmesafety.test', destinationKind: 'email' })
+  })
+
+  it('leaves [Name] unfilled rather than inventing a person, so approval waits for Sales', async () => {
+    noDm()
+    await svc.startSequence(actor, 'c1', { recipientEmail: 'buyer@acmesafety.test' })
+    const m = messageOf(initialAction().id)
+    expect(m.body.startsWith('[Name],')).toBe(true)
+    // The company and product still fill themselves.
+    expect(m.body).toContain('Acme Safety')
+  })
+
+  it('does not go looking for a company mailbox when Sales already gave the address', async () => {
+    loadFacts.mockResolvedValueOnce({ ...FACTS, decisionMaker: { ...FACTS.decisionMaker, email: null } })
+    await svc.startSequence(actor, 'c1', { recipientEmail: 'buyer@acmesafety.test' })
+    expect(ensureMailbox).not.toHaveBeenCalled()
+  })
+
+  it('puts a typed address ahead of the decision maker’s own, recorded as Sales’s choice', async () => {
+    await svc.startSequence(actor, 'c1', { recipientEmail: 'purchasing@acmesafety.test' })
+    expect(store.outreachCampaign![0]).toMatchObject({
+      recipientEmail: 'purchasing@acmesafety.test',
+      recipientEmailSource: 'sales_entered',
+      decisionMakerId: 'dm1',
+    })
+  })
+
+  it('treats a blank address as none at all', async () => {
+    noDm()
+    await expect(svc.startSequence(actor, 'c1', { recipientEmail: '   ' })).rejects.toThrow(/No decision maker has been shortlisted/)
   })
 })
 

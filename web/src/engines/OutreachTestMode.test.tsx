@@ -303,7 +303,8 @@ describe('choosing companies for a batch', () => {
     await openPicker()
     // Nothing was found, so it cannot be chosen yet.
     expect(screen.getByRole('checkbox', { name: /central cleaning/i })).toBeDisabled()
-    expect(screen.getByText(/nothing was found — type one to include this company/i)).toBeInTheDocument()
+    const row = screen.getByLabelText(/email address for Central Cleaning/i).closest('li')!
+    expect(within(row).getByText(/nothing was found — type one to include this company/i)).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText(/email address for Central Cleaning/i), 'joe@centralcleaning.com.au')
     expect(screen.getByRole('checkbox', { name: /central cleaning/i })).toBeEnabled()
@@ -324,11 +325,38 @@ describe('choosing companies for a batch', () => {
     expect(screen.getByRole('checkbox', { name: /central cleaning/i })).toBeDisabled()
   })
 
-  it('still cannot choose a company with no decision maker, whatever is typed', async () => {
+  // A COMPANY WITH NO SHORTLISTED DECISION MAKER (2026-10-01).
+  //
+  // Sales asked to be able to reach these too, with an address they found
+  // themselves. The status text stays exactly as it was; the address box is
+  // the same one every other company has.
+  it('keeps the "No shortlisted decision maker" status, and offers the same address box', async () => {
+    await openPicker()
+    expect(screen.getByText(/no shortlisted decision maker\./i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/email address for Nobody Inc/i)).toHaveValue('')
+  })
+
+  it('cannot be chosen until an address is typed, and can be once one is', async () => {
     await openPicker()
     expect(screen.getByRole('checkbox', { name: /nobody inc/i })).toBeDisabled()
-    // There is no address box for it either: the email is addressed to a person.
-    expect(screen.queryByLabelText(/email address for Nobody Inc/i)).toBeNull()
+    await userEvent.type(screen.getByLabelText(/email address for Nobody Inc/i), 'not-an-address')
+    expect(screen.getByRole('checkbox', { name: /nobody inc/i })).toBeDisabled()
+    await userEvent.clear(screen.getByLabelText(/email address for Nobody Inc/i))
+    await userEvent.type(screen.getByLabelText(/email address for Nobody Inc/i), 'buyer@nobody.test')
+    expect(screen.getByRole('checkbox', { name: /nobody inc/i })).toBeEnabled()
+  })
+
+  it('sends the typed address with the batch, so Outreach writes to it', async () => {
+    await openPicker()
+    await userEvent.type(screen.getByLabelText(/email address for Nobody Inc/i), 'buyer@nobody.test')
+    await userEvent.click(screen.getByRole('checkbox', { name: /nobody inc/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
+
+    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
+    const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
+    expect(body.crmCompanyIds).toEqual(['c-none'])
+    expect(body.recipients).toEqual({ 'c-none': 'buyer@nobody.test' })
   })
 })
 

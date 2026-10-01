@@ -165,20 +165,15 @@ export async function createTestBatch(actor: Actor, input: CreateBatchInput) {
   const results: Array<{ crmCompanyId: string; ok: boolean; campaignId: string | null; plannedAt: string | null; error: string | null }> = []
   for (const [i, crmCompanyId] of ids.entries()) {
     try {
-      const { campaignId } = await startSequence(actor, crmCompanyId, { isTest: true, batchId })
-
-      // An address Sales typed wins over the one worked out for them.
-      const chosen = overrides.get(crmCompanyId)
-      if (chosen) {
-        await prisma.outreachCampaign.update({
-          where: { id: campaignId },
-          data: { recipientEmail: chosen, recipientEmailSource: 'sales_entered' },
-        })
-        await prisma.outreachAction.updateMany({
-          where: { campaignId, status: { in: ['draft', 'ready_to_send'] } },
-          data: { destination: chosen, destinationKind: 'email' },
-        })
-      }
+      // An address Sales typed wins over the one worked out for them, and is
+      // what lets a company with no shortlisted decision maker in at all. It
+      // is given at creation, so the campaign and its first draft carry it
+      // from the start rather than being corrected afterwards.
+      const { campaignId } = await startSequence(actor, crmCompanyId, {
+        isTest: true,
+        batchId,
+        recipientEmail: overrides.get(crmCompanyId) ?? null,
+      })
       // The initial draft carries its planned slot; it is sent only once approved.
       const slot = slots[i] ?? null
       if (slot) {
