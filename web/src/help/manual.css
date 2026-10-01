@@ -1,0 +1,90 @@
+/* The in-app User Manual (2026-10-01). Tokens only — no hard-coded colours. */
+
+.man { display: flex; flex-direction: column; gap: var(--s5); max-width: 1080px; }
+
+.man__head { display: flex; flex-direction: column; gap: 2px; }
+.man__title { font-size: var(--fs-h1); font-weight: 700; color: var(--text); }
+.man__sub { font-size: var(--fs-sm); color: var(--text-muted); }
+
+.man__layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s6); align-items: start; }
+
+/* ── Contents ──────────────────────────────────────────────────────────── */
+.man__toc { position: sticky; top: var(--s4); }
+.man__toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.man__tocitem {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  padding: 7px var(--s3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-instant) var(--ease-out);
+}
+.man__tocitem:hover { background: var(--bg-hover); color: var(--text); }
+.man__tocitem.is-active { background: var(--bg-panel); color: var(--text); font-weight: var(--fw-strong); box-shadow: inset 2px 0 0 var(--accent); }
+.man__tocnum { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-pill); background: var(--bg-inset); font-size: var(--fs-micro); color: var(--text-dim); flex: none; }
+.man__tocitem.is-active .man__tocnum { background: var(--accent); color: var(--on-accent); }
+
+/* ── The section being read ────────────────────────────────────────────── */
+.man__body {
+  min-width: 0;
+  padding: var(--s6) var(--s8);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg-panel);
+  color: var(--text-soft);
+  font-size: var(--fs-body);
+  line-height: var(--lh-prose);
+}
+.man__step { font-size: var(--fs-micro); color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
+.man__h2 { margin: 4px 0 var(--s2); font-size: var(--fs-h1); font-weight: 700; color: var(--text); }
+.man__summary { margin: 0 0 var(--s4); font-size: var(--fs-h3); color: var(--text-muted); max-width: 70ch; }
+.man__h3 {
+  margin: var(--s6) 0 var(--s2);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line-faint);
+  font-size: var(--fs-h2);
+  font-weight: 650;
+  color: var(--text);
+}
+.man__h3:first-of-type { border-top: 0; padding-top: 0; }
+.man__text { margin: 0 0 var(--s3); max-width: 72ch; }
+
+.man__steps, .man__list { margin: 0 0 var(--s3); padding-left: 1.4em; max-width: 72ch; }
+.man__steps li, .man__list li { margin-bottom: 6px; padding-left: 2px; }
+.man__steps li::marker { color: var(--accent); font-weight: 700; }
+
+.man__terms { margin: 0 0 var(--s3); display: flex; flex-direction: column; border: 1px solid var(--line-faint); border-radius: var(--r-md); overflow: hidden; }
+.man__term { display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); gap: var(--s4); padding: var(--s3) var(--s4); }
+.man__term + .man__term { border-top: 1px solid var(--line-faint); }
+.man__term dt { font-weight: var(--fw-strong); color: var(--text); }
+.man__term dd { margin: 0; }
+
+.man__example { margin: 0 0 var(--s3); padding: var(--s3) var(--s4); border-left: 3px solid var(--accent); border-radius: 0 var(--r-sm) var(--r-sm) 0; background: var(--bg-inset); max-width: 72ch; }
+.man__example p { margin: 0; }
+.man__label { font-family: var(--font-mono); font-size: var(--fs-micro); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 4px !important; }
+
+.man__callout { display: flex; gap: var(--s2); align-items: flex-start; margin: 0 0 var(--s3); padding: var(--s3) var(--s4); border-radius: var(--r-sm); border: 1px solid; max-width: 72ch; }
+.man__callout svg { flex: none; margin-top: 4px; }
+.man__callout--tip { border-color: var(--info-line); background: var(--info-bg); color: var(--text); }
+.man__callout--warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--text); }
+
+.man__pager { display: flex; justify-content: space-between; gap: var(--s3); margin-top: var(--s8); padding-top: var(--s4); border-top: 1px solid var(--line); }
+.man__pager .btn { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Narrow screens: contents above the text, as a row of chips. */
+@media (max-width: 860px) {
+  .man__layout { grid-template-columns: 1fr; }
+  .man__toc { position: static; }
+  .man__toc ol { flex-direction: row; flex-wrap: wrap; }
+  .man__tocitem { width: auto; }
+  .man__body { padding: var(--s5); }
+  .man__term { grid-template-columns: 1fr; gap: 2px; }
+}

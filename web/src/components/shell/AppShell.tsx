@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { LayoutGrid, LogOut, PanelLeftClose, PanelLeftOpen, PanelRightClose, Search, SlidersHorizontal } from 'lucide-react'
+import { HelpCircle, LayoutGrid, LogOut, PanelLeftClose, PanelLeftOpen, PanelRightClose, Search, SlidersHorizontal } from 'lucide-react'
 import { ENGINES, brandAccent, engineAccent, engineForPath, rgbTriple } from '../../lib/engines'
 import { useTheme } from '../../lib/theme'
 import { ThemeSwitch } from './ThemeSwitch'
@@ -110,7 +110,9 @@ export function AppShell() {
       <header className="topbar">
         <div className="topbar__where">
           <AgentMark state="idle" size={18} />
-          <span className="topbar__engine">{engine?.title ?? 'Command Centre'}</span>
+          <span className="topbar__engine">
+            {engine?.title ?? (location.pathname === '/help' ? 'User Manual' : 'Command Centre')}
+          </span>
           {engine && <span className="topbar__task mono">{engine.task}</span>}
         </div>
 
@@ -138,6 +140,10 @@ export function AppShell() {
               <span className="topbar__role mono">{principal.role}</span>
             </span>
           )}
+          {/* The User Manual: every step of the workflow, in plain words. */}
+          <NavLink to="/help" className="topbar__icon" title="Help — User Manual" aria-label="Help">
+            <HelpCircle size={15} aria-hidden="true" />
+          </NavLink>
           <NavLink to="/settings" className="topbar__icon" title="Settings">
             <SlidersHorizontal size={15} />
           </NavLink>

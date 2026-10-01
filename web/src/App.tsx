@@ -13,6 +13,7 @@ import { Outreach } from './engines/Outreach'
 import { Engagement } from './engines/Engagement'
 import { CrmSync } from './engines/CrmSync'
 import { Settings } from './engines/Settings'
+import { UserManual } from './help/UserManual'
 
 export default function App() {
   return (
@@ -54,6 +55,7 @@ function Gate() {
           <Route path="/outreach" element={<Outreach />} />
           <Route path="/engagement" element={<Engagement />} />
           <Route path="/settings" element={<Settings />} />
+    <Route path="/help" element={<UserManual />} />
           <Route path="/settings/crm-sync" element={<CrmSync />} />
           <Route path="/crm" element={<Navigate to="/settings/crm-sync" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
