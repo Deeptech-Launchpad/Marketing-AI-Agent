@@ -1,0 +1,20 @@
+# Rotates the Marketing AI Agent's pm2 logs, and only those. Listed by full
+# name rather than a wildcard, so no other application's logs are matched.
+# Install: cp ops/logrotate/nxt-marketing /etc/logrotate.d/nxt-marketing
+#
+# copytruncate: pm2 keeps the file open, so it is copied and emptied in place
+# rather than moved — no restart, and nothing lost.
+/root/.pm2/logs/nxt-marketing-api-out.log
+/root/.pm2/logs/nxt-marketing-api-error.log
+/root/.pm2/logs/nxt-marketing-worker-out.log
+/root/.pm2/logs/nxt-marketing-worker-error.log {
+    daily
+    maxsize 50M
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+}

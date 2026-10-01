@@ -1,0 +1,16 @@
+# Runs ops/marketing-watchdog.sh once. Triggered every minute by the timer.
+# Install: cp ops/systemd/nxt-marketing-watchdog.* /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now nxt-marketing-watchdog.timer
+[Unit]
+Description=Marketing AI Agent watchdog (restarts nxt-marketing-api / -worker only)
+# At boot, let pm2 resurrect everything first, so this never races it.
+After=network-online.target pm2-root.service postgresql.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=PM2_HOME=/root/.pm2
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/bash /root/altius_tools/Nxt_Marketing_Agent/ops/marketing-watchdog.sh
+# One check should never take long; if it does, give up rather than pile up.
+TimeoutStartSec=120
