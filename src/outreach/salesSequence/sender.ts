@@ -50,11 +50,28 @@ export async function readSenderFor(tenantId: string, crmUserId: string | null |
   const member = crmUserId
     ? await prisma.tenantMember.findFirst({ where: { tenantId, crmUserId }, select: { name: true, email: true } })
     : null
-  const fullName = member?.name?.trim() ?? ''
+
+  // Somebody with no NXT Sales user is identified as "local:<account id>"
+  // (api/middleware/auth.ts), and no member row carries that id — so the
+  // lookup above found nobody, the sender's name stayed empty, and every email
+  // they started failed the "sender's name is known" check with nothing on
+  // screen able to fix it (2026-10-06). Their own account holds the name and
+  // address they registered with.
+  let person: { name: string | null; email: string | null } | null = member
+  if (!person?.name?.trim() && crmUserId) {
+    const account = crmUserId.startsWith('local:')
+      ? await prisma.appUser.findFirst({ where: { tenantId, id: crmUserId.slice('local:'.length) }, select: { name: true, email: true } })
+      : member?.email
+        ? await prisma.appUser.findFirst({ where: { tenantId, email: member.email }, select: { name: true, email: true } })
+        : null
+    if (account) person = { name: account.name ?? member?.name ?? null, email: account.email ?? member?.email ?? null }
+  }
+
+  const fullName = person?.name?.trim() ?? ''
   return {
     firstName: fullName.split(/\s+/)[0] ?? '',
     fullName,
-    email: member?.email?.trim() ?? '',
+    email: person?.email?.trim() ?? '',
     companyName: shared.companyName,
     signature: shared.signature,
   }

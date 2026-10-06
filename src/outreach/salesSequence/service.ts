@@ -154,6 +154,7 @@ async function gatesFor(c: LoadedCampaign, a: LoadedAction, seq: SequenceView, n
     attestations: (a.message?.attestations ?? []) as unknown as Attestation[],
     confirmedSkus: confirmedSkus(c),
     recipientEmail: c.recipientEmail,
+    campaignStatus: c.status,
     sender: await readSenderFor(c.tenantId, c.requestedByCrmUserId),
     suppression: await suppressionFor(c, template),
     now,
@@ -831,6 +832,10 @@ export async function markSent(actor: Actor, actionId: string, sentAtRaw?: strin
   if (!action.stageKey || action.stageKey === CALL_POINTS_STAGE || !action.message) throw new BadRequestError('Only sequence emails can be marked sent.')
   if (campaign.isTest) throw new ConflictError('This is a TEST campaign: its emails are sent to the internal test inbox by the test sender, not marked sent by hand.')
   if (action.status !== 'ready_to_send') throw new ConflictError('Only an approved email can be marked sent.')
+  // An email approved before the sequence was stopped or completed is not
+  // sent afterwards: the prospect said no, or the sequence has ended.
+  if (campaign.status === 'cancelled') throw new ConflictError('This sequence was stopped, so no further email can be marked sent.')
+  if (campaign.status === 'completed') throw new ConflictError('This sequence is complete, so no further email can be marked sent.')
   if (action.approvedBodyHash !== bodyHash(action.message.subject, action.message.body)) {
     throw new ConflictError('The email changed after it was approved. Review and approve it again.')
   }

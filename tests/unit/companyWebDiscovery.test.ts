@@ -268,6 +268,34 @@ describe('a failed search', () => {
   })
 })
 
+// THE IDENTIFICATION STEP FAILING IS A FAILURE, NOT AN EMPTY MARKET (2026-10-06).
+// It used to be swallowed into "no company on this page", so with the model
+// down a search ended "completed, 0 companies".
+describe('when the step that names companies fails', () => {
+  it('fails the search with the reason when it failed on every page', async () => {
+    searchWeb.mockResolvedValue(okSearch([{ url: DIRECTORY, title: 'Acme listing' }]))
+    serveSites()
+    generate.mockRejectedValue(new Error('model quota exceeded'))
+
+    await runCompanyWebDiscovery('search_1')
+
+    const update = db.companyDiscoverySearch.update.mock.calls.at(-1)![0]
+    expect(update.data.status).toBe('failed')
+    expect(update.data.failureReason).toMatch(/identifies companies on each page failed .*model quota exceeded/)
+  })
+
+  it('still completes normally, with its companies, when identification works', async () => {
+    searchWeb.mockResolvedValue(okSearch([{ url: DIRECTORY, title: 'Acme listing' }]))
+    serveSites()
+    modelAnswers([acme()])
+
+    await runCompanyWebDiscovery('search_1')
+
+    expect(db.companyDiscoverySearch.update.mock.calls.at(-1)![0].data.status).toBe('completed')
+    expect(rows()).toHaveLength(1)
+  })
+})
+
 describe('search → company → its own website → one product → service need', () => {
   it('checks a product on the company’s own site, not the directory page it was found on', async () => {
     searchWeb.mockResolvedValue(okSearch([{ url: DIRECTORY, title: 'Acme Safety Co — directory listing' }]))

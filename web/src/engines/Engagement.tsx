@@ -3,7 +3,7 @@ import { useAsync } from '../lib/hooks'
 import { useCompany } from '../lib/companyContext'
 import { useEngine, EnginePage } from '../components/shell/EnginePage'
 import { Panel, Chip, Button, Unset } from '../components/ui/primitives'
-import { EmptyState, LoadingState } from '../components/ui/states'
+import { EmptyState, ErrorState, LoadingState } from '../components/ui/states'
 import { TimelinePulse } from '../components/motion/Signatures'
 import { EvidenceButton } from '../components/ui/Evidence'
 import type { EngagementEvent, Understanding } from '../lib/types'
@@ -91,6 +91,11 @@ export function Engagement() {
 
       {timeline.loading && !timeline.data ? (
         <LoadingState what="Reading the engagement history" visual={<TimelinePulse accent={engine.accent} />} />
+      ) : timeline.error && !timeline.data ? (
+        // A failed read is said to have failed. It used to fall through to
+        // "No prospect engagement observed yet … the honest answer", which
+        // presented a failure as a finding about the company (2026-10-06).
+        <ErrorState error={timeline.error} what="The engagement history could not be read" onRetry={timeline.refresh} />
       ) : events.length === 0 ? (
         <EmptyState
           title="No prospect engagement observed yet."
@@ -218,7 +223,7 @@ function EventCard({
       style={{ ['--i' as string]: Math.min(index, 14), ['--e' as string]: accent }}
     >
       <header className="tl__cardhead">
-        <span className="tl__time mono">{new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        <span className="tl__time mono">{new Date(event.occurredAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
         <Chip>{event.channel.replace(/_/g, ' ')}</Chip>
       </header>
       <p className="tl__what">{prettyEvent(event.eventType)}</p>

@@ -155,6 +155,30 @@ describe('the external sources provider', () => {
     expect((r.metadata as { claimsRejectedAsUngrounded: number }).claimsRejectedAsUngrounded).toBe(1)
   })
 
+  // A FAILED READ IS A FAILURE, NOT A FINDING (2026-10-06). During an AI outage
+  // every page used to be recorded as read with nothing in it, and the source
+  // reported "pages were read and none stated a relevant signal" — a failure
+  // presented as a fact about the company.
+  it('reports a source that could not read any page as failed, not as "nothing found"', async () => {
+    generate.mockRejectedValue(new Error('quota exceeded'))
+
+    const r = await new ExternalSourcesProvider().collect(ctx)
+
+    expect(r.ok).toBe(false)
+    expect(r.signals).toHaveLength(0)
+    expect(r.reason).toMatch(/could not be read: The page could not be read: quota exceeded/)
+    expect(r.reason).not.toMatch(/none stated a relevant signal/)
+    const pages = (r.metadata as { pagesRead: Array<{ ok: boolean; reason?: string }> }).pagesRead
+    expect(pages.every((p) => !p.ok)).toBe(true)
+  })
+
+  it('still reports a source that read its pages and found nothing as a success', async () => {
+    generate.mockResolvedValue({ costUsd: 0, data: { signals: [] } })
+    const r = await new ExternalSourcesProvider().collect(ctx)
+    expect(r.ok).toBe(true)
+    expect(r.reason).toMatch(/none stated a relevant signal/)
+  })
+
   it('reports a sign-in wall as one, and invents nothing from it', async () => {
     searchWeb.mockResolvedValue({
       ok: true, provider: 'gemini', queriesRun: ['q'], modelText: '', model: 'm', costUsd: 0, reason: null,
@@ -167,5 +191,29 @@ describe('the external sources provider', () => {
     expect(r.signals).toHaveLength(0)
     expect(generate).not.toHaveBeenCalled()
     expect(r.reason).toMatch(/sign-in wall/)
+  })
+})
+
+// A DATE MUST STATE ITS YEAR (2026-10-06). new Date("Sep 5") is 4 September
+// 2001, so a fresh forum post was recorded as decades old and shown expired.
+describe('the date a source stated', () => {
+  it.each([
+    ['12 March 2026', 2026],
+    ['3 September 2026', 2026],
+    ['2026-09-05', 2026],
+    ['September 5, 2026', 2026],
+  ])('reads %s', async (raw, year) => {
+    const { statedDateOf } = await import('../../src/intent/externalSignals.js')
+    expect(statedDateOf(raw)?.getFullYear()).toBe(year)
+  })
+
+  it.each(['Sep 5', '5 Sep', 'yesterday', '05/06/2024', '3/4/2026'])('treats %s as no date rather than guessing', async (raw) => {
+    const { statedDateOf } = await import('../../src/intent/externalSignals.js')
+    expect(statedDateOf(raw)).toBeNull()
+  })
+
+  it('never accepts a date in the future', async () => {
+    const { statedDateOf } = await import('../../src/intent/externalSignals.js')
+    expect(statedDateOf('1 January 2099')).toBeNull()
   })
 })

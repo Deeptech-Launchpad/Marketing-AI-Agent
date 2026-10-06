@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { api } from '../lib/api'
 import { useEngineAction, usePolling, useResource } from '../lib/hooks'
 import { useCompany } from '../lib/companyContext'
@@ -549,6 +550,9 @@ export function IntentSignals() {
     detail.refresh()
     signals.refresh()
   })
+  // A failed start belongs to the company it happened on (2026-10-06).
+  const resetDetect = detect.reset
+  useEffect(() => resetDetect(), [id, resetDetect])
 
   // A second detection while one is queued would only queue a second job
   // behind the same worker, so the action waits for the run in flight.
@@ -997,7 +1001,7 @@ function RunSentence({
       return (
         <p className="sig-run__sentence">
           Detection is running for {name}
-          {run?.startedAt ? ` since ${clock(run.startedAt)}` : ''}. Signals appear here as each provider finishes.
+          {run?.startedAt ? ` since ${clock(run.startedAt)}` : ''}. Signals appear when the run completes.
         </p>
       )
     case 'COMPLETED':
@@ -1086,7 +1090,9 @@ function NoRows({
         <EmptyState
           icon={Radar}
           title="Detection is running"
-          detail="The providers are being read now. Nothing has been recorded so far; the list fills in as they finish."
+          // Signals are stored once, at the end of the run — the list never
+          // filled in "as they finish" (2026-10-06).
+          detail="The sources are being read now. Signals are recorded together when the run completes."
         />
       )
     case 'COMPLETED':

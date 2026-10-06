@@ -72,10 +72,19 @@ export function CommandCentre() {
 
   const stageState = (engineId: string): StageState => {
     switch (engineId) {
-      case 'enrichment':
-        return company
-          ? { status: 'complete', detail: `${company.technologyCount ?? 0} detected` }
-          : { status: 'idle', detail: null }
+      case 'enrichment': {
+        // From the run's own status. It used to be "complete · 0 detected" for
+        // ANY selected company — including a lead never enriched, and one whose
+        // run failed or is still queued (2026-10-06).
+        if (!company) return { status: 'idle', detail: null }
+        const run = company.enrichmentStatus ?? null
+        if (!run) return { status: 'idle', detail: 'Not run yet' }
+        if (run === 'queued' || run === 'running') return { status: 'running', detail: 'In progress' }
+        if (run === 'failed') return { status: 'error', detail: 'Failed — open to see why' }
+        if (run === 'no_website') return { status: 'blocked', detail: 'No website on record' }
+        if (run === 'unreachable' || run === 'partial') return { status: 'blocked', detail: 'Partial — website not read' }
+        return { status: 'complete', detail: `${company.technologyCount ?? 0} detected` }
+      }
       case 'engagement': {
         // Whether anything was observed, never how much.
         const observed = (engagement.data?.events?.length ?? 0) > 0
@@ -170,7 +179,10 @@ export function CommandCentre() {
             <dl className="cc__dl">
               <dt>Engagement</dt>
               <dd>
-                {(engagement.data?.events?.length ?? 0) > 0 ? (
+                {engagement.error && !engagement.data ? (
+                  // A failed read is not "nothing observed" (2026-10-06).
+                  <Unset what="Could not be read — open the timeline" />
+                ) : (engagement.data?.events?.length ?? 0) > 0 ? (
                   // What was observed, not how much of it. The count that
                   // stood here came from the summary endpoint and is the
                   // number this phase withholds.
@@ -202,7 +214,8 @@ export function CommandCentre() {
             </li>
           </ul>
           <p className="cc__foot">
-            Stages 1 and 3–8 are run per job rather than per company, so they open rather than report here.
+            Prospects, Intent Signals, Decision Makers and Outreach are run per job rather than per company, so they open
+            rather than report here.
           </p>
         </article>
       </section>

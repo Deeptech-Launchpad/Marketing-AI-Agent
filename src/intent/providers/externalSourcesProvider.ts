@@ -82,6 +82,7 @@ export class ExternalSourcesProvider implements IntentProvider {
     const pagesRead: Array<{ url: string; platform: string; ok: boolean; loginWall: boolean; signals: number; reason?: string }> = []
     let loginWalls = 0
     let rejected = 0
+    const readFailures: string[] = []
     let ownSite = 0
 
     for (const page of await readPublicSources(discovery.sources, MAX_PAGES)) {
@@ -103,8 +104,13 @@ export class ExternalSourcesProvider implements IntentProvider {
         tenantId: ctx.tenantId,
         company: { name: companyName, host: companyHost },
       })
+      // A read that failed — the model step itself — is a page NOT read, and
+      // is recorded so. It used to be recorded as read with no signals, so an
+      // AI outage reported "pages were read and none stated a signal": a
+      // failure presented as a finding about the company (2026-10-06).
       costUsd += read.costUsd
       rejected += read.rejected
+      if (read.failed) readFailures.push(read.reason ?? 'The reading step failed.')
 
       let added = 0
       for (const r of read.readings) {
@@ -137,18 +143,23 @@ export class ExternalSourcesProvider implements IntentProvider {
         })
         added++
       }
-      pagesRead.push({ url: page.finalUrl, platform: place.platformLabel, ok: true, loginWall: false, signals: added })
+      pagesRead.push({ url: page.finalUrl, platform: place.platformLabel, ok: !read.failed, loginWall: false, signals: added, ...(read.failed ? { reason: read.reason ?? undefined } : {}) })
     }
 
     const readOk = pagesRead.filter((p) => p.ok).length
+    // Every page the search found failed at the reading step: this source
+    // could not look, which is not the same as looking and finding nothing.
+    const couldNotRead = signals.length === 0 && readOk === 0 && readFailures.length > 0
     return {
       provider: this.name,
       // Searched and found nothing is a success with no signals.
-      ok: true,
+      ok: !couldNotRead,
       signals,
       reason: signals.length
         ? undefined
-        : discovery.sources.length === 0
+        : couldNotRead
+          ? `The pages found could not be read: ${readFailures[0]}`
+          : discovery.sources.length === 0
           ? `${NO_EVIDENCE} The search found no forum, review, news or social pages about this company.`
           : readOk === 0
             ? `${NO_EVIDENCE} ${pagesRead.length} outside page(s) were found but none could be read` +

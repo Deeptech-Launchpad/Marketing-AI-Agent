@@ -417,7 +417,13 @@ export async function runDecisionMakerDiscovery(runId: string): Promise<void> {
     // only in that case, and never alters a candidate.
     let companyContact: ReturnType<typeof companyContactRow> | null = null
     const top = shortlist[0]
-    if (top && !top.email) {
+    // "No email" means no email STORED. With DM_STORE_CONTACT_DATA off (the
+    // default) a person's address is never written, so the screen shows none —
+    // but the check used the address held in memory, skipped the lookup, and
+    // the company mailbox stayed hidden until Outreach happened to look for it
+    // (2026-10-06). Outreach's own check already reads the stored value.
+    const storedEmail = env.DM_STORE_CONTACT_DATA ? top?.email : null
+    if (top && !storedEmail) {
       const started = Date.now()
       const found = await findCompanyContactEmail({
         company,
@@ -522,6 +528,18 @@ export function explainNoResults(
     parts.push(
       `${blocked.length} person-data source(s) could not be consulted at all: ` +
         blocked.map((b) => `${b.provider} (${b.reason})`).join(' '),
+    )
+  }
+
+  // Sources that errored or were rate-limited looked at nothing. Leaving them
+  // out made "2 sources ran and returned nobody" read as a finding about the
+  // company when the sources had simply failed (2026-10-06).
+  const failed = results.filter((r) => r.status === 'error' || r.status === 'rate_limited')
+  if (failed.length) {
+    parts.push(
+      `${failed.length} source(s) failed, so their answer is unknown: ` +
+        failed.map((f) => `${f.provider} (${f.status === 'rate_limited' ? 'rate-limited' : 'error'}${f.reason ? `: ${f.reason}` : ''})`).join('; ') +
+        '. Run it again later.',
     )
   }
 

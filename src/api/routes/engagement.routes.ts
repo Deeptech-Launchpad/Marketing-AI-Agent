@@ -238,7 +238,10 @@ engagementRoutes.get(
       prisma.intentSignal.findMany({
         where: { tenantId: p.tenantId, crmCompanyId, status: 'active' },
         orderBy: { detectedAt: 'desc' },
-        take: 20,
+        // The panel lists five but COUNTS them all. A cap of 20 made a company
+        // with 35 active signals read "20", disagreeing with Intent Signals
+        // (2026-10-06). The same window the Intent screen reads.
+        take: 1000,
       }),
       currentScore(p.tenantId, crmCompanyId),
       getQualification(p.tenantId, crmCompanyId),

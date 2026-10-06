@@ -192,6 +192,9 @@ interface RequestOptions {
   nullOn404?: boolean
 }
 
+/** Fired when a request made WITH a session is refused as signed-out. */
+export const SESSION_EXPIRED_EVENT = 'marketing-ai:session-expired'
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const token = getToken()
   const headers: Record<string, string> = { Accept: 'application/json' }
@@ -237,6 +240,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     // "the endpoint is gone" reached the screens disguised as "this company
     // has nothing".
     if (res.status === 404 && options.nullOn404 && authored) return null as T
+
+    // A session that has expired, or an account that was disabled, is refused
+    // on EVERY request. Each screen used to show its own "Invalid or expired
+    // session" box and leave the person inside a half-signed-in app until
+    // they reloaded (2026-10-06). One notice, and the sign-in screen.
+    if (token && (res.status === 401 || (res.status === 403 && /disabled/i.test(err?.message ?? '')))) {
+      setToken(null)
+      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT, { detail: err?.message ?? null }))
+    }
 
     const body = payload as { error?: unknown; message?: string }
     throw new ApiError(
@@ -317,7 +329,7 @@ export interface SignedIn {
   email: string
   name: string | null
   pictureUrl: string | null
-  role: 'admin' | 'operator'
+  role: 'admin' | 'approver' | 'operator' | 'viewer'
   isAdmin: boolean
 }
 

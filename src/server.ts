@@ -15,6 +15,22 @@ export function createServer() {
   const app = express()
 
   app.disable('x-powered-by')
+
+  // WHO IS CALLING — BEHIND NGINX (2026-10-06).
+  //
+  // In production every browser request reaches this process through nginx on
+  // the same machine, so the connection always comes from 127.0.0.1 and the
+  // caller's real address is in X-Forwarded-For. Without this setting every
+  // user looked like the same caller: the rate limits below were one bucket
+  // for the whole company, so a handful of mistyped codes — or ten people
+  // signing up in one hour — locked everyone out of signing in.
+  //
+  // 'loopback' trusts that header ONLY when the connection itself comes from
+  // this machine. The API port is also reachable directly, and a request made
+  // straight to it from outside keeps its real address: it cannot pick its own
+  // by sending the header, so it cannot slip past a limit that way.
+  app.set('trust proxy', 'loopback')
+
   app.use(helmet())
   app.use(requestId)
   app.use(

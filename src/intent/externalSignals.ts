@@ -97,7 +97,7 @@ export async function readExternalSignals(input: {
   sourceUrl: string
   tenantId: string
   company: { name: string; host: string | null }
-}): Promise<{ readings: ExternalReading[]; rejected: number; costUsd: number; reason: string | null }> {
+}): Promise<{ readings: ExternalReading[]; rejected: number; costUsd: number; reason: string | null; failed?: boolean }> {
   const text = input.text.slice(0, 12_000).trim()
   if (!env.PUBLIC_RESEARCH_ENABLED) return { readings: [], rejected: 0, costUsd: 0, reason: 'PUBLIC_RESEARCH_ENABLED is off.' }
   if (text.length < 200) return { readings: [], rejected: 0, costUsd: 0, reason: 'The page carried too little text to read.' }
@@ -115,12 +115,12 @@ export async function readExternalSignals(input: {
       tenantId: input.tenantId,
     })
     const parsed = ReadSignals.safeParse(result.data)
-    if (!parsed.success) return { readings: [], rejected: 0, costUsd: result.costUsd, reason: 'The reading did not match the expected shape.' }
+    if (!parsed.success) return { readings: [], rejected: 0, costUsd: result.costUsd, reason: 'The reading did not match the expected shape.', failed: true }
     const verified = verifyReadings(parsed.data.signals, text, input.company)
     return { ...verified, costUsd: result.costUsd, reason: null }
   } catch (err) {
     logger.info({ err: (err as Error).message, sourceUrl: input.sourceUrl }, 'external page read failed; the run continues')
-    return { readings: [], rejected: 0, costUsd: 0, reason: `The page could not be read: ${(err as Error).message}` }
+    return { readings: [], rejected: 0, costUsd: 0, reason: `The page could not be read: ${(err as Error).message}`, failed: true }
   }
 }
 
@@ -232,9 +232,20 @@ export const KIND_INFO: Record<ExternalKind, { category: SignalCategory; label: 
   },
 }
 
-/** Only a date the SOURCE stated. An unparseable string becomes null, never today. */
+/**
+ * Only a date the SOURCE stated. An unparseable string becomes null, never today.
+ *
+ * The date must state its year. Forums and Reddit often print just "Sep 5",
+ * and `new Date("Sep 5")` is 4 September 2001 — so a fresh post was recorded
+ * as twenty-five years old and shown as expired (2026-10-06). A date with no
+ * year, or an all-number date that could be read either way round (05/06/2024
+ * is May or June), is treated as the source giving no date. Nothing is guessed.
+ */
 export function statedDateOf(raw: string | null): Date | null {
   if (!raw) return null
+  if (!/\b(19|20)\d{2}\b/.test(raw)) return null
+  const numeric = /^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\s*$/.exec(raw)
+  if (numeric && Number(numeric[1]) <= 12 && Number(numeric[2]) <= 12 && numeric[1] !== numeric[2]) return null
   const d = new Date(raw)
   if (Number.isNaN(d.getTime())) return null
   if (d.getTime() > Date.now() + 86_400_000) return null

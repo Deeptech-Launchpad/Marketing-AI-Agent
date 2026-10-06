@@ -94,15 +94,23 @@ function PendingReply({ reply, onChanged, canOperate }: { reply: Reply; onChange
   const suggested = reply.modelClassification ?? 'unclear'
   const [choice, setChoice] = useState<ReplyClass>(suggested)
   const [skus, setSkus] = useState<string>(reply.modelSkus.join('\n'))
+  // Keyed on the reply and on what the model said, compared as text: the SKU
+  // array is a new object on every refresh of the workspace, which used to
+  // throw away the type Sales had picked and the SKUs they had corrected
+  // (2026-10-06).
+  const modelSkuText = reply.modelSkus.join('\n')
   useEffect(() => {
     setChoice(reply.modelClassification ?? 'unclear')
-    setSkus(reply.modelSkus.join('\n'))
-  }, [reply.id, reply.modelClassification, reply.modelSkus])
+    setSkus(modelSkuText)
+  }, [reply.id, reply.modelClassification, modelSkuText])
 
-  const skuList = skus
+  const allSkus = skus
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
+  // The sequence uses five. More than five used to be sent as-is and refused
+  // with only "Invalid request body." (2026-10-06).
+  const skuList = allSkus.slice(0, 5)
 
   return (
     <div className="otr-reply is-pending">
@@ -147,6 +155,11 @@ function PendingReply({ reply, onChanged, canOperate }: { reply: Reply; onChange
                 SKUs from the reply (one per line, exactly as written)
               </label>
               <textarea id={`skus-${reply.id}`} className="textarea" rows={5} value={skus} onChange={(e) => setSkus(e.target.value)} />
+              {allSkus.length > 5 && (
+                <p className="note note--caveat">
+                  The reply lists {allSkus.length}. Only the first five are used — reorder the lines to choose which.
+                </p>
+              )}
             </>
           )}
           <div className="row" style={{ marginTop: 'var(--s2)' }}>

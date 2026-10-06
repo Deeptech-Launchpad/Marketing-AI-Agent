@@ -25,6 +25,10 @@ export interface CrmLeadContextValue {
   status: LeadWriteStatus | null
   /** The person may add to NXT Sales (approve permission). */
   canAdd: boolean
+  /** The person may re-run the NXT Sales check (operate permission). */
+  canCheck?: boolean
+  /** The automatic check is still expected to arrive (just after a search). */
+  checking?: boolean
   onChanged: () => void
 }
 
@@ -106,8 +110,14 @@ export function CrmStatus({ company }: { company: DiscoveredCompany }) {
         <Chip tone="warn" title={company.crmCheckNote ?? undefined}>
           Same name in NXT Sales — different website
         </Chip>
-      ) : unchecked ? (
+      ) : unchecked && ctx.checking !== false ? (
         <Chip tone="neutral">Checking NXT Sales…</Chip>
+      ) : unchecked ? (
+        // The automatic check runs once, right after a search. A company it
+        // never reached — an older search, or a worker restart mid-check —
+        // used to read "Checking NXT Sales…" for ever, with no way to check
+        // it (2026-10-06).
+        <Chip tone="neutral">Not checked against NXT Sales yet</Chip>
       ) : failed ? (
         <Chip tone="warn" title={company.crmCheckNote ?? undefined}>
           NXT Sales not checked
@@ -117,7 +127,7 @@ export function CrmStatus({ company }: { company: DiscoveredCompany }) {
       )}
       <InfoTip help={HELP} label="the NXT Sales check" />
 
-      {(failed || (!linked && !unchecked)) && (
+      {ctx.canCheck !== false && (failed || (!linked && !(unchecked && ctx.checking !== false))) && (
         <Button size="sm" variant="quiet" icon={RefreshCw} busy={busy === 'check'} onClick={() => void check()}>
           Check again
         </Button>

@@ -331,7 +331,12 @@ function crmFacts(signals: EnrichmentSignals, at: string | null): Observation[] 
  * and only the second is provable from one fetch.
  */
 function siteSignals(signals: EnrichmentSignals, sourceUrl: string | null, at: string | null): Observation[] {
-  const pageUrl = observedText(signals.finalUrl) ?? sourceUrl
+  // Falls back to the address on record ONLY when the site was actually read.
+  // For a site that could not be opened, the worker stores that address with
+  // no final URL — and the fallback turned it into "Page read: …", "Read from
+  // one page on …" and a recorded fact, for a page nobody read (2026-10-06).
+  const reached = observedText(signals.websiteStatus) === 'reachable'
+  const pageUrl = observedText(signals.finalUrl) ?? (reached ? sourceUrl : null)
   const host = hostOf(pageUrl)
   const on = host ? ` on ${host}` : ''
 
@@ -841,6 +846,10 @@ export function Enrichment() {
     reloadCompanies?.()
   })
 
+  // A failed start belongs to the company it happened on (2026-10-06).
+  const resetRun = run.reset
+  useEffect(() => resetRun(), [id, resetRun])
+
   const headState: AgentState =
     run.running || status === 'running'
       ? 'running'
@@ -936,6 +945,13 @@ export function Enrichment() {
       actions={action}
       completion={completion}
     >
+      {/* "Run enrichment" failing used to spin, stop and say nothing, so the
+          person assumed it had worked or clicked again (2026-10-06). */}
+      {run.error && (
+        <p className="note note--caveat" role="alert">
+          Enrichment could not be started: {run.error.message}
+        </p>
+      )}
       <EngineSplit
         main={
           !company ? (

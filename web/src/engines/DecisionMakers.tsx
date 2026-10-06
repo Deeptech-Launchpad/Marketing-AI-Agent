@@ -383,6 +383,18 @@ export function DecisionMakers() {
     latest.refresh()
   })
 
+  // Everything about "the search I just started" belongs to that company.
+  // Switching company used to keep the notice ("Search queued…") and keep
+  // polling the new company for a run that would never appear there, and keep
+  // a failed start's error with a Retry that acted on the new company
+  // (2026-10-06).
+  const resetRun = run.reset
+  useEffect(() => {
+    setTrackedRunId(null)
+    setNotice(null)
+    resetRun()
+  }, [id, resetRun])
+
   const busy = run.running || inFlight
   const discover = can('operate') && id && (
     <Button icon={Users} variant="primary" onClick={run.fire} busy={busy}>
@@ -457,7 +469,16 @@ export function DecisionMakers() {
         // reworded into "no candidates found", which would be a different and
         // untrue claim.
         <EmptyState
-          title="Discovery has not run for this company"
+          // "Has not run" was shown right under "A search is running" or
+          // "The latest search failed" (2026-10-06). What is true in every
+          // case is that no search has COMPLETED here.
+          title={
+            inFlight
+              ? 'No completed search yet — one is running now'
+              : latestRun?.status === 'failed'
+                ? 'No completed search for this company yet'
+                : 'Discovery has not run for this company'
+          }
           detail={candidates.absent}
           icon={Users}
           action={discover || undefined}
@@ -681,14 +702,24 @@ export function DecisionMakers() {
                     remediation="Enable DM_STORE_CONTACT_DATA if storing contact details is approved, then run the search again."
                   />
                 )}
-                {rows.length > 0 && withEmail === 0 && withPhone === 0 && withheld === 0 && (
-                  <BlockedState
-                    what="No contact details are available"
-                    why="The engine verified these people but no source stated an email address or a phone number for any of them. It will not infer one from a name and a domain."
-                    affects="The email and LinkedIn outreach channels have no destination for this company."
-                    remediation="Configure a contact-data provider, or supply contact details another way."
-                  />
-                )}
+                {/* Only about the SHORTLISTED people (set-aside rows were
+                    counted too), and only when outreach really has nowhere to
+                    go: a verified company mailbox is a destination, and so is
+                    a LinkedIn profile. It used to say "no destination" even
+                    with one of those on screen (2026-10-06). */}
+                {shortlisted.length > 0 &&
+                  withEmail === 0 &&
+                  withPhone === 0 &&
+                  withheld === 0 &&
+                  !companyMailbox &&
+                  !shortlisted.some((c) => c.profileUrl) && (
+                    <BlockedState
+                      what="No contact details are available"
+                      why="The engine verified these people but no source stated an email address or a phone number for any of them. It will not infer one from a name and a domain."
+                      affects="Outreach has no address for this company yet."
+                      remediation="Type the address in Outreach's “Goes to” box if you have one, or configure a contact-data provider."
+                    />
+                  )}
               </Panel>
 
               <Panel title="Provider status" subtitle="Every source this run asked, in the order it asked them">

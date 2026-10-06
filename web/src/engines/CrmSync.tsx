@@ -5,7 +5,7 @@ import { useCompany } from '../lib/companyContext'
 import { useAuth } from '../lib/auth'
 import { useEngine, EnginePage, EngineSplit } from '../components/shell/EnginePage'
 import { Panel, Chip, Button, Field, Unset, StatusBadge, toUiStatus } from '../components/ui/primitives'
-import { BlockedState, EmptyState, LoadingState } from '../components/ui/states'
+import { BlockedState, EmptyState, ErrorState, LoadingState } from '../components/ui/states'
 import { SyncFlow } from '../components/motion/Signatures'
 import { Drawer } from '../components/ui/Evidence'
 import { DataTable } from '../components/ui/DataTable'
@@ -44,6 +44,7 @@ export function CrmSync() {
   const { company } = useCompany()
   const { can } = useAuth()
   const [busy, setBusy] = useState(false)
+  const [prepareError, setPrepareError] = useState<Error | null>(null)
   const [payloadOpen, setPayloadOpen] = useState(false)
   const id = company?.crmCompanyId
 
@@ -68,9 +69,14 @@ export function CrmSync() {
   const prepare = async () => {
     if (!qual.data?.id) return
     setBusy(true)
+    setPrepareError(null)
     try {
       await api.post(`/crm-sync/qualifications/${qual.data.id}`, {})
       sync.refresh()
+    } catch (err) {
+      // It had no catch: a refused or failed prepare just stopped spinning and
+      // said nothing (2026-10-06).
+      setPrepareError(err instanceof Error ? err : new Error(String(err)))
     } finally {
       setBusy(false)
     }
@@ -101,15 +107,27 @@ export function CrmSync() {
         )
       }
     >
+      {prepareError && (
+        <p className="note note--caveat" role="alert">
+          The handoff could not be prepared: {prepareError.message}
+        </p>
+      )}
       {qual.loading ? (
         <LoadingState what="Checking whether this lead has qualified" visual={<SyncFlow accent={engine.accent} />} />
+      ) : qual.error ? (
+        // A failed read is not "no qualified lead" (2026-10-06).
+        <ErrorState error={qual.error} what="Whether this lead has qualified could not be read" onRetry={qual.refresh} />
       ) : !qual.data?.id ? (
         <EmptyState
           title="No qualified lead to hand over"
-          detail="Only a qualified lead enters the CRM flow. Evaluate this company in Sales Qualification first — the platform never pushes unqualified prospects into the CRM."
+          // There is no Sales Qualification screen to send anyone to:
+          // qualification runs by itself in the background (2026-10-06).
+          detail="Only a qualified lead enters the CRM flow. Qualification runs automatically in the background as a company's evidence builds up — the platform never pushes unqualified prospects into the CRM."
         />
       ) : sync.loading && !sync.data ? (
         <LoadingState what="Reading the handoff state" visual={<SyncFlow accent={engine.accent} blocked />} />
+      ) : sync.error && !sync.data ? (
+        <ErrorState error={sync.error} what="The handoff state could not be read" onRetry={sync.refresh} />
       ) : !sync.data?.prepared ? (
         <EmptyState
           title="No handoff prepared yet"
@@ -165,8 +183,12 @@ export function CrmSync() {
                   what={sync.data.stateLabel}
                   why={sync.data.lastError?.message ?? BLOCKED_WHY[sync.data.state] ?? BLOCKED_WHY.default!}
                   affects={
-                    sync.data.state === 'blocked_not_qualified'
-                      ? 'This lead only. Qualified leads are unaffected.'
+                    // Validation and a missing owner are about THIS lead's own
+                    // record, not every lead (2026-10-06).
+                    sync.data.state === 'blocked_not_qualified' ||
+                    sync.data.state === 'blocked_validation' ||
+                    sync.data.state === 'blocked_missing_owner'
+                      ? 'This lead only. Other leads are unaffected.'
                       : 'Every qualified lead. Packages are validated and held in the outbox rather than delivered.'
                   }
                   remediation={

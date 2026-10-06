@@ -150,7 +150,7 @@ export async function identifyCompanies(input: {
   tenantId: string
   objective: string
   page: CandidatePage
-}): Promise<{ companies: IdentifiedCompany[]; costUsd: number }> {
+}): Promise<{ companies: IdentifiedCompany[]; costUsd: number; failed?: string }> {
   const { page } = input
   try {
     const result = await getLlm().generate({
@@ -169,7 +169,9 @@ export async function identifyCompanies(input: {
     return { companies: parsed.success ? verifyIdentified(parsed.data, page) : [], costUsd: result.costUsd }
   } catch (err) {
     logger.info({ err: (err as Error).message, url: page.finalUrl }, 'company identification failed')
-    return { companies: [], costUsd: 0 }
+    // Said so, rather than returned as "no company on this page": the caller
+    // must be able to tell a failed step from a page that named nobody.
+    return { companies: [], costUsd: 0, failed: (err as Error).message || 'The identification step failed.' }
   }
 }
 

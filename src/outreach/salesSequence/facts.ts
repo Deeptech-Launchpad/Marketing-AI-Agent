@@ -224,7 +224,12 @@ export async function loadProspectFacts(
   // on its own domain, shaped like one product's page — and, when a draft is
   // being prepared, re-opened and re-checked as a genuine individual product.
   const candidateUrl = verifiedProductPageUrl(product, company.domain)
-  let productPageUrl: string | null = null
+  // Shown to the reviewer as "Product page (for your reference)". It is the
+  // page Prospects analysed, already checked above to be one product on the
+  // company's own domain. It used to be set only after a fresh re-check, which
+  // the Outreach screen never asks for — so exactly the companies that HAD a
+  // verified page were told they had none (2026-10-06). No email includes it.
+  let productPageUrl: string | null = candidateUrl
   let productPageNote: string | null = product
     ? candidateUrl
       ? null

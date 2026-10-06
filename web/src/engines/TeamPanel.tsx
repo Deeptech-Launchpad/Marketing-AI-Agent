@@ -54,8 +54,8 @@ interface Account {
 
 const ROLES = [
   { value: 'viewer', label: 'Viewer', what: 'Can look at everything. Cannot run anything.' },
-  { value: 'operator', label: 'Operator', what: 'Can run the engines and prepare drafts. Cannot approve.' },
-  { value: 'approver', label: 'Approver', what: 'Can approve and send what an operator prepared.' },
+  { value: 'operator', label: 'Operator', what: 'Can run the engines, prepare drafts and mark emails sent. Cannot approve.' },
+  { value: 'approver', label: 'Approver', what: 'Can approve what an operator prepared. Cannot run the engines or mark emails sent.' },
 ] as const
 
 const HELP = {
@@ -157,7 +157,7 @@ export function TeamPanel() {
               variant="quiet"
               icon={X}
               busy={busy === `remove:${a.email}`}
-              title="They can sign in again, and come back as an ordinary user."
+              title="Resets them to an ordinary user. They can still sign in — use Disable to block them."
               onClick={() => void act(`remove:${a.email}`, () => api.del(`/admin/members/${encodeURIComponent(a.email)}`))}
             >
               Remove
@@ -215,8 +215,8 @@ export function TeamPanel() {
           <div className="team__block">
             <p className="eyebrow">Administrators ({admins.length})</p>
             <p className="note">
-              Set on the server, by email address. They are the only people who can approve work, see what Gemini has
-              cost, and manage access. To change this list, edit <code>AUTH_ADMIN_EMAILS</code> on the server — it takes
+              Set on the server, by email address. They can do everything, and are the only people who can see what
+              Gemini has cost and manage access. To change this list, edit <code>AUTH_ADMIN_EMAILS</code> on the server — it takes
               effect the next time that person signs in.
             </p>
             {admins.length === 0 ? (

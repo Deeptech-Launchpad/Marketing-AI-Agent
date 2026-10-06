@@ -70,6 +70,31 @@ const CONCURRENCY = 6
  */
 const TIME_BUDGET_MS = 12 * 60_000
 
+/**
+ * A search still queued or running this long after it was created is dead.
+ * Generous on purpose: the search itself stops at TIME_BUDGET_MS, and the
+ * NXT Sales check that follows it takes a few minutes more at most.
+ */
+export const STALE_SEARCH_MS = 45 * 60_000
+export const STALE_SEARCH_REASON =
+  'The search did not finish within 45 minutes and was marked failed. The worker probably stopped while it was running (for example during a restart); search again.'
+
+/**
+ * Fails searches stranded in queued/running.
+ *
+ * A search whose worker stopped mid-job — which every deploy does — stayed
+ * "Searching the public web…" for good: the screen polled every 4 seconds
+ * indefinitely, and the search could never be deleted, because deleting a
+ * running search is refused (2026-10-06).
+ */
+export async function failStaleDiscoverySearches(tenantId: string, now: Date = new Date()): Promise<number> {
+  const r = await prisma.companyDiscoverySearch.updateMany({
+    where: { tenantId, status: { in: ['queued', 'running'] }, createdAt: { lt: new Date(now.getTime() - STALE_SEARCH_MS) } },
+    data: { status: 'failed', failureReason: STALE_SEARCH_REASON, finishedAt: now },
+  })
+  return r.count
+}
+
 
 /**
  * The one place a discovery query is composed — plain text, no model call.
@@ -289,6 +314,12 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
     // One row per unreadable HOST: seven unreadable results from the same
     // site are one fact.
     const unreadableHosts = new Set<string>()
+    // Pages where the step that names the companies failed (the AI model, not
+    // the page). Counted so a search where EVERY page failed that way ends as
+    // failed with the reason — it used to end "completed, 0 companies", which
+    // reads as a finding about the market (2026-10-06).
+    const identifyFailures: string[] = []
+    let identifiedAny = false
 
     /**
      * Opens one company's website, analyses one genuine product, records it.
@@ -366,6 +397,12 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
 
       const identified = await identifyCompanies({ tenantId: search.tenantId, objective: search.objective, page })
       costUsd += identified.costUsd
+      if (identified.failed) {
+        identifyFailures.push(identified.failed)
+        log.info({ url: page.finalUrl, reason: identified.failed }, 'company identification step failed on this page')
+        return
+      }
+      identifiedAny = true
       if (identified.companies.length === 0) {
         log.info({ url: page.finalUrl }, 'no matching company identified on this page')
         return
@@ -456,6 +493,17 @@ export async function runCompanyWebDiscovery(searchId: string): Promise<void> {
     const needing = await prisma.discoveredCompany
       .count({ where: { tenantId: search.tenantId, searchId, serviceNeed: { in: ['needed', 'possible'] } } })
       .catch(() => 0)
+
+    // Every page the search found failed at the identification step, and no
+    // company was recorded by any other route: the search could not look.
+    if (identifyFailures.length > 0 && !identifiedAny) {
+      const recorded = await prisma.discoveredCompany.count({ where: { tenantId: search.tenantId, searchId } }).catch(() => 0)
+      if (recorded === 0) {
+        throw new Error(
+          `The step that identifies companies on each page failed for all ${identifyFailures.length} page(s) found, so no company could be checked: ${identifyFailures[0]}`,
+        )
+      }
+    }
 
     await prisma.companyDiscoverySearch.update({
       where: { id: searchId },

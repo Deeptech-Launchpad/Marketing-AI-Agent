@@ -79,6 +79,31 @@ function statedJobTitleOf(draft: IntentSignalDraft): string | null {
  */
 export const RUN_IN_FLIGHT_MS = 30 * 60_000
 
+/** What a run stranded past the in-flight window is closed with. */
+export const STALE_INTENT_RUN_REASON =
+  'The run did not finish within 30 minutes and was marked failed. The worker probably stopped while it was running (for example during a restart); detect again.'
+
+/**
+ * Fails runs stranded in queued/running beyond the in-flight window.
+ *
+ * A run whose worker stopped mid-job — which every deploy does — stayed
+ * "running" for good: pg-boss redelivers the job, the redelivery is skipped
+ * because the run is still inside its window, and the job then counts as done.
+ * The screen showed RUNNING with Detect disabled indefinitely (2026-10-06).
+ * Decision Makers and Enrichment already close their stranded runs this way.
+ */
+export async function failStaleIntentRuns(tenantId: string, now: Date = new Date()): Promise<number> {
+  const r = await prisma.intentDetectionRun.updateMany({
+    where: {
+      tenantId,
+      status: { in: ['queued', 'running'] },
+      createdAt: { lt: new Date(now.getTime() - RUN_IN_FLIGHT_MS) },
+    },
+    data: { status: 'failed', failureReason: STALE_INTENT_RUN_REASON, completedAt: now },
+  })
+  return r.count
+}
+
 /** Whether a delivered job should (re)process this run. */
 export function shouldProcessRun(
   run: { status: string; startedAt: Date | null },

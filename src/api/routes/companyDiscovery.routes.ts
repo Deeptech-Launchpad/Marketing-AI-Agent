@@ -5,7 +5,7 @@ import { audit } from '../../platform/audit.js'
 import { prisma } from '../../platform/db.js'
 import { NotFoundError } from '../../platform/errors.js'
 import { enqueue, QUEUE_COMPANY_WEB_DISCOVER } from '../../platform/queue.js'
-import { startCompanyWebDiscovery, MAX_CANDIDATES_HARD_CAP } from '../../prospects/companyWebDiscovery.js'
+import { failStaleDiscoverySearches, startCompanyWebDiscovery, MAX_CANDIDATES_HARD_CAP } from '../../prospects/companyWebDiscovery.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -73,6 +73,7 @@ companyDiscoveryRoutes.get(
   requirePermission('view'),
   asyncHandler(async (req, res) => {
     const p = req.principal!
+    await failStaleDiscoverySearches(p.tenantId)
     // The signed-in user's own search history (2026-09-25).
     const searches = await prisma.companyDiscoverySearch.findMany({
       where: { tenantId: p.tenantId, requestedByCrmUserId: p.crmUserId },
@@ -99,6 +100,7 @@ companyDiscoveryRoutes.get(
   requirePermission('view'),
   asyncHandler(async (req, res) => {
     const p = req.principal!
+    await failStaleDiscoverySearches(p.tenantId)
     const search = await prisma.companyDiscoverySearch.findFirst({
       where: { id: req.params.id, tenantId: p.tenantId },
     })

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, ApiError, authApi, fetchAuthCapabilities, getToken, setToken, type AuthCapabilities, type SignedIn } from './api'
+import { api, ApiError, authApi, fetchAuthCapabilities, getToken, SESSION_EXPIRED_EVENT, setToken, type AuthCapabilities, type SignedIn } from './api'
 import type { Permission, Principal } from './types'
 
 // WHO IS SIGNED IN, AND WHAT THEY MAY DO — TWO SEPARATE ANSWERS.
@@ -64,6 +64,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Any request refused because the session ended returns everyone to the
+  // sign-in screen, saying why, rather than leaving every screen showing its
+  // own error box (2026-10-06).
+  useEffect(() => {
+    const onExpired = (e: Event) => {
+      const reason = (e as CustomEvent<string | null>).detail
+      setPrincipal(null)
+      setError(
+        reason && /disabled/i.test(reason)
+          ? reason
+          : 'Your session has ended — sign in again to carry on. Nothing you saved was lost.',
+      )
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
+  }, [])
 
   /** Every sign-in path ends here: take the token, then ask who we are. */
   const accept = useCallback(

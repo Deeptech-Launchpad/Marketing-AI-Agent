@@ -47,6 +47,37 @@ function serviceToken(): string {
 // against a single-process CRM that people are actively using is not acceptable.
 const limit = pLimit(env.NXT_SALES_MAX_CONCURRENCY)
 
+/**
+ * Whether NXT Sales is reachable AND accepts this platform's credential.
+ *
+ * Used by /health/ready. It asks GET /api/auth/me — one read of the service
+ * user, nothing written — through the same base address and token as every
+ * real call, so a pass means the real calls will work. The old probe asked
+ * for /health with no token; NXT Sales has no such page behind its website,
+ * which answered with its HTML, so readiness reported the CRM down every time
+ * (2026-10-06). Five seconds, no retry: a readiness check must be quick.
+ */
+export async function probeCrm(): Promise<{ ok: boolean; detail?: string }> {
+  try {
+    const res = await fetch(`${env.NXT_SALES_BASE_URL}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${serviceToken()}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!res.ok) return { ok: false, detail: `NXT Sales answered HTTP ${res.status}.` }
+    if (!(res.headers.get('content-type') ?? '').includes('application/json')) {
+      return { ok: false, detail: 'NXT Sales answered with a web page instead of data — check NXT_SALES_BASE_URL.' }
+    }
+    const body = (await res.json().catch(() => null)) as { id?: string } | null
+    if (!body?.id || body.id !== env.NXT_SALES_SERVICE_USER_ID) {
+      return { ok: false, detail: 'NXT Sales does not recognise this platform’s service user (NXT_SALES_SERVICE_USER_ID).' }
+    }
+    return { ok: true }
+  } catch (err) {
+    const e = err as Error
+    return { ok: false, detail: e.name === 'TimeoutError' ? 'NXT Sales did not answer within 5 seconds.' : e.message }
+  }
+}
+
 export interface QueryParams {
   [k: string]: string | number | boolean | string[] | undefined
 }

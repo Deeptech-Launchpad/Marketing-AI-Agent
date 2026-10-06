@@ -243,6 +243,32 @@ describe('the admin list is the only thing that grants admin', () => {
     expect(await signInAgain('newadmin@altiusnxt.com')).toMatchObject({ isAdmin: true })
   })
 
+  // THE ROLES AN ADMINISTRATOR CHOSE SURVIVE SIGNING IN (2026-10-06).
+  // Every sign-in used to overwrite them with "operator".
+  it('keeps an Approver an admin set, across sign-ins', async () => {
+    await register('someone@altiusnxt.com')
+    db.tenantMember[0]!.role = 'approver' // what Registered users does
+    const r = await signInAgain('someone@altiusnxt.com')
+    expect(r.role).toBe('approver')
+    expect(db.tenantMember[0]!.role).toBe('approver')
+  })
+
+  it('keeps a Viewer a viewer — signing in never grants more', async () => {
+    await register('someone@altiusnxt.com')
+    db.tenantMember[0]!.role = 'viewer'
+    expect((await signInAgain('someone@altiusnxt.com')).role).toBe('viewer')
+  })
+
+  it('still lets the list win over any stored role for an admin address', async () => {
+    await register('govind@altiusnxt.com')
+    db.tenantMember[0]!.role = 'viewer'
+    expect((await signInAgain('govind@altiusnxt.com')).role).toBe('admin')
+  })
+
+  it('gives a brand-new account the ordinary role', async () => {
+    expect((await register('newperson@altiusnxt.com')).role).toBe('operator')
+  })
+
   it('reads the list rather than any stored row', () => {
     expect(roleFor('manoj@altiusnxt.com')).toBe('admin')
     expect(roleFor('someone@altiusnxt.com')).toBe('operator')

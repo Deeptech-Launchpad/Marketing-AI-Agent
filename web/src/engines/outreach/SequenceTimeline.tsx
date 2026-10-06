@@ -63,13 +63,18 @@ export function SequenceTimeline({
                 {d?.version ? <span>Version {d.version.toUpperCase()}</span> : null}
                 {s.reason ? <span className="cell-dim">{s.reason}</span> : null}
               </div>
-              {canOperate && (
+              {/* Opening an email only READS it, so everyone may — an approver
+                  or viewer could not open a sent email at all, because the whole
+                  row of buttons needed operate (2026-10-06). Preparing and
+                  skipping still do. */}
+              {(canOperate || d) && (
                 <div className="row otr-tl__actions">
                   {d ? (
                     <Button size="sm" icon={FileEdit} onClick={() => onOpenDraft(d)}>
-                      {d.status === 'draft' ? 'Review & approve' : 'Open'}
+                      {d.status === 'draft' && canOperate ? 'Review & approve' : 'Open'}
                     </Button>
                   ) : (
+                    canOperate &&
                     s.canPrepare && (
                       <Button
                         size="sm"
@@ -82,7 +87,7 @@ export function SequenceTimeline({
                       </Button>
                     )
                   )}
-                  {(s.status === 'due' || s.status === 'overdue' || s.status === 'drafted' || s.status === 'upcoming') && s.stageKey !== 'initial' && (
+                  {canOperate && (s.status === 'due' || s.status === 'overdue' || s.status === 'drafted' || s.status === 'upcoming') && s.stageKey !== 'initial' && (
                     <Button size="sm" variant="quiet" icon={SkipForward} onClick={() => { setSkipping(s.stageKey); setSkipReason('') }}>
                       Skip
                     </Button>

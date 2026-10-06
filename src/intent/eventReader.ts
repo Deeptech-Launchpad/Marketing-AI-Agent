@@ -204,6 +204,8 @@ export interface EventReadResult {
   /** Claims the page did not support. Counted, never used. */
   rejected: number
   reason: string | null
+  /** True only when the model step itself failed — not "nothing to read". */
+  failed?: boolean
   model: string | null
   costUsd: number
 }
@@ -260,6 +262,6 @@ export async function readEventsFromPage(input: {
       { err: (err as Error).message, sourceUrl: input.sourceUrl },
       'model event read failed; the run continues without this page',
     )
-    return { ...EMPTY, reason: `The model could not read this page: ${(err as Error).message}` }
+    return { ...EMPTY, reason: `The model could not read this page: ${(err as Error).message}`, failed: true }
   }
 }

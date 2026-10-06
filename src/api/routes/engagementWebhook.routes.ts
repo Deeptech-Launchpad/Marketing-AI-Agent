@@ -9,6 +9,7 @@ import {
 } from '../../engagement/adapters/emailWebhookAdapter.js'
 import { recordBatch, recordIngestionRun } from '../../engagement/store.js'
 import { logger } from '../../platform/logger.js'
+import { asyncHandler } from '../middleware/errorHandler.js'
 
 // TASK #983 — the provider webhook endpoint.
 //
@@ -58,7 +59,7 @@ const STATUS: Record<WebhookRejection, number> = {
 engagementWebhookRoutes.post(
   '/engagement/webhooks/:provider',
   webhookLimiter,
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const startedAt = Date.now()
     const provider = String(req.params.provider ?? '').slice(0, 40)
     const endpoint = `/engagement/webhooks/${provider}`
@@ -143,5 +144,5 @@ engagementWebhookRoutes.post(
       rejected: rejected + outcome.rejected,
       ...(rejected ? { rejectionDetail: detail } : {}),
     })
-  },
+  }),
 )

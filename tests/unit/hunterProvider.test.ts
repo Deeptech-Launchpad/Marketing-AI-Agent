@@ -188,3 +188,38 @@ describe('a blocker is never reported as an empty market', () => {
     expect(a.reason).toContain('searches by domain')
   })
 })
+
+// A 200 THAT IS NOT HUNTER'S DATA IS AN ERROR, NOT "NO EMAIL" (2026-10-06).
+describe('a reply that is not Hunter’s data', () => {
+  it('reports an error rather than "Hunter holds no email address"', async () => {
+    vi.stubGlobal('fetch', async () => new Response('<html>Bad gateway</html>', { status: 200, headers: { 'Content-Type': 'text/html' } }))
+    const r = await new HunterProvider().search(ctx())
+    expect(r.status).toBe('error')
+    expect(r.reason).toMatch(/result is unknown/)
+    expect(r.reason).not.toMatch(/holds no email/)
+  })
+
+  it('still reports a genuinely empty Hunter answer as empty', async () => {
+    respond(200, { data: { emails: [] } })
+    const r = await new HunterProvider().search(ctx())
+    expect(r.reason).toMatch(/holds no email address/)
+  })
+})
+
+// THE "NOBODY FOUND" SENTENCE NAMES SOURCES THAT FAILED (2026-10-06).
+describe('explaining an empty result', () => {
+  it('says which sources failed instead of implying they found nobody', async () => {
+    const { explainNoResults } = await import('../../src/decisionmakers/discovery.js')
+    const text = explainNoResults(
+      [
+        { provider: 'apollo', status: 'error', candidates: [], reason: 'HTTP 500', durationMs: 1 },
+        { provider: 'hunter', status: 'rate_limited', candidates: [], reason: 'Too many requests', durationMs: 1 },
+        { provider: 'company_website', status: 'no_results', candidates: [], durationMs: 1 },
+      ] as never,
+      0,
+      0,
+    )
+    expect(text).toMatch(/2 source\(s\) failed, so their answer is unknown: apollo \(error: HTTP 500\); hunter \(rate-limited: Too many requests\)/)
+    expect(text).toMatch(/1 source\(s\) ran and returned nobody/)
+  })
+})

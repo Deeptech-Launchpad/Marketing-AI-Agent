@@ -106,6 +106,11 @@ export function DraftEditor({
   const statusWord = emailStatus(draft.status, draft.statusReason, isTest).label
   const dirty = subject !== (draft.subject ?? '') || body !== (draft.body ?? '')
   const gates = draft.gates
+  // The placeholder check as it stands NOW, from the live checklist. The old
+  // warning read the snapshot taken when the draft was first written, so it
+  // never cleared after Sales filled a gap — "cannot be approved" sat above
+  // an enabled Approve button (2026-10-06). It also names the real tokens.
+  const placeholderCheck = gates?.items.find((i) => i.key === 'placeholders') ?? null
   const signals = view.facts.signals ?? []
   const used = new Set(p?.signalsUsed ?? [])
   const considered = new Set(p?.signalsConsidered ?? [])
@@ -209,7 +214,10 @@ export function DraftEditor({
                       size="sm"
                       icon={Save}
                       busy={call.busy === 'recipient'}
-                      disabled={recipient.trim() === (draft.recipient ?? '')}
+                      // Saving reloads the draft, which would drop unsaved
+                      // text edits (2026-10-06).
+                      disabled={recipient.trim() === (draft.recipient ?? '') || dirty}
+                      title={dirty ? 'Save your changes first' : undefined}
                       onClick={() => void saveRecipient()}
                     >
                       Save
@@ -321,10 +329,10 @@ export function DraftEditor({
               {isApproved && <span className="cell-dim">Saving a change returns the email to review.</span>}
             </div>
           )}
-          {unresolved.length > 0 && (
+          {placeholderCheck && !placeholderCheck.ok && (
             <p className="otr-warn">
-              <AlertTriangle size={12} aria-hidden="true" /> Not filled yet: {unresolved.map((u) => `[${u}]`).join(', ')}. The email cannot be
-              approved while a placeholder remains.
+              <AlertTriangle size={12} aria-hidden="true" /> {placeholderCheck.detail ?? 'A placeholder is still unfilled.'} The email
+              cannot be approved while a placeholder remains.
             </p>
           )}
           {draft.mentionsExpo && editable && (gates?.warnings ?? []).some((w) => /expo/i.test(w)) && (
@@ -463,7 +471,17 @@ export function DraftEditor({
               </div>
             )}
             <div className="row" style={{ marginTop: 'var(--s3)' }}>
-              <Button icon={Save} size="sm" busy={call.busy === 'inputs'} onClick={() => void saveInputs()}>
+              {/* Saving values reloads the draft from the server, which
+                  silently discarded any typed but unsaved changes to the
+                  subject or body (2026-10-06). */}
+              <Button
+                icon={Save}
+                size="sm"
+                busy={call.busy === 'inputs'}
+                disabled={dirty}
+                title={dirty ? 'Save your changes to the email first' : undefined}
+                onClick={() => void saveInputs()}
+              >
                 Save values
               </Button>
             </div>
@@ -611,8 +629,7 @@ export function DraftEditor({
               Test email <InfoTip topic="testEmail" />
             </p>
             <p className="note">
-              Emails this version to your own inbox exactly as the customer would receive it — same subject, content, product link and
-              sender. It changes nothing in the sequence and never goes to {view.campaign?.recipientEmail ?? 'the customer'}.
+              Emails this version to your own inbox exactly as the customer would receive it — same subject, content and sender. It changes nothing in the sequence and never goes to {view.campaign?.recipientEmail ?? 'the customer'}.
             </p>
             <div className="row">
               <Button

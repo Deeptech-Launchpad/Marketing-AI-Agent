@@ -10,7 +10,7 @@ const db = {
   // No DiscoveredCompany in these tests: every id is a CRM company.
   discoveredCompany: { findFirst: async () => null },
   intentSignal: { findMany: vi.fn(), update: vi.fn(), create: vi.fn() },
-  intentDetectionRun: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
+  intentDetectionRun: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(async () => ({ count: 0 })) },
   companyEnrichment: { findMany: vi.fn() },
   suppressionEntry: { findMany: vi.fn() },
 }

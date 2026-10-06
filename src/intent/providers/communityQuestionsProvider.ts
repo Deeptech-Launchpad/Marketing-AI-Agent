@@ -82,6 +82,7 @@ export class CommunityQuestionsProvider implements IntentProvider {
     let logged = 0
     let excluded = 0
     let rejected = 0
+    const readFailures: string[] = []
 
     let redditRefused = false
     for (const fetched of await readPublicSources(discovery.sources, MAX_PAGES)) {
@@ -102,7 +103,12 @@ export class CommunityQuestionsProvider implements IntentProvider {
         continue
       }
       const read = await readCommunityQuestions({ text: page.text, sourceUrl: page.finalUrl, tenantId: ctx.tenantId, company: { name: companyName, host: companyHost } })
+      // A read that failed — the model step itself — is a page NOT read, and
+      // is recorded so. It used to be recorded as read with no signals, so an
+      // AI outage reported "pages were read and none stated a signal": a
+      // failure presented as a finding about the company (2026-10-06).
       costUsd += read.costUsd
+      if (read.failed) readFailures.push(read.reason ?? 'The reading step failed.')
       logged += read.logged
       excluded += read.excluded
       rejected += read.rejected
@@ -146,17 +152,20 @@ export class CommunityQuestionsProvider implements IntentProvider {
         })
         added++
       }
-      pagesRead.push({ url: page.finalUrl, community: community.name, ok: true, flagged: added })
+      pagesRead.push({ url: page.finalUrl, community: community.name, ok: !read.failed, flagged: added, ...(read.failed ? { reason: read.reason ?? undefined } : {}) })
     }
 
     const readOk = pagesRead.filter((p) => p.ok).length
+    const couldNotRead = signals.length === 0 && readOk === 0 && readFailures.length > 0
     return {
       provider: this.name,
-      ok: true,
+      ok: !couldNotRead,
       signals,
       reason: signals.length
         ? undefined
-        : discovery.sources.length === 0
+        : couldNotRead
+          ? `The community pages found could not be read: ${readFailures[0]}`
+          : discovery.sources.length === 0
           ? `${NO_EVIDENCE} The search found no forum or community questions by or about this company.`
           : readOk === 0
             ? `${NO_EVIDENCE} ${pagesRead.length} community page(s) were found but none could be read.`

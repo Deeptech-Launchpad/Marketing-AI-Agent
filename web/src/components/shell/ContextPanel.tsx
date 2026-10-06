@@ -265,6 +265,9 @@ export function ContextPanel() {
             <p className="eyebrow">Recent activity</p>
             {activity.loading ? (
               <div className="skeleton context__skel" />
+            ) : activity.error && !activity.data ? (
+              // A failed read is not "no engagement observed" (2026-10-06).
+              <p className="context__none">Recent activity could not be read.</p>
             ) : activity.data?.events?.length ? (
               <ul className="context__acts">
                 {activity.data.events.slice(0, 3).map((e) => (

@@ -11,6 +11,7 @@ import { isEventAboutCompany, isHistoryStatement, readEventsFromPage, type ReadE
 import { outreachAngleFor } from '../outreachAngles.js'
 import type { IntentSignalDraft, SignalCategory, SourceType } from '../types.js'
 import type { IntentProvider, ProviderContext, ProviderResult } from './provider.js'
+import { statedDateOf } from '../externalSignals.js'
 
 // SOURCE — THE PUBLIC WEB, FOUND BY SEARCH AND READ BY US.
 //
@@ -60,15 +61,8 @@ function categoryFor(event: ReadEvent, topic: ResearchTopic): SignalCategory {
   return 'business'
 }
 
-/** Only a date the SOURCE stated. An unparseable string becomes null, never today. */
-function statedDate(raw: string | null): Date | null {
-  if (!raw) return null
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return null
-  // A date in the future is a parse artefact, not an observation.
-  if (d.getTime() > Date.now() + 86_400_000) return null
-  return d
-}
+/** Only a date the SOURCE stated — one rule for every intent provider. */
+const statedDate = statedDateOf
 
 export class PublicResearchSignalProvider implements IntentProvider {
   readonly name = 'public_web_research'
@@ -126,6 +120,7 @@ export class PublicResearchSignalProvider implements IntentProvider {
     let droppedHistory = 0
     let droppedOtherOrganisation = 0
     const failures: string[] = []
+    const readFailures: string[] = []
 
     // What has this company announced. The second question — what jobs is it
     // advertising — is no longer asked (2026-09-28): job postings are not
@@ -161,8 +156,13 @@ export class PublicResearchSignalProvider implements IntentProvider {
         }
 
         const read = await readEventsFromPage({ text: page.text, sourceUrl: page.finalUrl, tenantId: ctx.tenantId })
+        // A read that failed — the model step itself — is a page NOT read, and
+        // is recorded so. It used to be recorded as read with no signals, so an
+        // AI outage reported "pages were read and none stated a signal": a
+        // failure presented as a finding about the company (2026-10-06).
         costUsd += read.costUsd
         rejected += read.rejected
+        if (read.failed) readFailures.push(read.reason ?? 'The reading step failed.')
 
         let added = 0
         const pageType = sourceTypeFor(page, companyHost)
@@ -220,11 +220,15 @@ export class PublicResearchSignalProvider implements IntentProvider {
           })
           added += 1
         }
-        pagesRead.push({ url: page.url, finalUrl: page.finalUrl, ok: true, loginWall: false, events: added })
+        pagesRead.push({ url: page.url, finalUrl: page.finalUrl, ok: !read.failed, loginWall: false, events: added, ...(read.failed ? { reason: read.reason ?? undefined } : {}) })
       }
     }
 
     const readOk = pagesRead.filter((p) => p.ok).length
+    // Every page found failed at the reading step: the source could not look.
+    if (signals.length === 0 && readOk === 0 && readFailures.length > 0) {
+      failures.push(`The pages found could not be read: ${readFailures[0]}`)
+    }
 
     return {
       provider: this.name,

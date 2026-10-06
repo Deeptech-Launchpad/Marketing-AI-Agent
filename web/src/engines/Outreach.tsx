@@ -53,8 +53,10 @@ const FLOW_STEPS = ['Company', 'Decision maker', 'Email draft', 'Review & edit',
 /** Which of the steps this company is on now (0-based). */
 function currentStep(view: CompanySequence | null, hasCompany: boolean): number {
   if (!hasCompany || !view) return 0
-  if (!view.gate.ready) return 1
-  if (!view.campaign) return 2
+  // The decision-maker gate only decides whether outreach can START. A
+  // sequence that already exists — a test-batch company Sales gave an address
+  // for, or one whose decision maker a later run set aside — is past it.
+  if (!view.campaign) return view.gate.ready ? 2 : 1
   const initial = view.drafts.find((d) => d.stageKey === 'initial' && d.status !== 'cancelled') ?? null
   if (!initial) return 2
   if (initial.status === 'draft') return initial.gates?.ok ? 4 : 3
@@ -93,7 +95,15 @@ export function Outreach() {
     [viewId, viewCampaign],
     { enabled: Boolean(viewId) },
   )
-  const view: CompanySequence | null = viewId && isCompanySequence(viewState.data) ? viewState.data : null
+  // Only an answer about the company (and campaign) selected NOW. The loader
+  // keeps its last answer while the next one loads, so without this check,
+  // switching company showed the previous company's outreach — and kept it on
+  // screen under the new name if the new request failed, with its buttons
+  // acting on the wrong company (2026-10-06).
+  const loaded = isCompanySequence(viewState.data) ? viewState.data : null
+  const view: CompanySequence | null =
+    viewId && loaded && loaded.crmCompanyId === viewId && (!viewCampaign || loaded.campaign?.id === viewCampaign) ? loaded : null
+  const viewLoading = viewState.loading || viewState.refreshing
 
   const refresh = useCallback(() => {
     viewState.refresh()
@@ -178,11 +188,11 @@ export function Outreach() {
               />
             )}
 
-            {viewId && viewState.loading && !view && (
+            {viewId && viewLoading && !view && (
               <LoadingState what="Reading this company's outreach" visual={<SequencePath accent={engine.accent} />} />
             )}
 
-            {viewId && viewState.error && !view && (
+            {viewId && viewState.error && !viewLoading && !view && (
               <ErrorState error={viewState.error} what="The outreach for this company could not be read" onRetry={viewState.refresh} />
             )}
 
@@ -282,7 +292,9 @@ function CompanyWorkspace({
         />
       )}
 
-      {!view.gate.ready && (
+      {/* Only before a sequence exists: once it does, its drafts are real and
+          usable, and "no draft can be prepared" would be untrue. */}
+      {!view.gate.ready && !campaign && (
         <BlockedState
           what="Outreach cannot start yet — no decision maker"
           why={view.gate.reason ?? 'This company is not ready for outreach.'}

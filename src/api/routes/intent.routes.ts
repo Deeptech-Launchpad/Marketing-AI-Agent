@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { accountUsage, apifyAvailable } from '../../intent/apifyClient.js'
-import { queueIntentDetection, RUN_IN_FLIGHT_MS } from '../../intent/intentDetection.js'
+import { failStaleIntentRuns, queueIntentDetection, RUN_IN_FLIGHT_MS } from '../../intent/intentDetection.js'
 import { presentSignal, presentSignals } from '../../intent/signalView.js'
 import { audit } from '../../platform/audit.js'
 import { prisma } from '../../platform/db.js'
@@ -42,6 +42,7 @@ export async function queueRunsFor(input: {
   const failed: QueuedRun[] = []
   const now = input.now ?? new Date()
   const distinct = [...new Set(input.crmCompanyIds.map((id) => id.trim()).filter(Boolean))].slice(0, MAX_BATCH)
+  await failStaleIntentRuns(input.tenantId, now)
 
   for (const crmCompanyId of distinct) {
     const inFlight = await prisma.intentDetectionRun.findFirst({
@@ -172,6 +173,7 @@ intentRoutes.get(
   requirePermission('view'),
   asyncHandler(async (req, res) => {
     const p = req.principal!
+    await failStaleIntentRuns(p.tenantId)
     const run = await prisma.intentDetectionRun.findFirst({
       where: { id: req.params.id, tenantId: p.tenantId },
       include: { signals: { orderBy: { detectedAt: 'desc' } } },
@@ -188,6 +190,7 @@ intentRoutes.get(
   requirePermission('view'),
   asyncHandler(async (req, res) => {
     const p = req.principal!
+    await failStaleIntentRuns(p.tenantId)
     const runs = await prisma.intentDetectionRun.findMany({
       where: {
         tenantId: p.tenantId,

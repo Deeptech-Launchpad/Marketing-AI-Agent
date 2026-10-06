@@ -1,4 +1,5 @@
 import { env } from '../config/env.js'
+import type { MemberRole } from '../domain/enums.js'
 import { getCrm } from '../crm/index.js'
 import { audit } from '../platform/audit.js'
 import { newId, prisma } from '../platform/db.js'
@@ -39,7 +40,7 @@ export interface SignedIn {
   email: string
   name: string | null
   pictureUrl: string | null
-  role: 'admin' | 'operator'
+  role: MemberRole
   isAdmin: boolean
 }
 
@@ -84,13 +85,29 @@ async function findCrmUserId(email: string): Promise<string | null> {
 }
 
 /**
- * Writes the role the admin list says this person has.
+ * Settles this person's role at sign-in.
  *
- * Done at every sign-in, so somebody removed from the list loses admin rather
- * than keeping it because a row once said so.
+ * The admin list decides ADMIN, in both directions, every time: an address on
+ * it is an admin, and a stored "admin" for an address taken off it drops to an
+ * ordinary user. Every OTHER role is the one an administrator chose in
+ * Registered users, and is kept.
+ *
+ * It used to write roleFor(email) — admin or operator — on every sign-in, so a
+ * Viewer or Approver an admin had set became an Operator again the next time
+ * they signed in: a viewer gained the right to run every engine, and an
+ * approver silently lost the right to approve (2026-10-06).
  */
-async function applyRole(tid: string, email: string, name: string | null, crmUserId: string | null) {
-  const role = roleFor(email)
+async function applyRole(tid: string, email: string, name: string | null, crmUserId: string | null): Promise<MemberRole> {
+  const existing = await prisma.tenantMember.findUnique({
+    where: { tenantId_email: { tenantId: tid, email } },
+    select: { role: true },
+  })
+  const stored = existing?.role as MemberRole | undefined
+  const role: MemberRole = isAdminEmail(email)
+    ? 'admin'
+    : !stored || stored === 'admin'
+      ? roleFor(email)
+      : stored
   await prisma.tenantMember.upsert({
     where: { tenantId_email: { tenantId: tid, email } },
     create: { id: newId(), tenantId: tid, email, name, role, crmUserId },
@@ -99,7 +116,7 @@ async function applyRole(tid: string, email: string, name: string | null, crmUse
   return role
 }
 
-async function session(user: { id: string; email: string; name: string | null; pictureUrl: string | null }, role: 'admin' | 'operator'): Promise<SignedIn> {
+async function session(user: { id: string; email: string; name: string | null; pictureUrl: string | null }, role: MemberRole): Promise<SignedIn> {
   const { token, expiresAt } = issueSessionToken({ id: user.id, email: user.email })
   return {
     token,

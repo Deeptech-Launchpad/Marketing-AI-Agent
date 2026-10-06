@@ -78,11 +78,11 @@ export function OutreachSenderPanel() {
           <label className="field-label" htmlFor="sender-company">
             Company name (used in every email)
           </label>
-          <input id="sender-company" className="otr-input" value={form.companyName} onChange={(e) => setForm((f) => ({ ...f, companyName: e.target.value }))} />
+          <input id="sender-company" className="otr-input" maxLength={120} value={form.companyName} onChange={(e) => setForm((f) => ({ ...f, companyName: e.target.value }))} />
           <label className="field-label" htmlFor="sender-signature" style={{ marginTop: 'var(--s3)' }}>
             Signature (added under the sender&rsquo;s name; optional — do not put one person&rsquo;s details here)
           </label>
-          <textarea id="sender-signature" className="textarea" rows={3} value={form.signature} onChange={(e) => setForm((f) => ({ ...f, signature: e.target.value }))} />
+          <textarea id="sender-signature" className="textarea" rows={3} maxLength={1000} value={form.signature} onChange={(e) => setForm((f) => ({ ...f, signature: e.target.value }))} />
           {error && (
             <p className="otr-err" role="alert" style={{ marginTop: 'var(--s2)' }}>
               {error}

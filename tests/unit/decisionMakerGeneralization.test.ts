@@ -20,6 +20,8 @@ import type { CrmCompany } from '../../src/crm/types.js'
 
 const fetched: string[] = []
 const pages = new Map<string, string>()
+/** URL -> where the site actually lands, for redirect cases. */
+const redirects = new Map<string, string>()
 
 // The transport, stubbed per URL. fetchPageRaw returns MARKUP (the homepage,
 // for link discovery); fetchPage returns TEXT with the markup stripped, which
@@ -45,9 +47,10 @@ vi.mock('../../src/research/pageFetch.js', () => ({
   },
   fetchPageRaw: async (url: string) => {
     fetched.push(url)
-    const html = look(url)
+    const landed = redirects.get(url) ?? url
+    const html = look(landed)
     return html
-      ? { ok: true, html, status: 200, bytes: html.length, finalUrl: url, reason: null }
+      ? { ok: true, html, status: 200, bytes: html.length, finalUrl: landed, reason: null }
       : { ok: false, html: '', status: 404, bytes: 0, finalUrl: url, reason: 'The site returned HTTP 404.' }
   },
 }))
@@ -316,5 +319,36 @@ describe('no shape can produce an unsupported person', () => {
       const got = await run(shape, { id: 'co_1', name: 'Distinctive Trading Name' })
       expect(got.names).not.toContain('Distinctive Trading Name')
     }
+  })
+})
+
+// A SITE THAT REDIRECTS TO ANOTHER COMPANY'S (2026-10-06). The other site's
+// staff used to be stamped as stated on THIS company's website and verified
+// by name — so a parent company's people became this company's contacts.
+describe('a website that redirects to a different company', () => {
+  afterEach(() => redirects.clear())
+
+  it('reads nothing there and says why', async () => {
+    const team =
+      '<html><body><h1>Our team</h1><p>Jane Porter is Head of eCommerce at Parentgroup.</p></body></html>'
+    pages.set('https://parentgroup.test', team)
+    redirects.set('https://acquired.test/', 'https://parentgroup.test/')
+    const company = { id: 'co_9', name: 'Acquired Ltd', domain: 'acquired.test' } as unknown as CrmCompany
+
+    const r = await new WebCorroborationProvider().search(ctx(company))
+
+    expect(r.status).toBe('unavailable')
+    expect(r.candidates).toHaveLength(0)
+    expect(r.reason).toMatch(/redirects to a different site \(parentgroup\.test\)/)
+    // Only the homepage request was made; nothing on the other site was read.
+    expect(fetched.filter((u) => u.includes('parentgroup'))).toHaveLength(0)
+  })
+
+  it('still reads a site that only moves to its own www address', async () => {
+    pages.set('https://www.acquired.test', '<html><body><p>Welcome</p></body></html>')
+    redirects.set('https://acquired.test/', 'https://www.acquired.test/')
+    const company = { id: 'co_9', name: 'Acquired Ltd', domain: 'acquired.test' } as unknown as CrmCompany
+    const r = await new WebCorroborationProvider().search(ctx(company))
+    expect(r.reason ?? '').not.toMatch(/different site/)
   })
 })

@@ -34,6 +34,7 @@ import {
   renderWorkbench,
 } from '../../workbench/render.js'
 import { NEUTRAL_THEME, type ComparedField, type ThemeProfile, type ValuePoint } from '../../workbench/types.js'
+import { asyncHandler } from '../middleware/errorHandler.js'
 
 // TASK #981 — the PUBLIC Workbench.
 //
@@ -205,7 +206,7 @@ function logoPath(demo: { id: string; theme: unknown }, token: string): string |
 /** The customer entry point: registration, then the Workbench. */
 publicWorkbenchRoutes.get(
   '/workbench/:token',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const loaded = await load(req, res)
     if (!loaded) return
 
@@ -366,7 +367,7 @@ publicWorkbenchRoutes.get(
         panel,
       }),
     )
-  },
+  }),
 )
 
 /** Reads the panel the visitor asked for. Anything unrecognised is the default. */
@@ -378,7 +379,7 @@ function panelFrom(req: Request): 'before' | 'after' | 'both' {
 /** Registration. A plain form POST — the flow works without any JavaScript. */
 publicWorkbenchRoutes.post(
   '/workbench/:token/register',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const loaded = await load(req, res)
     if (!loaded) return
 
@@ -458,7 +459,7 @@ publicWorkbenchRoutes.post(
     res.append('Set-Cookie', sessionCookieValue(session.token))
     // Redirect so a refresh does not resubmit the form.
     res.redirect(303, `/workbench/${encodeURIComponent(token)}`)
-  },
+  }),
 )
 
 /**
@@ -472,7 +473,7 @@ publicWorkbenchRoutes.post(
  */
 publicWorkbenchRoutes.get(
   '/workbench/:token/cta',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const loaded = await load(req, res)
     if (!loaded) return
 
@@ -489,7 +490,7 @@ publicWorkbenchRoutes.get(
     // 302, not 301: a permanent redirect would be cached by the browser and
     // every later click would skip the server entirely.
     res.redirect(302, env.WORKBENCH_CTA_URL)
-  },
+  }),
 )
 
 /**
@@ -502,7 +503,7 @@ publicWorkbenchRoutes.get(
  */
 publicWorkbenchRoutes.get(
   '/workbench/:token/evidence',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const loaded = await load(req, res)
     if (!loaded) return
 
@@ -547,7 +548,7 @@ publicWorkbenchRoutes.get(
         token,
       }),
     )
-  },
+  }),
 )
 
 /**
@@ -559,7 +560,7 @@ publicWorkbenchRoutes.get(
  */
 publicWorkbenchRoutes.get(
   '/workbench/:token/logo',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const resolved = await resolveLink(String(req.params.token ?? ''))
     if (!resolved.ok || !resolved.link) {
       res.status(404).end()
@@ -592,5 +593,5 @@ publicWorkbenchRoutes.get(
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
     res.setHeader('X-Content-Type-Options', 'nosniff')
     res.send(asset.bytes)
-  },
+  }),
 )

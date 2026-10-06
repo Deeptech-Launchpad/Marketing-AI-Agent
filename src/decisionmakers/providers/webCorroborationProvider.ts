@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { env } from '../../config/env.js'
 import { fetchPage, fetchPageRaw } from '../../research/pageFetch.js'
 import { htmlToText } from '../../research/htmlToText.js'
+import { sameRegistrableSite } from '../../enrichment/siteIdentity.js'
 import { hostOf } from '../companyMatch.js'
 import { readPeopleFromPage } from '../modelReader.js'
 import { discoverPeoplePageUrls, extractPeople, teamPagePaths } from '../peopleExtraction.js'
@@ -108,6 +109,25 @@ export class WebCorroborationProvider implements DecisionMakerProvider {
     const home = await fetchPageRaw(homeUrl)
     const homeText = home.ok && home.html ? htmlToText(home.html) : ''
     const homeFinal = home.finalUrl ?? homeUrl
+
+    // The company's address sent us to ANOTHER company's site — a parent, an
+    // acquirer, a brand group. Everything read there is that other company's,
+    // but each person found would be stamped as stated on THIS company's own
+    // website, and the company-name match then marked them verified: the other
+    // site's staff became this company's decision makers (2026-10-06).
+    // Enrichment already treats the same redirect as "not attributed".
+    if (home.ok && !sameRegistrableSite(homeUrl, homeFinal)) {
+      return {
+        provider: this.name,
+        status: 'unavailable',
+        candidates: [],
+        reason:
+          `${host} redirects to a different site (${hostOf(homeFinal) ?? homeFinal}), so the people listed there ` +
+          `are not shown as this company's. Nothing was read from it.`,
+        durationMs: Date.now() - started,
+        metadata: { pagesTried: [{ url: homeFinal, ok: false, people: 0, reason: 'Redirected to a different site' }] },
+      }
+    }
 
     if (home.ok && home.html) {
       pagesTried.push({ url: homeFinal, ok: true, people: 0 })

@@ -66,7 +66,7 @@ export const HELP = {
   replies: {
     title: 'Replies',
     what: 'Paste the customer’s reply here. The platform suggests what kind of reply it is; you confirm. Confirming stops the remaining no-reply follow-ups.',
-    next: 'Paste the reply, check the suggestion, click Confirm.',
+    next: 'Paste the reply, click Read reply, check the suggestion, then click Confirm reading.',
   },
   sendingStatus: {
     title: 'Sending status',

@@ -155,6 +155,21 @@ export class HunterProvider implements DecisionMakerProvider {
       }
     }
 
+    // A 200 whose body is not Hunter's data (an HTML error page, a truncated
+    // reply) answers nothing about the company. It used to become "Hunter holds
+    // no email address for this domain" — a provider fault presented as a
+    // finding (2026-10-06).
+    if (!body || typeof body !== 'object' || !('data' in body)) {
+      return {
+        provider: this.name,
+        status: 'error',
+        candidates: [],
+        reason: 'Hunter answered, but not with the data it normally returns, so its result is unknown.',
+        metadata: { httpStatus: res.status, domain },
+        durationMs: Date.now() - started,
+      }
+    }
+
     const data = body.data ?? {}
     const emails = data.emails ?? []
     const generic = emails.filter((e) => e.type === 'generic')

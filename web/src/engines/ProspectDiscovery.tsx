@@ -138,7 +138,17 @@ export function ProspectDiscovery() {
   const finishedRecently = Boolean(webSearch?.finishedAt && Date.now() - new Date(webSearch.finishedAt).getTime() < 5 * 60_000)
   const crmChecking = !live && finishedRecently && candidates.some((c) => !c.crmCheckedAt)
   usePolling(() => webCompanies.refresh(), crmChecking)
-  const crmLead = { status: crmStatus.data ?? null, canAdd: can('approve'), onChanged: () => webCompanies.refresh() }
+  const crmLead = {
+    status: crmStatus.data ?? null,
+    canAdd: can('approve'),
+    // "Check again" calls a route that needs operate. It was shown to viewers
+    // and approvers too, who then got a permission error (2026-10-06).
+    canCheck: can('operate'),
+    // The automatic check runs once, just after a search finishes. Past that
+    // window an unchecked company is "not checked", not "checking".
+    checking: crmChecking || live,
+    onChanged: () => webCompanies.refresh(),
+  }
 
   const discoverWeb = useEngineAction(async () => {
     const text = webObjective.trim()
@@ -150,11 +160,16 @@ export function ProspectDiscovery() {
 
   /** Picks up a discovered company: its own id stands in for crmCompanyId. */
   const selectDiscovered = (c: DiscoveredCompany) => {
+    // For a company found only on a directory or listing, websiteUrl is that
+    // listing page — not the company's site — so it is not carried as its
+    // website (2026-10-06).
+    const status = c.productAnalysis?.status
+    const ownSite = status === 'no_website' || status === 'source_unreadable' ? null : c.websiteUrl
     select({
       crmCompanyId: c.crmCompanyId ?? c.id,
       companyName: displayName(c),
       sourceUrl: c.websiteUrl,
-      website: c.websiteUrl,
+      website: ownSite,
       sourceProvider: 'company_web_discovery',
     })
     setChosenMode('company')
@@ -310,6 +325,9 @@ export function ProspectDiscovery() {
                     value={webObjective}
                     onChange={(e) => setWebObjective(e.target.value)}
                     rows={2}
+                    // The server takes up to 2000 characters; past that the only
+                    // answer used to be "Invalid request body." (2026-10-06).
+                    maxLength={2000}
                     placeholder="Safety and Health companies in the USA"
                   />
                   <p className="note" style={{ marginTop: 'var(--s3)' }}>
@@ -352,6 +370,10 @@ export function ProspectDiscovery() {
                       />
                     ) : webCompanies.loading && !webCompanies.data ? (
                       live ? null : <LoadingState what="Reading the results" rows={3} />
+                    ) : webCompanies.error && !webCompanies.data ? (
+                      // Said, rather than shown as "No company found … a real
+                      // result, not a failure" (2026-10-06).
+                      <ErrorState error={webCompanies.error} what="This search's companies could not be read" onRetry={webCompanies.refresh} />
                     ) : candidates.length === 0 ? (
                       live ? null : (
                         <EmptyState
@@ -469,7 +491,8 @@ export function ProspectDiscovery() {
                     </div>
                     {webSearch.status === 'completed' ? (
                       <MetricRow>
-                        <Metric label="Found" value={webSearch.totalCandidatesFound} size="sm" />
+                        {/* Pages the web search returned — not companies: many are directories or duplicates. */}
+                        <Metric label="Web results" value={webSearch.totalCandidatesFound} size="sm" />
                         <Metric label="Checked" value={webSearch.totalAssessed} size="sm" />
                         <Metric label="Qualified" value={needing.length} size="sm" />
                       </MetricRow>
@@ -729,7 +752,7 @@ function RecentSearches({
   }
 
   const meta = (s: CompanyDiscoverySearch) =>
-    `${s.status === 'completed' ? `${s.totalCandidatesFound ?? 0} found` : s.status.replace(/_/g, ' ')} · ${day(s.createdAt)}`
+    `${s.status === 'completed' ? `${s.totalCandidatesFound ?? 0} web results` : s.status.replace(/_/g, ' ')} · ${day(s.createdAt)}`
 
   return (
     <div className="recent" ref={box}>

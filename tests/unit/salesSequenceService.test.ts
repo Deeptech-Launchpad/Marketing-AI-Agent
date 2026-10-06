@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 type Row = Record<string, unknown>
 const store: Record<string, Row[]> = {}
 const reset = () => {
-  for (const k of ['outreachCampaign', 'outreachAction', 'outreachMessage', 'outreachReply', 'auditEvent', 'tenantMember']) store[k] = []
+  for (const k of ['outreachCampaign', 'outreachAction', 'outreachMessage', 'outreachReply', 'auditEvent', 'tenantMember', 'appUser']) store[k] = []
   store.tenant = [{ id: 't1', settings: { outreachSender: { firstName: 'Ada', fullName: 'Ada Lovelace', email: 'ada@altius.test', companyName: 'AltiusNxt', signature: '' } } }]
   // The person who starts the outreach signs it: their own login name, never a shared setting.
   store.tenantMember = [{ tenantId: 't1', crmUserId: 'u1', email: 'ada@altius.test', name: 'Ada Lovelace' }]
@@ -285,6 +285,38 @@ describe('review, approval and manual sending', () => {
     await svc.approve(actor, id)
     await svc.markSent(actor, id)
     expect(initialAction()).toMatchObject({ status: 'sent', sentByCrmUserId: 'u1' })
+  })
+
+  // A STOPPED SEQUENCE SENDS NOTHING MORE (2026-10-06). A draft left over in a
+  // stopped sequence used to pass every check, so it could still be approved
+  // and marked sent after the prospect said "not interested".
+  it('refuses approval once the sequence is stopped, and says why', async () => {
+    const { campaignId } = await svc.startSequence(actor, 'c1')
+    const id = initialAction().id as string
+    await svc.attest(actor, id, 'ai_test', true)
+    await svc.setCampaignState(actor, campaignId, 'stop')
+    await expect(svc.approve(actor, id)).rejects.toThrow(/cannot be approved yet/)
+    expect(initialAction().status).toBe('draft')
+  })
+
+  it('refuses "mark as sent" for an email approved before the sequence was stopped', async () => {
+    const { campaignId } = await svc.startSequence(actor, 'c1')
+    const id = initialAction().id as string
+    await svc.attest(actor, id, 'ai_test', true)
+    await svc.approve(actor, id)
+    await svc.setCampaignState(actor, campaignId, 'stop')
+    await expect(svc.markSent(actor, id)).rejects.toThrow(/stopped, so no further email can be marked sent/)
+    expect(initialAction().status).toBe('ready_to_send')
+  })
+
+  it('still lets a paused sequence’s approved email be marked sent, as documented', async () => {
+    const { campaignId } = await svc.startSequence(actor, 'c1')
+    const id = initialAction().id as string
+    await svc.attest(actor, id, 'ai_test', true)
+    await svc.approve(actor, id)
+    await svc.setCampaignState(actor, campaignId, 'pause')
+    await svc.markSent(actor, id)
+    expect(initialAction().status).toBe('sent')
   })
 
   it('refuses to mark sent while the company is suppressed', async () => {

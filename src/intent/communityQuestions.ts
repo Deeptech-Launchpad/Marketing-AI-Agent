@@ -284,7 +284,7 @@ export async function readCommunityQuestions(input: {
   sourceUrl: string
   tenantId: string
   company: { name: string; host: string | null }
-}): Promise<{ flagged: CommunityQuestion[]; logged: number; excluded: number; rejected: number; costUsd: number; reason: string | null }> {
+}): Promise<{ flagged: CommunityQuestion[]; logged: number; excluded: number; rejected: number; costUsd: number; reason: string | null; failed?: boolean }> {
   const none = { flagged: [], logged: 0, excluded: 0, rejected: 0 }
   const text = input.text.slice(0, 12_000).trim()
   if (!env.PUBLIC_RESEARCH_ENABLED) return { ...none, costUsd: 0, reason: 'PUBLIC_RESEARCH_ENABLED is off.' }
@@ -303,11 +303,11 @@ export async function readCommunityQuestions(input: {
       tenantId: input.tenantId,
     })
     const parsed = Found.safeParse(result.data)
-    if (!parsed.success) return { ...none, costUsd: result.costUsd, reason: 'The reading did not match the expected shape.' }
+    if (!parsed.success) return { ...none, costUsd: result.costUsd, reason: 'The reading did not match the expected shape.', failed: true }
     return { ...judgeQuestions(parsed.data.questions, text, input.sourceUrl, input.company), costUsd: result.costUsd, reason: null }
   } catch (err) {
     logger.info({ err: (err as Error).message, sourceUrl: input.sourceUrl }, 'community page read failed; the run continues')
-    return { ...none, costUsd: 0, reason: `The page could not be read: ${(err as Error).message}` }
+    return { ...none, costUsd: 0, reason: `The page could not be read: ${(err as Error).message}`, failed: true }
   }
 }
 

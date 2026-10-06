@@ -14,7 +14,7 @@ import type {
   CrmPage,
   CrmUser,
 } from '../types.js'
-import { crmGet, crmGetOrNull, crmPut } from './httpClient.js'
+import { crmGet, crmGetOrNull, crmPut, probeCrm } from './httpClient.js'
 import {
   toActivity,
   toCompany,
@@ -153,15 +153,6 @@ export class NxtSalesAdapter implements CrmPort {
   }
 
   async health(): Promise<{ ok: boolean; detail?: string }> {
-    try {
-      const res = await fetch(`${env.NXT_SALES_BASE_URL}/health`, {
-        signal: AbortSignal.timeout(5_000),
-      })
-      if (!res.ok) return { ok: false, detail: `HTTP ${res.status}` }
-      const body = (await res.json()) as { status?: string }
-      return { ok: body.status === 'ok' }
-    } catch (err) {
-      return { ok: false, detail: (err as Error).message }
-    }
+    return probeCrm()
   }
 }

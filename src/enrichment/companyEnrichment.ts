@@ -273,6 +273,9 @@ export async function runCompanyEnrichment(enrichmentId: string): Promise<void> 
     const found = await resolvePipelineCompany(row.tenantId, row.crmCompanyId)
     if (!found) {
       await finish(enrichmentId, 'failed', {
+        // Also as failureReason: the screen and the register read that field,
+        // and showed "the worker recorded no reason" (2026-10-06).
+        failureReason: 'Company not found in NXT Sales (it may have been recycle-binned).',
         error: { message: 'Company not found in NXT Sales (it may have been recycle-binned).' },
       })
       return
@@ -460,7 +463,12 @@ export async function runCompanyEnrichment(enrichmentId: string): Promise<void> 
     await prisma.companyEnrichment
       .update({
         where: { id: enrichmentId },
-        data: { status: 'failed', error: serializeError(err) as never, finishedAt: new Date() },
+        data: {
+          status: 'failed',
+          failureReason: `The enrichment did not complete: ${String((err as Error)?.message ?? err).slice(0, 400)}`,
+          error: serializeError(err) as never,
+          finishedAt: new Date(),
+        },
       })
       .catch(() => undefined)
   }

@@ -40,6 +40,12 @@ export interface GateInput {
   /** SKUs from the prospect's confirmed reply (for 2.1). */
   confirmedSkus: string[]
   recipientEmail: string | null
+  /**
+   * The sequence's own status. A stopped ('cancelled') or finished
+   * ('completed') sequence sends nothing more, whatever its drafts say.
+   * Optional so older callers keep working; absent means active.
+   */
+  campaignStatus?: string
   sender: SenderConfig | null
   suppression: { suppressed: boolean; detail?: string | null } | null
   now: Date
@@ -65,6 +71,21 @@ export function evaluateGates(g: GateInput): GateResult {
   const items: GateItem[] = []
   const warnings: string[] = []
   const push = (key: string, ok: boolean, label: string, detail: string | null = null) => items.push({ key, ok, label, detail })
+
+  // 0. The sequence is still going. A draft left over in a stopped or
+  //    completed sequence (a "Not interested" reply, Stop sequence, the
+  //    break-up sent) used to pass every check and could still be approved
+  //    and marked sent (2026-10-06). Shown only when it fails.
+  if (g.campaignStatus === 'cancelled' || g.campaignStatus === 'completed') {
+    push(
+      'sequence',
+      false,
+      'The sequence is still running',
+      g.campaignStatus === 'cancelled'
+        ? 'This sequence was stopped, so no further email can be approved.'
+        : 'This sequence is complete, so no further email can be approved.',
+    )
+  }
 
   // 1. Still a draft, and the stage still applies to this prospect.
   push('draft', g.actionStatus === 'draft', 'The draft is waiting for review', g.actionStatus === 'draft' ? null : `It is "${g.actionStatus}".`)

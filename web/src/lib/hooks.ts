@@ -41,8 +41,22 @@ export function useAsync<T>(
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [nonce, setNonce] = useState(0)
   const hasData = useRef(false)
+  const lastNonce = useRef(nonce)
 
   useEffect(() => {
+    // A REFRESH keeps what is on screen while it reloads. A CHANGE OF KEY —
+    // another company, another search — does not: what is on screen belongs
+    // to the old key. It used to be kept, so switching company showed the
+    // previous company's data under the new name until the new request
+    // landed, and kept it there for good if that request failed (2026-10-06).
+    const isRefresh = nonce !== lastNonce.current
+    lastNonce.current = nonce
+    if (!isRefresh) {
+      if (hasData.current) setData(null)
+      setError(null)
+      hasData.current = false
+    }
+
     if (!enabled) {
       setLoading(false)
       return
@@ -339,6 +353,8 @@ export function useEngineAction(run: () => Promise<void>): {
   running: boolean
   error: ApiError | Error | null
   ranAt: Date | null
+  /** Clears a past error and run time — called when the company changes. */
+  reset: () => void
 } {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<ApiError | Error | null>(null)
@@ -361,7 +377,15 @@ export function useEngineAction(run: () => Promise<void>): {
       })
   }, [run])
 
-  return { fire, running, error, ranAt }
+  // An error belongs to the company it happened on. Without this it stayed on
+  // screen after switching company, with a Retry button that acted on the NEW
+  // company (2026-10-06).
+  const reset = useCallback(() => {
+    setError(null)
+    setRanAt(null)
+  }, [])
+
+  return { fire, running, error, ranAt, reset }
 }
 
 /**
