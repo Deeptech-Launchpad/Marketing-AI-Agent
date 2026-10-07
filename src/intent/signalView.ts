@@ -104,11 +104,21 @@ export function latestPerFingerprint<T extends StoredSignalLike>(rows: T[]): Arr
 }
 
 /** Deduplicate, then compute age and status at read time. */
+/**
+ * A signal that only said a social profile exists, or what its description
+ * says. Not activity, so not a signal; earlier runs stored these.
+ */
+export function isProfileOnlySignal(s: { signalType?: string | null }): boolean {
+  return Boolean(s.signalType && /^social_(presence|description)_/.test(s.signalType))
+}
+
 export function presentSignals<T extends StoredSignalLike>(
   rows: T[],
   now: Date = new Date(),
 ): Array<T & { storedCopies: number; ageDays: number | null; freshness: string; status: string }> {
   // Job postings are not intent signals: ones stored by earlier runs stay off
   // every screen and every consumer that reads through here (jobSignals.ts).
-  return latestPerFingerprint(rows.filter((r) => !isJobSignal(r))).map((r) => presentSignal(r, now))
+  // Nor is a social profile's existence or description (2026-10-07): ones
+  // stored by earlier runs stay off the same way.
+  return latestPerFingerprint(rows.filter((r) => !isJobSignal(r) && !isProfileOnlySignal(r))).map((r) => presentSignal(r, now))
 }

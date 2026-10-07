@@ -32,6 +32,7 @@ const enqueue = vi.fn()
 vi.mock('../../src/platform/queue.js', () => ({
   enqueue: (...a: unknown[]) => enqueue(...a),
   QUEUE_INTENT_DETECT: 'intent.detect',
+  INTENT_JOB_EXPIRE_SECONDS: 1800,
 }))
 
 const { persistSignals, shouldProcessRun, angleFor, applySupersessions } = await import(

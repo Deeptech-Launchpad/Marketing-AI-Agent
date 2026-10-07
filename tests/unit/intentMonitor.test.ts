@@ -53,7 +53,7 @@ vi.mock('../../src/intent/intentDetection.js', () => ({
   }),
 }))
 const enqueue = vi.fn(async () => undefined)
-vi.mock('../../src/platform/queue.js', () => ({ enqueue, QUEUE_INTENT_DETECT: 'intent.detect' }))
+vi.mock('../../src/platform/queue.js', () => ({ enqueue, QUEUE_INTENT_DETECT: 'intent.detect', INTENT_JOB_EXPIRE_SECONDS: 1800 }))
 
 const { monitorIntentSignals, MONITOR_USER } = await import('../../src/intent/intentMonitor.js')
 
@@ -79,7 +79,8 @@ describe('the intent monitor', () => {
     runs = [manual('a', 10)]
     expect(await monitorIntentSignals(NOW)).toMatchObject({ queued: 1 })
     expect(queued).toEqual([`a:${MONITOR_USER}`])
-    expect(enqueue).toHaveBeenCalledWith('intent.detect', { intentRunId: 'run-a' })
+    // An intent job may run for up to 30 minutes before it is redelivered (2026-10-07).
+    expect(enqueue).toHaveBeenCalledWith('intent.detect', { intentRunId: 'run-a' }, { expireInSeconds: 1800 })
   })
 
   it('leaves a company checked recently alone', async () => {

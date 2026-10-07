@@ -133,9 +133,16 @@ export function looksLikeLoginWall(text: string): boolean {
  * There is no branch on which company it is, because there is nothing to
  * branch on: the same three sentences are built for every company on earth.
  */
-export type ResearchTopic = 'people' | 'business_activity' | 'hiring' | 'product_specifications' | 'external_signals' | 'community_questions'
+export type ResearchTopic =
+  | 'people'
+  | 'business_activity'
+  | 'hiring'
+  | 'product_specifications'
+  | 'external_signals'
+  | 'community_questions'
+  | 'social_activity'
 
-function queriesFor(topic: ResearchTopic, companyName: string, domain: string | null): string[] {
+function queriesFor(topic: ResearchTopic, companyName: string, domain: string | null, accounts: string[] = []): string[] {
   const where = domain ? `${companyName} (${domain})` : companyName
   switch (topic) {
     case 'product_specifications':
@@ -246,6 +253,20 @@ function queriesFor(topic: ResearchTopic, companyName: string, domain: string | 
           `Business on search visibility, or in which buyers say they cannot find its products or part numbers ` +
           `online. Only report pages you actually retrieved.`,
       ]
+    case 'social_activity':
+      // (2026-10-07) The company's OWN recent posts, on the accounts its own
+      // website or NXT Sales record links to. Individual post pages, never the
+      // profile: a profile's follower count or bio is not activity.
+      // One search per account (up to four): one search across all of them
+      // found a company's posts on one run and none on the next (2026-10-07).
+      return (accounts.length ? accounts.slice(0, 4) : [null]).map(
+        (account) =>
+          `Find the most recent individual public posts, updates and videos published by ${where} on ` +
+          `${account ? `its own social media account ${account}` : 'its own social media accounts'} — announcements, ` +
+          `product launches and promotions, catalogue or website updates, events, partnerships and news. Prefer ` +
+          `the last 12 months. Link to each individual post, not to the profile. Only report pages you actually ` +
+          `retrieved.`,
+      )
     case 'business_activity':
       return [
         `Find recent public announcements, press releases, news articles or company posts about ${where} — ` +
@@ -266,6 +287,8 @@ export async function discoverPublicSources(input: {
   companyName: string
   domain: string | null
   topic: ResearchTopic
+  /** For 'social_activity': the company's own account addresses. */
+  accounts?: string[]
   maxSources?: number
   feature: string
 }): Promise<PublicResearchResult> {
@@ -293,7 +316,7 @@ export async function discoverPublicSources(input: {
   }
 
   const maxSources = Math.max(1, Math.min(input.maxSources ?? env.PUBLIC_RESEARCH_MAX_SOURCES, MAX_SOURCES_PER_SEARCH))
-  const queries = queriesFor(input.topic, companyName, input.domain)
+  const queries = queriesFor(input.topic, companyName, input.domain, input.accounts)
   const seen = new Set<string>()
   const sources: PublicSource[] = []
   const queriesRun: string[] = []

@@ -186,40 +186,6 @@ describe('personalization stays narrow, public and non-sensitive', () => {
   })
 })
 
-// A WALL IS A FINDING, AND THE HEADLINE HAS TO SAY SO.
-//
-// The summary is what a reader takes in; the interpretation is what they read
-// if the summary interests them. So "publishes a LinkedIn profile" as a
-// headline, sitting beside no posts, is read as "the account is empty" — when
-// what actually happened is that the platform would not let us look. These pin
-// the wording that distinguishes the two.
-describe('an unreadable profile says so in the headline, not only in the detail', () => {
-  // Mirrors the branch in socialProvider.ts. Kept as a function of the reading
-  // so the rule is testable without a network round trip.
-  const headline = (access: string, company: string, platform: string): string =>
-    access === 'public' || access === 'metadata_only'
-      ? `${company} publishes a ${platform} profile on its own website.`
-      : `Public profile detected — content could not be verified from this session. (${platform})`
-
-  it('uses the approved wording when the platform refused', () => {
-    for (const access of ['login_required', 'consent_required', 'blocked', 'unreachable']) {
-      expect(headline(access, 'Acme', 'LinkedIn'), access).toBe(
-        'Public profile detected — content could not be verified from this session. (LinkedIn)',
-      )
-    }
-  })
-
-  it('never reports a refusal as an absence of signals', () => {
-    const h = headline('login_required', 'Acme', 'LinkedIn')
-    expect(h).not.toMatch(/no signal/i)
-    expect(h).not.toMatch(/nothing found/i)
-    expect(h).toContain('Public profile detected')
-  })
-
-  it('states the presence plainly when the platform did answer', () => {
-    expect(headline('public', 'Acme', 'Facebook')).toBe('Acme publishes a Facebook profile on its own website.')
-    expect(headline('metadata_only', 'Acme', 'Instagram')).toBe(
-      'Acme publishes a Instagram profile on its own website.',
-    )
-  })
-})
+// (2026-10-07) A profile is no longer a signal at all, so there is no
+// "publishes a profile" headline to word; what a platform served is recorded
+// on the run instead. See socialActivity.test.ts.

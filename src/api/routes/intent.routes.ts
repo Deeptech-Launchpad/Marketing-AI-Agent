@@ -6,7 +6,7 @@ import { presentSignal, presentSignals } from '../../intent/signalView.js'
 import { audit } from '../../platform/audit.js'
 import { prisma } from '../../platform/db.js'
 import { NotFoundError } from '../../platform/errors.js'
-import { enqueue, QUEUE_INTENT_DETECT } from '../../platform/queue.js'
+import { enqueue, INTENT_JOB_EXPIRE_SECONDS, QUEUE_INTENT_DETECT } from '../../platform/queue.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -67,7 +67,7 @@ export async function queueRunsFor(input: {
       prospectSearchId: input.prospectSearchId,
     })
     try {
-      await enqueue(QUEUE_INTENT_DETECT, { intentRunId: id })
+      await enqueue(QUEUE_INTENT_DETECT, { intentRunId: id }, { expireInSeconds: INTENT_JOB_EXPIRE_SECONDS })
       queued.push({ id, crmCompanyId })
     } catch (err) {
       const reason = `The run could not be put on the job queue: ${(err as Error).message ?? 'unknown error'}`.slice(0, 500)

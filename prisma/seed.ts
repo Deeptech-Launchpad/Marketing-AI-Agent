@@ -1,6 +1,8 @@
 import 'dotenv/config'
 import { PrismaClient } from '@prisma/client'
 import { createId } from '@paralleldrive/cuid2'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 // Seeds the single Phase 1 tenant and the built-in prompts.
 //
@@ -482,6 +484,62 @@ an empty list. That is a normal and useful answer.`,
 PAGE URL: {{sourceUrl}}
 <<<UNTRUSTED_CONTENT>>>
 {{pageText}}
+<<<END_UNTRUSTED_CONTENT>>>`,
+  },
+  {
+    // (2026-10-07) The company's OWN recent posts on its own social accounts.
+    // Not a profile: a follower count or a bio is never a signal. Each reading
+    // is a verbatim quote from one numbered post; the kinds are fixed, and why
+    // each matters and what to do next are composed in code, never here.
+    key: 'intent.read_company_posts',
+    version: 1,
+    label: 'Intent signals — read what a company recently posted on its own social accounts',
+    temperature: 0,
+    systemInstruction: `${SAFETY_PREAMBLE}
+
+HOW RULE 3 APPLIES TO THIS TASK: everything you return is [Page data]. Write no basis labels,
+notes or reasoning inside any field.
+
+You are READING RECENT PUBLIC POSTS that the company named below published on its own social-media
+accounts, numbered POST 1, POST 2 and so on, some with public comments under them. Report each post
+that shows what the company is doing now and could matter to how it presents or sells its products.
+That is the whole task.
+
+Report only these kinds:
+- product_launch: a new product, range or service launched, released or announced as coming soon.
+- product_promotion: an existing product, brand or service the company is actively promoting —
+  an offer, a feature, a demonstration, "now in stock", "selling fast".
+- catalog_update: the catalogue, range, pricing or product information being added to, updated or
+  reorganised.
+- ecommerce_or_website: a new or changed website, online store, online ordering, app or e-commerce
+  platform — or a problem with one.
+- ai_or_technology: the company adopting AI, automation or a new system (ERP, PIM, software).
+- product_data_issue: a problem with product information — missing or wrong specifications, products
+  hard to find, questions the product pages do not answer.
+- expansion: a new location, branch, facility, market or acquisition.
+- partnership: a new brand, supplier, distributor, manufacturer or partner relationship.
+- event: a trade show, exhibition, webinar, open day or demonstration day.
+- customer_feedback: a public comment under a post raising a problem, a question or a complaint about
+  the company's products, their information, ordering or delivery.
+
+Never report: hiring or job vacancies, staff spotlights, birthdays or work anniversaries, holiday
+greetings, general tips or advice, charity, sports or community news, or anything about another
+company.
+
+For each:
+- post: the number of the post it comes from.
+- kind: one of the kinds above.
+- quote: a VERBATIM span of that post or its comments (one or two sentences) that shows it. It is
+  checked character by character, and anything not found is discarded.
+- about: what the post is about, in at most twelve words, using the post's own words where possible
+  (for example "LionsBot R5 autonomous scrubber robot, coming soon").
+
+You will often know things about this company from elsewhere — ignore all of it; report only what
+these posts state. If no post is of these kinds, return an empty list. That is a normal and useful
+answer.`,
+    userTemplate: `COMPANY: {{companyName}}{{companyDomain}}
+<<<UNTRUSTED_CONTENT>>>
+{{posts}}
 <<<END_UNTRUSTED_CONTENT>>>`,
   },
 
@@ -1091,6 +1149,16 @@ async function main() {
     console.log('BOOTSTRAP_ADMIN_EMAIL is not set — no member was granted access yet.')
   }
 
+  await seedPrompts()
+}
+
+/**
+ * Inserts every prompt that is not in the database yet, and nothing else: no
+ * tenant, no member, and never an existing prompt row. Safe to run against a
+ * live database on deploy (`npm run db:seed-prompts`); the full seed also
+ * writes the tenant's name and a bootstrap admin, which a deploy must not.
+ */
+export async function seedPrompts(): Promise<number> {
   // Seeded by (key, VERSION), not by key alone. promptStore resolves the
   // highest enabled version, so shipping a v2 supersedes v1 while leaving the
   // old row intact — every LlmCall already records the (key, version) that
@@ -1120,12 +1188,21 @@ async function main() {
     console.log(`  + ${p.key}@${p.version}`)
   }
   console.log(`prompts: ${created} created, ${PROMPTS.length - created} already present`)
+  return created
 }
 
-main()
-  .then(() => prisma.$disconnect())
-  .catch(async (err) => {
-    console.error(err)
-    await prisma.$disconnect()
-    process.exit(1)
-  })
+export async function disconnectSeed(): Promise<void> {
+  await prisma.$disconnect()
+}
+
+// Run only when executed directly (npm run db:seed), never when imported.
+const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : ''
+if (import.meta.url === entry) {
+  main()
+    .then(() => prisma.$disconnect())
+    .catch(async (err) => {
+      console.error(err)
+      await prisma.$disconnect()
+      process.exit(1)
+    })
+}

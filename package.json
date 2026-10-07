@@ -15,6 +15,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed-prompts": "tsx prisma/seed-prompts.ts",
     "test": "vitest run tests/unit",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -124,3 +124,33 @@ describe('a superseded signal stops counting against the company', () => {
     expect(document.querySelector('.sig__superseded')).toBeNull()
   })
 })
+
+// 2026-10-07: a social signal is a recent post, and is titled by what it is
+// about — the post's own address and date are the source.
+describe('a recent social post', () => {
+  it('is titled by what the post is about and links to the post itself', async () => {
+    serve([
+      signal({
+        id: 'sig_post',
+        signalType: 'social_activity_product_launch',
+        signalCategory: 'catalog',
+        summary: 'New product launch — Ultra Taps on Facebook: new mixer tap range. “Our new mixer tap range is in store now.”',
+        interpretation: 'New products need complete descriptions, attributes and specifications from day one.',
+        outreachAngle: 'Open on the launch, and offer to check that the new product’s pages carry complete specifications.',
+        evidence: 'Our new mixer tap range is in store now.',
+        sourceUrl: 'https://www.facebook.com/ultrataps/posts/new-range/1234567890123/',
+        sourceType: 'social_profile',
+        provider: 'social_profiles',
+        polarity: 'positive',
+        status: 'active',
+        freshness: 'fresh',
+        confidence: 'medium',
+        metadata: {},
+      }),
+    ])
+    render(<IntentSignals />)
+    expect(await screen.findByText('New product launch — recent social post')).toBeInTheDocument()
+    expect(document.querySelector('a[href="https://www.facebook.com/ultrataps/posts/new-range/1234567890123/"]')).not.toBeNull()
+  })
+})
+

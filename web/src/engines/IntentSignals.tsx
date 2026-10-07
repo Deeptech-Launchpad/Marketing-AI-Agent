@@ -254,7 +254,25 @@ const SOCIAL_TITLES: Array<{ prefix: string; title: (platform: string) => string
   { prefix: 'social_description_', title: (p) => `${p} profile description` },
 ]
 
+/** What a recent social post was about (src/intent/socialActivity.ts POST_KIND_INFO). */
+const ACTIVITY_LABELS: Record<string, string> = {
+  product_launch: 'New product launch',
+  product_promotion: 'Product promotion',
+  catalog_update: 'Catalogue update',
+  ecommerce_or_website: 'Website or online-store change',
+  ai_or_technology: 'AI or technology adoption',
+  product_data_issue: 'Product-data problem',
+  expansion: 'Expansion',
+  partnership: 'New brand or partnership',
+  event: 'Event',
+  customer_feedback: 'Customer feedback on a post',
+}
+
 function readableType(raw: string): string {
+  if (raw.startsWith('social_activity_')) {
+    const kind = raw.slice('social_activity_'.length)
+    return `${ACTIVITY_LABELS[kind] ?? readableWords(kind)} — recent social post`
+  }
   for (const rule of SOCIAL_TITLES) {
     if (raw.startsWith(rule.prefix)) {
       const key = raw.slice(rule.prefix.length)

@@ -97,15 +97,27 @@ export async function stopQueue(): Promise<void> {
  * expireInSeconds bounds how long a job may be held by a worker that has gone
  * away without releasing it.
  */
-export async function enqueue(queue: string, data: Record<string, unknown>): Promise<string | null> {
+export async function enqueue(
+  queue: string,
+  data: Record<string, unknown>,
+  opts: { expireInSeconds?: number } = {},
+): Promise<string | null> {
   const q = await getQueue()
   return q.send(queue, data, {
     retryLimit: 3,
     retryDelay: 5,
     retryBackoff: true,
-    expireInSeconds: 900,
+    expireInSeconds: opts.expireInSeconds ?? 900,
   })
 }
+
+/**
+ * An intent run reads several public sources one after another and can take
+ * longer than fifteen minutes on a slow day (2026-10-07); a job that outlives
+ * its expiry is redelivered and the run started again. Thirty minutes matches
+ * the run's own in-flight window (intentDetection.ts RUN_IN_FLIGHT_MS).
+ */
+export const INTENT_JOB_EXPIRE_SECONDS = 1800
 
 /**
  * Enqueues at most one pending job per key within a window.

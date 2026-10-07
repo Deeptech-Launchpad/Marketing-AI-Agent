@@ -11,10 +11,18 @@ import {
   type SocialProfile,
 } from '../socialProfiles.js'
 import { personalizationSignal, readSocialPage, type SocialReading } from '../socialReading.js'
+import { POST_KIND_INFO, readPosts, searchRecentPosts, youtubeRecentVideos, type SocialPost } from '../socialActivity.js'
 import type { IntentSignalDraft } from '../types.js'
 import type { IntentProvider, ProviderContext, ProviderResult } from './provider.js'
 
-// SOURCE — THE COMPANY'S OWN PUBLIC SOCIAL PROFILES.
+// SOURCE — WHAT THE COMPANY HAS RECENTLY POSTED ON ITS OWN SOCIAL ACCOUNTS.
+//
+// (2026-10-07) A profile is not a signal. "Publishes a LinkedIn profile" and
+// "the profile describes the business as …" used to be recorded as signals;
+// they say nothing about what the company is doing now, and are no longer
+// recorded. The accounts are found as before (step 1), and then their RECENT
+// POSTS are read — see socialActivity.ts — and each post is read for what it
+// is about. Only a post with a verbatim quote of a relevant kind is a signal.
 //
 // Two steps, in this order, and the order is the whole compliance story:
 //
@@ -35,6 +43,11 @@ import type { IntentProvider, ProviderContext, ProviderResult } from './provider
 // login wall — which LinkedIn does, by design — that fact is recorded AS the
 // finding. A wall reported as "no signals" would tell an operator the company
 // has no presence when the truth is that the platform refused to answer.
+
+/** "Recent" activity: posts from the last twelve months. */
+const RECENT_DAYS = 365
+/** Recent posts read per company, newest first. */
+const MAX_POSTS_READ = 15
 
 /** Pages on the company's own site most likely to carry the profile links. */
 const LINK_PAGES = ['', '/contact', '/contact-us', '/about', '/about-us']
@@ -249,11 +262,17 @@ export class SocialProfileProvider implements IntentProvider {
       }
     }
 
-    // ── 2. What does each profile show a logged-out visitor? ──────────────
+    // ── 2. What has each account recently posted? ─────────────────────────
+    //
+    // The profile page itself (some platforms render recent posts to a
+    // logged-out reader), the channel's newest videos for YouTube, and the
+    // individual post pages a search finds on these accounts. Each post must be
+    // provably on the company's own account; see socialActivity.ts.
     const access: Array<{ url: string; platform: string; access: string; note: string }> = []
-    let personalization: ReturnType<typeof personalizationSignal> = null
+    const posts: SocialPost[] = []
+    const accounts = [...profiles.values()].slice(0, 6)
 
-    for (const profile of [...profiles.values()].slice(0, Math.max(1, Math.min(ctx.maxResults, 6)))) {
+    for (const profile of accounts) {
       const page = await fetchPageRaw(profile.url)
       const reading = readSocialPage({
         html: page.html ?? '',
@@ -262,152 +281,151 @@ export class SocialProfileProvider implements IntentProvider {
         transportReason: page.reason ?? null,
         platformLabel: profile.platformLabel,
       })
-      access.push({
-        url: profile.url,
-        platform: profile.platformLabel,
-        access: reading.access,
-        note: reading.accessNote,
-      })
+      access.push({ url: profile.url, platform: profile.platformLabel, access: reading.access, note: reading.accessNote })
+      for (const [i, text] of reading.posts.entries()) {
+        posts.push({
+          platform: profile.platform,
+          platformLabel: profile.platformLabel,
+          profileUrl: profile.url,
+          url: profile.url,
+          text,
+          comments: [],
+          publishedAt: postDate(reading, i)?.toISOString() ?? null,
+          via: 'profile_page',
+        })
+      }
+      if (profile.platform === 'youtube') {
+        posts.push(...(await youtubeRecentVideos(profile, page.ok ? page.html : null, { max: 5 })))
+      }
+    }
 
-      // The link itself is a finding, whatever the platform then served. It is
-      // the company's own published claim, it is dated by the page it sits on,
-      // and it is the thing that makes every other social signal attributable.
-      //
-      // When the platform would not show us the page, the SUMMARY says so.
-      // Putting that only in the interpretation left the headline reading
-      // "publishes a LinkedIn profile" beside no posts, which a reader takes
-      // as "the account is empty" rather than "we were not allowed to look".
-      const verified = reading.access === 'public' || reading.access === 'metadata_only'
+    const searched = await searchRecentPosts({
+      tenantId: ctx.tenantId,
+      companyName: company.name,
+      domain: base?.hostname.replace(/^www\./, '') ?? null,
+      profiles: accounts,
+      maxPosts: 10,
+      budgetMs: 90_000,
+    })
+    for (const p of searched.posts) if (!posts.some((x) => x.url === p.url && x.text === p.text)) posts.push(p)
+
+    // RECENT means the last twelve months. A post whose page states no date is
+    // kept and shown as undated (the engine demotes it); one dated older is not
+    // recent activity and is only counted.
+    const cutoff = Date.now() - RECENT_DAYS * 86_400_000
+    const recent = posts
+      .filter((p) => !p.publishedAt || Date.parse(p.publishedAt) >= cutoff)
+      .sort((a, b) => (b.publishedAt ? Date.parse(b.publishedAt) : 0) - (a.publishedAt ? Date.parse(a.publishedAt) : 0))
+      .slice(0, MAX_POSTS_READ)
+    const olderThanRecent = posts.filter((p) => p.publishedAt && Date.parse(p.publishedAt) < cutoff).length
+
+    // ── 3. What is each post about? ──────────────────────────────────────
+    const read = await readPosts({
+      posts: recent,
+      companyName: company.name,
+      companyHost: base?.hostname.replace(/^www\./, '') ?? null,
+      tenantId: ctx.tenantId,
+    })
+    for (const r of read.readings) {
+      const info = POST_KIND_INFO[r.kind]
       signals.push({
         crmCompanyId: company.id,
-        signalType: `social_presence_${profile.platform}`,
-        signalCategory: 'business',
-        summary: verified
-          ? // Where the link was found is part of the claim. A profile taken
-            // from the CRM record has not been "published on the company's own
-            // website", and saying so would misdescribe the evidence.
-            `${company.name} publishes ${withArticle(profile.platformLabel)} profile on ${
-              profile.discoveredOn.startsWith('http') ? 'its own website' : profile.discoveredOn
-            }.`
-          : `Public profile detected — content could not be verified from this session. (${profile.platformLabel})`,
-        interpretation:
-          `The link was found on ${profile.discoveredOn}, so the account is the company's own claim rather than a name match. ` +
-          reading.accessNote,
-        evidence: profile.anchorText
-          ? `Link on ${profile.discoveredOn}: "${profile.anchorText}" → ${profile.url}`
-          : `Link on ${profile.discoveredOn} → ${profile.url}`,
-        sourceUrl: profile.url,
+        signalType: `social_activity_${r.kind}`,
+        signalCategory: info.category,
+        // What it is about, then the post's own words.
+        summary: `${info.label} — ${company.name} on ${r.post.platformLabel}: ${r.about ? `${r.about}. ` : ''}“${clip(r.quote.replace(/\s+/g, ' '), 180)}”`,
+        // WHY IT MATTERS and WHAT TO DO NEXT — fixed sentences per kind, never a model's view.
+        interpretation: info.why,
+        outreachAngle: info.next,
+        // The post itself, as the platform served it.
+        evidence: clip(r.post.text, 600),
+        sourceUrl: r.post.url,
         sourceType: 'social_profile',
-        observedAt: null,
-        polarity: 'neutral',
+        observedAt: r.post.publishedAt ? new Date(r.post.publishedAt) : null,
+        polarity: 'positive',
         provider: this.name,
         metadata: {
-          platform: profile.platform,
-          handle: profile.handle,
-          discoveredOn: profile.discoveredOn,
-          access: reading.access,
-          accessNote: reading.accessNote,
-          profileTitle: reading.title,
-          profileDescription: reading.description,
+          kind: r.kind,
+          kindLabel: info.label,
+          platform: r.post.platform,
+          platformLabel: r.post.platformLabel,
+          postUrl: r.post.url,
+          profileUrl: r.post.profileUrl,
+          publishedAt: r.post.publishedAt,
+          via: r.post.via,
+          quote: r.quote,
+          about: r.about,
+          publicComments: r.post.comments.length,
         },
       })
+    }
 
-      // The account's own public description, when the platform served one.
-      if (reading.description && reading.description.trim().length >= 24) {
-        signals.push({
-          crmCompanyId: company.id,
-          signalType: `social_description_${profile.platform}`,
-          signalCategory: 'business',
-          summary: `${profile.platformLabel} profile describes the business as: ${clip(reading.description.trim(), 180)}`,
-          interpretation:
-            'How a company describes itself on a public profile is how it wants buyers to categorise it, and it is often more current than the website copy.',
-          evidence: clip(reading.description.trim(), 400),
-          sourceUrl: profile.url,
-          sourceType: 'social_profile',
-          observedAt: null,
-          polarity: 'neutral',
-          provider: this.name,
-          metadata: { platform: profile.platform, field: 'profile_description', access: reading.access },
-        })
-      }
+    // Only when the reader itself FAILED: the fixed phrases this source always
+    // matched, so an AI outage still reports what the posts plainly say. When
+    // the reader worked, its answer stands — a phrase match overruled it with
+    // "Come and visit us at <address>" read as an event (2026-10-07). Hiring is
+    // never a signal.
+    for (const post of read.failed ? recent : []) {
+      const match = themeFor(post.text)
+      if (!match || match.theme === 'Hiring') continue
+      signals.push({
+        crmCompanyId: company.id,
+        signalType: `social_post_${match.theme.toLowerCase().replace(/[^a-z]+/g, '_')}`,
+        signalCategory: 'business',
+        summary: `${match.theme} — ${company.name} on ${post.platformLabel}: “${clip(post.text, 160)}”`,
+        interpretation: match.why,
+        evidence: clip(post.text, 600),
+        sourceUrl: post.url,
+        sourceType: 'social_profile',
+        observedAt: post.publishedAt ? new Date(post.publishedAt) : null,
+        polarity: 'positive',
+        provider: this.name,
+        metadata: { platform: post.platform, platformLabel: post.platformLabel, theme: match.theme, matched: match.matched, postUrl: post.url, publishedAt: post.publishedAt, via: post.via },
+      })
+    }
 
-      // Publicly rendered posts, matched against the outreach themes.
-      for (const [postIndex, post] of reading.posts.entries()) {
-        const observedAt = postDate(reading, postIndex)
-        const match = themeFor(post) // one theme per post; the strongest match is the first rule.
-        if (!match) continue
-        signals.push({
-          crmCompanyId: company.id,
-          signalType: `social_post_${match.theme.toLowerCase().replace(/[^a-z]+/g, '_')}`,
-          signalCategory: 'business',
-          summary: `${match.theme} mentioned in a public ${profile.platformLabel} post: "${clip(post, 160)}"`,
-          interpretation: match.why,
-          evidence: clip(post, 600),
-          sourceUrl: profile.url,
-          sourceType: 'social_profile',
-          observedAt,
-          polarity: 'positive',
-          provider: this.name,
-          metadata: { platform: profile.platform, theme: match.theme, matched: match.matched },
-        })
-      }
-
-      // ── People the company itself named in public ──────────────────────
-      //
-      // Only where the company's OWN public content pairs a name with a role:
-      // "Dana Reed, Head of Ecommerce". The same precision-biased extractor
-      // the website provider uses, so the two agree about what counts as a
-      // person and neither infers one from a mention.
-      //
-      // These are recorded as SIGNALS, not as decision makers. Stage 4 keeps
-      // its own ranking, verification and role taxonomy; this only means it
-      // starts from a name the company published rather than from nothing.
-      const publicText = [reading.description ?? '', ...reading.posts].join('\n')
-      for (const person of extractPeople(publicText, 5)) {
-        // Dated only by the post that names them, when exactly that post's
-        // markup gives a date. A name from the profile description is undated.
-        const namingPost = reading.posts.findIndex((p) => p.includes(person.name))
-        const observedAt = namingPost >= 0 ? postDate(reading, namingPost) : null
+    // ── People the company itself named in its posts ──────────────────────
+    //
+    // Only where the company's OWN post pairs a name with a role: "Dana Reed,
+    // Head of Ecommerce". Recorded for Decision Maker Discovery to verify; a
+    // profile's description is not read for people any more than for signals.
+    for (const post of recent) {
+      for (const person of extractPeople(post.text, 5)) {
         signals.push({
           crmCompanyId: company.id,
           signalType: 'social_person_named',
           signalCategory: 'business',
-          summary: `${profile.platformLabel} content names ${person.name} as ${person.title}.`,
+          summary: `${post.platformLabel} post names ${person.name} as ${person.title}.`,
           interpretation:
             'A person the company named alongside a role in its own public content. Recorded as a candidate for ' +
             'Decision Maker Discovery to verify — it is not a verified employment claim, and nothing here decides ' +
             'who to approach.',
           evidence: clip(person.snippet, 400),
-          sourceUrl: profile.url,
+          sourceUrl: post.url,
           sourceType: 'social_profile',
-          observedAt,
+          observedAt: post.publishedAt ? new Date(post.publishedAt) : null,
           polarity: 'neutral',
           provider: this.name,
           metadata: {
             kind: 'person',
-            platform: profile.platform,
-            platformLabel: profile.platformLabel,
+            platform: post.platform,
+            platformLabel: post.platformLabel,
             fullName: person.name,
             title: person.title,
             // The COMPANY's page the name was read on — not this person's
             // profile. Kept under a name that cannot be mistaken for one.
-            companyProfileUrl: profile.url,
-            // Where the profile link itself came from: the company's website
-            // (a URL) or the CRM record. Readers word their evidence from it.
-            discoveredOn: profile.discoveredOn,
+            companyProfileUrl: post.profileUrl,
+            discoveredOn: profiles.get(post.profileUrl)?.discoveredOn ?? post.profileUrl,
           },
-        })
-      }
-
-      if (!personalization) {
-        personalization = personalizationSignal({
-          posts: reading.posts,
-          sourceUrl: profile.url,
-          platformLabel: profile.platformLabel,
         })
       }
     }
 
+    const personalization = personalizationSignal({
+      posts: recent.map((p) => p.text),
+      sourceUrl: recent[0]?.url ?? accounts[0]!.url,
+      platformLabel: recent[0]?.platformLabel ?? accounts[0]!.platformLabel,
+    })
     if (personalization) {
       signals.push({
         crmCompanyId: company.id,
@@ -417,7 +435,7 @@ export class SocialProfileProvider implements IntentProvider {
         interpretation:
           'A non-sensitive public interest, offered only as a way to open a conversation like a person rather than a form. It is not a fact about anybody’s private life and must not be used as one.',
         evidence: personalization.quote,
-        sourceUrl: personalization.sourceUrl,
+        sourceUrl: recent.find((p) => p.text.includes(personalization.quote))?.url ?? personalization.sourceUrl,
         sourceType: 'social_profile',
         observedAt: null,
         polarity: 'neutral',
@@ -426,18 +444,37 @@ export class SocialProfileProvider implements IntentProvider {
       })
     }
 
-    // A reason is returned even on success: it is how the screen explains a run
-    // that found profiles but was shown a wall by every one of them.
-    const walled = access.filter((a) => a.access !== 'public')
+    // The run explains itself: how many accounts, how many recent posts were
+    // read, and — when nothing was found — why, in the platform's own terms.
+    // A profile with no readable posts is NOT reported as a signal.
+    const activity = signals.filter((x) => x.signalType.startsWith('social_activity_') || x.signalType.startsWith('social_post_')).length
+    const reason =
+      activity > 0
+        ? undefined
+        : read.failed
+          ? `${recent.length} recent post(s) were found but could not be read: ${read.failed}`
+          : recent.length > 0
+            ? `${recent.length} recent post(s) on ${accounts.length} account(s) were read; none was about a launch, a change or anything else this source reports. Profile details (followers, description) are not signals.`
+            : `${accounts.length} social account(s) found; no recent post could be read from them` +
+              (olderThanRecent ? ` (${olderThanRecent} post(s) found were older than ${RECENT_DAYS} days)` : '') +
+              `. ${access.map((a) => a.note).join(' ')} Profile details (followers, description) are not signals.`
     return {
       provider: this.name,
-      ok: true,
+      ok: !(read.failed && recent.length > 0 && activity === 0),
       signals,
-      reason:
-        walled.length === access.length && access.length > 0
-          ? `${access.length} profile(s) were found and none served post content to a logged-out reader. ${walled.map((w) => w.note).join(' ')}`
-          : undefined,
-      metadata: { pagesRead, assetsRead, profilesFound: profiles.size, access },
+      reason,
+      costUsd: searched.costUsd + read.costUsd || undefined,
+      metadata: {
+        pagesRead,
+        assetsRead,
+        profilesFound: profiles.size,
+        access,
+        postsFound: posts.length,
+        postsRead: recent.map((p) => ({ url: p.url, platform: p.platformLabel, publishedAt: p.publishedAt, via: p.via })),
+        postsOlderThanRecent: olderThanRecent,
+        postSearch: { queriesRun: searched.queriesRun, sourcesFound: searched.found, failed: searched.failed },
+        claimsRejectedAsUngrounded: read.rejected,
+      },
       durationMs: Date.now() - started,
     }
   }
