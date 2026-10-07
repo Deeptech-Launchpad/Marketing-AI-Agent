@@ -58,8 +58,14 @@ interface TechEvidence {
  * text without going through observedText first.
  */
 interface EnrichmentSignals {
+  /** 'web_search' for a company found by "Find New Company" and not in NXT Sales yet. */
+  companySource?: 'crm' | 'web_search'
   industry?: string
   country?: string
+  /** Where the country was read, when it was not NXT Sales (runs from 2026-10-07). */
+  countrySource?: string
+  countrySourceUrl?: string
+  countryStatedAs?: string
   domain?: string
   crmCms?: string
   websiteStatus?: string
@@ -279,7 +285,18 @@ interface Observation {
  * the CRM and does not write back to it, so where the two disagree the run
  * records the disagreement and leaves both values standing.
  */
-function crmFacts(signals: EnrichmentSignals, at: string | null): Observation[] {
+/**
+ * True for a company found by the public web search and not in NXT Sales yet.
+ * Read from the run; a run recorded before the run said so is recognised by
+ * its own first provenance line.
+ */
+export function foundByWebSearch(detail: Pick<EnrichmentDetail, 'signals' | 'provenance'> | null | undefined): boolean {
+  const signals = (detail?.signals ?? {}) as EnrichmentSignals
+  if (signals.companySource) return signals.companySource === 'web_search'
+  return (detail?.provenance ?? []).some((c) => /was found by a public web search/i.test(c.statement ?? ''))
+}
+
+function crmFacts(signals: EnrichmentSignals, at: string | null, fromWeb = false): Observation[] {
   // Only the CMS value is ever compared against the page, so only it carries
   // the line about a disagreement. Saying that of the industry or the country
   // would describe a check this stage does not perform.
@@ -298,13 +315,40 @@ function crmFacts(signals: EnrichmentSignals, at: string | null): Observation[] 
     ],
   ]
 
+  // A company found by the web search has no NXT Sales record (unless it was
+  // linked to one later, when the values below ARE that record's). It used to
+  // be shown four rows of "Not held in NXT Sales", as though the CRM were the
+  // only place a company's facts could come from (2026-10-07).
+  const notRecorded = fromWeb ? 'Not recorded — not in NXT Sales yet' : 'Not held in NXT Sales'
+
   return fields.map(([key, label, raw, why]) => {
     const value = observedText(raw)
+    if (key === 'country') return countryFact(signals, value, at, fromWeb, unverified)
+    if (key === 'domain' && fromWeb && value) {
+      return {
+        key,
+        label: 'Website domain',
+        value,
+        absent: notRecorded,
+        evidence: [
+          {
+            title: `Website domain: ${value}`,
+            summary: `The web search that found this company confirmed ${value} as its own website.`,
+            whyItMatters: 'This is the address Enrichment reads. It was confirmed from the company’s own pages, not guessed from its name.',
+            what: `Website domain = ${value}`,
+            source: 'Find New Company (public web search)',
+            at,
+            field: key,
+            how: 'Taken from the company record Prospects created when it found and verified this company.',
+          },
+        ],
+      }
+    }
     return {
       key,
       label,
       value,
-      absent: 'Not held in NXT Sales',
+      absent: notRecorded,
       evidence: value
         ? [
             {
@@ -321,6 +365,71 @@ function crmFacts(signals: EnrichmentSignals, at: string | null): Observation[] 
         : [],
     }
   })
+}
+
+/**
+ * The country, with the source that stated it: NXT Sales, the company's own
+ * website, or the listing page Prospects verified. Never a guess.
+ */
+function countryFact(
+  signals: EnrichmentSignals,
+  value: string | null,
+  at: string | null,
+  fromWeb: boolean,
+  crmWhy: string,
+): Observation {
+  const source = observedText(signals.countrySource)
+  const fromCrm = !source || source === 'NXT Sales record'
+  const absent = !signals.countrySource
+    ? fromWeb
+      ? 'Not recorded — not in NXT Sales yet'
+      : 'Not held in NXT Sales'
+    : fromWeb
+      ? 'Not stated by any source read'
+      : 'Not held in NXT Sales or stated on the website'
+  if (!value) return { key: 'country', label: 'Country', value: null, absent, evidence: [] }
+  if (fromCrm) {
+    return {
+      key: 'country',
+      label: 'Country',
+      value,
+      absent,
+      evidence: [
+        {
+          title: `Country: ${value}`,
+          summary: `The NXT Sales company record holds "${value}". Enrichment copied it across unchanged.`,
+          whyItMatters: crmWhy,
+          what: `Country = ${value}`,
+          source: 'NXT Sales company record',
+          at,
+          field: 'country',
+          how: 'Read from the CRM company record at the start of the run. Stage 2 reads NXT Sales; it never writes to it.',
+        },
+      ],
+    }
+  }
+  const stated = observedText(signals.countryStatedAs)
+  const url = observedText(signals.countrySourceUrl)
+  const where = source === 'listing page that named the company' ? 'The page that listed this company' : 'The company’s own website'
+  return {
+    key: 'country',
+    label: 'Country',
+    value,
+    absent,
+    evidence: [
+      {
+        title: `Country: ${value}`,
+        summary: `${where} states the address "${stated ?? value}".`,
+        whyItMatters: 'Taken only from an address a source states — never from a domain ending, a phone number or the company’s name.',
+        what: `Country = ${value}`,
+        source: hostOf(url) ?? source ?? 'Website',
+        sourceUrl: url ?? undefined,
+        at,
+        field: 'country',
+        how: `Read from the ${source}.`,
+      },
+    ],
+  }
 }
 
 /**
@@ -531,6 +640,7 @@ function technologyEvidence(
  */
 function readout(detail: EnrichmentDetail, factCount: number, companyName: string): Array<[string, ReactNode]> {
   const status = detail.status
+  const fromWeb = foundByWebSearch(detail)
   const site = detail.sourceUrl
   const techCount = detail.technologyCount
   const facts = `${factCount} recorded fact${factCount === 1 ? '' : 's'} about the company and its site`
@@ -540,14 +650,16 @@ function readout(detail: EnrichmentDetail, factCount: number, companyName: strin
   // that can only be made once the run has actually looked for one.
   const input: ReactNode = site ? (
     <>
-      The one website on {companyName}&rsquo;s NXT Sales record —{' '}
+      {fromWeb
+        ? `${companyName}’s own website, as confirmed by the web search that found it (not in NXT Sales yet) — `
+        : `The one website on ${companyName}’s NXT Sales record — `}
       <a href={site} target="_blank" rel="noopener noreferrer">
         {hostOf(site)}
       </a>
       .
     </>
   ) : status === 'no_website' ? (
-    `A company reference from NXT Sales, with no website this stage could read. ${
+    `${fromWeb ? 'A company found by the web search' : 'A company reference from NXT Sales'}, with no website this stage could read. ${
       noWebsiteReason(detail) ?? 'The run recorded no further reason.'
     }`
   ) : (
@@ -579,7 +691,7 @@ function readout(detail: EnrichmentDetail, factCount: number, companyName: strin
         : status === 'partial'
           ? `No technology attributed to ${companyName} — the page read belongs to another site. ${factsLead}.`
           : factCount > 0
-          ? `Nothing from the site. ${factsLead}, every one of them from the CRM.`
+          ? `Nothing from the site. ${factsLead}, every one of them from ${fromWeb ? 'what the web search verified' : 'the CRM'}.`
           : 'Nothing. Neither the CRM record nor the site yielded a value this run could stand behind.'
 
   const next =
@@ -587,7 +699,9 @@ function readout(detail: EnrichmentDetail, factCount: number, companyName: strin
       ? 'Intent Signals reads the same company next; the Website Audit later crawls the site this page came from.'
       : status === 'queued' || status === 'running'
         ? 'Wait for the run to finish. What it read appears here, with the reference for each line.'
-        : 'Put a working website on the NXT Sales record and run enrichment again — every later stage that reads the site depends on this one address.'
+        : fromWeb
+          ? 'No website of the company’s own could be read. Check the website in Prospects, or add the company to NXT Sales with a working website, and run enrichment again.'
+          : 'Put a working website on the NXT Sales record and run enrichment again — every later stage that reads the site depends on this one address.'
 
   return [
     ['Input', input],
@@ -673,7 +787,7 @@ function RunState({
 
   const body =
     status === 'running'
-      ? `The worker has picked this run up and is fetching the one website on ${companyName}’s NXT Sales record. What it reads appears here, each line with the reference behind it.`
+      ? `The worker has picked this run up and is fetching ${companyName}’s website. What it reads appears here, each line with the reference behind it.`
       : status === 'failed'
         ? reason
           ? 'The run did not complete. The worker recorded this reason:'
@@ -784,7 +898,8 @@ export function Enrichment() {
   const pageUrl = observedText(signals.finalUrl) ?? record?.sourceUrl ?? null
   const pageHost = hostOf(pageUrl)
 
-  const facts = crmFacts(signals, observedAt)
+  const fromWeb = foundByWebSearch(record)
+  const facts = crmFacts(signals, observedAt, fromWeb)
   const site = siteSignals(signals, record?.sourceUrl ?? null, observedAt)
   const factCount = [...facts, ...site].filter((o) => o.value !== null).length
 
@@ -816,12 +931,14 @@ export function Enrichment() {
           ? { done: false, blockedReason: `Partial — ${reason ?? 'what was read could not be attributed to this company.'}` }
           : {
               done: false,
-              blockedReason: `Partial — the website could not be read${reason ? ` (${reason})` : ''}. Only what NXT Sales holds was recorded.`,
+              blockedReason: `Partial — the website could not be read${reason ? ` (${reason})` : ''}. Only what ${fromWeb ? 'the web search verified' : 'NXT Sales holds'} was recorded.`,
             }
         : status === 'blocked'
           ? {
               done: false,
-              blockedReason: 'Blocked — the NXT Sales record has no website to read. Add one and run enrichment again.',
+              blockedReason: fromWeb
+                ? 'Blocked — the web search did not confirm a website of this company’s own, so there is nothing to read.'
+                : 'Blocked — the NXT Sales record has no website to read. Add one and run enrichment again.',
             }
           : status === 'failed'
             ? { done: false, blockedReason: `Failed${reason ? ` — ${reason}` : ''}` }
@@ -1009,7 +1126,11 @@ export function Enrichment() {
             <>
               <Panel
                 title={`What we know about ${shownName}`}
-                subtitle="Read from the company's own website and its NXT Sales record"
+                subtitle={
+                  fromWeb
+                    ? "Read from the company's own website and what the web search verified"
+                    : "Read from the company's own website and its NXT Sales record"
+                }
                 actions={statusBadge}
               >
                 <MetricRow>
@@ -1045,8 +1166,12 @@ export function Enrichment() {
               <Panel title="Company and website" subtitle="Every line opens on the observation behind it">
                 <div className="enrich__group">
                   <div className="enrich__grouphead">
-                    <span className="enrich__groupname">From NXT Sales</span>
-                    <span className="enrich__groupnote">Copied unchanged. This stage never writes back to the CRM.</span>
+                    <span className="enrich__groupname">{fromWeb ? 'Company facts' : 'From NXT Sales'}</span>
+                    <span className="enrich__groupnote">
+                      {fromWeb
+                        ? 'Found by the web search — not in NXT Sales yet. Each value names the source that stated it.'
+                        : 'Copied unchanged. This stage never writes back to the CRM.'}
+                    </span>
                   </div>
                   {facts.map((o) => (
                     <ObservationRow key={o.key} observation={o} />

@@ -5,8 +5,8 @@ import type { CrmCompany } from '../../src/crm/types.js'
 // redelivery, cache honesty and off-site redirects. Generic fixtures only.
 
 const db = {
-  // No DiscoveredCompany in these tests: every id is a CRM company.
-  discoveredCompany: { findFirst: async () => null },
+  // Null unless a test says otherwise: then the id is a CRM company.
+  discoveredCompany: { findFirst: vi.fn(async (): Promise<unknown> => null) },
   companyEnrichment: {
     create: vi.fn(async () => ({})),
     findFirst: vi.fn(),
@@ -21,7 +21,11 @@ vi.mock('../../src/platform/db.js', () => {
 })
 
 const fetchPage = vi.fn()
-vi.mock('../../src/research/pageFetch.js', () => ({ fetchPage: (...a: unknown[]) => fetchPage(...a) }))
+const fetchPageRaw = vi.fn()
+vi.mock('../../src/research/pageFetch.js', () => ({
+  fetchPage: (...a: unknown[]) => fetchPage(...a),
+  fetchPageRaw: (...a: unknown[]) => fetchPageRaw(...a),
+}))
 
 const getCompany = vi.fn()
 vi.mock('../../src/crm/index.js', () => ({ getCrm: () => ({ getCompany }) }))
@@ -66,6 +70,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   db.companyEnrichment.findFirst.mockResolvedValue(null)
   db.companyEnrichment.updateMany.mockResolvedValue({ count: 0 })
+  db.discoveredCompany.findFirst.mockResolvedValue(null)
 })
 
 describe('requestCompanyEnrichments — duplicate-run guard', () => {
@@ -219,6 +224,125 @@ describe('runCompanyEnrichment', () => {
     expect(data.status).toBe('no_website')
     expect(typeof data.failureReason).toBe('string')
     expect(String(data.failureReason)).not.toMatch(/neither a domain nor a product URL/)
+    expect(fetchPage).not.toHaveBeenCalled()
+  })
+})
+
+// ── A company found by the web search, and the country (2026-10-07) ───────
+//
+// Not being in NXT Sales never stops enrichment, and the country comes from
+// the first source that states it: NXT Sales, the company's own website, the
+// listing page Prospects verified. Never guessed.
+
+describe('runCompanyEnrichment — companies found by the web search, and their country', () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: 'enr_web', tenantId: 't1', crmCompanyId: 'dc_1', status: 'queued', createdAt: new Date('2026-10-01T00:00:00Z'), ...over,
+  })
+  const page = (over: Record<string, unknown> = {}) => ({
+    ok: true,
+    requestedUrl: 'https://acme-supplies.example/',
+    finalUrl: 'https://www.acme-supplies.example/',
+    signals: { technologies: [], platforms: [], generator: null, title: 'Acme', metaDescription: null, hasStructuredData: false, productSchema: false },
+    cached: false,
+    fetchedAt: '2026-10-01T10:00:00.000Z',
+    ...over,
+  })
+  const discovered = (over: Record<string, unknown> = {}) => ({
+    id: 'dc_1',
+    companyName: 'Acme Supplies',
+    domain: 'acme-supplies.example',
+    websiteUrl: 'https://acme-supplies.example/',
+    crmCompanyId: null,
+    productAnalysis: {
+      companyLocation: {
+        text: 'Indianapolis, IN 46278', city: 'Indianapolis', region: 'IN', postalCode: '46278', country: 'US',
+        source: 'company website (address on page)', sourceUrl: 'https://www.acme-supplies.example/',
+      },
+    },
+    ...over,
+  })
+  const signalsOf = () => lastFinish().signals as Record<string, unknown>
+
+  it('enriches a company that is not in NXT Sales, with the country its own website states', async () => {
+    db.companyEnrichment.findUnique.mockResolvedValue(row())
+    db.discoveredCompany.findFirst.mockResolvedValue(discovered())
+    fetchPage.mockResolvedValue(page())
+    await runCompanyEnrichment('enr_web')
+
+    const data = lastFinish()
+    expect(data.status).toBe('enriched')
+    expect(signalsOf()).toMatchObject({
+      companySource: 'web_search',
+      country: 'United States',
+      countrySource: 'company website (address on page)',
+      countrySourceUrl: 'https://www.acme-supplies.example/',
+      countryStatedAs: 'Indianapolis, IN 46278',
+    })
+    expect(getCompany).not.toHaveBeenCalled()
+    // Prospects already read the address: no second request for it.
+    expect(fetchPageRaw).not.toHaveBeenCalled()
+    const statements = (data.provenance as Array<{ statement: string }>).map((c) => c.statement)
+    expect(statements[0]).toMatch(/not in NXT Sales yet\. That does not stop enrichment/)
+  })
+
+  it('uses the linked NXT Sales record for reference when the company has been matched to one', async () => {
+    db.companyEnrichment.findUnique.mockResolvedValue(row())
+    db.discoveredCompany.findFirst.mockResolvedValue(discovered({ crmCompanyId: 'co_9' }))
+    getCompany.mockResolvedValue(company({ id: 'co_9', country: 'MALTA', industry: 'Retail' }))
+    fetchPage.mockResolvedValue(page())
+    await runCompanyEnrichment('enr_web')
+
+    expect(signalsOf()).toMatchObject({ companySource: 'web_search', country: 'MALTA', countrySource: 'NXT Sales record', industry: 'Retail' })
+  })
+
+  it('reads the website for a CRM company whose record holds no country', async () => {
+    db.companyEnrichment.findUnique.mockResolvedValue(row({ crmCompanyId: 'co_1' }))
+    getCompany.mockResolvedValue(company({ country: null }))
+    fetchPage.mockResolvedValue(page())
+    fetchPageRaw.mockImplementation(async (url: string) => ({
+      ok: true, requestedUrl: url, finalUrl: url, status: 200, contentType: 'text/html', truncated: false, bytes: 1,
+      redirectChain: [], reason: null, durationMs: 1,
+      html: '<script type="application/ld+json">{"@type":"Organization","address":{"addressLocality":"Hamburg","addressCountry":"DE"}}</script>',
+    }))
+    await runCompanyEnrichment('enr_web')
+
+    expect(signalsOf()).toMatchObject({ companySource: 'crm', country: 'Germany', countrySource: 'company website (structured data)' })
+  })
+
+  it('records the country as unknown, and says why, when no source states one', async () => {
+    db.companyEnrichment.findUnique.mockResolvedValue(row())
+    db.discoveredCompany.findFirst.mockResolvedValue(discovered({ productAnalysis: null }))
+    fetchPage.mockResolvedValue(page())
+    fetchPageRaw.mockImplementation(async (url: string) => ({
+      ok: true, requestedUrl: url, finalUrl: url, status: 200, contentType: 'text/html', truncated: false, bytes: 1,
+      redirectChain: [], reason: null, durationMs: 1, html: '<p>Industrial supplies since 1980.</p>',
+    }))
+    await runCompanyEnrichment('enr_web')
+
+    expect(lastFinish().status).toBe('enriched')
+    expect(signalsOf().country).toBe('UNKNOWN')
+    const statements = (lastFinish().provenance as Array<{ statement: string }>).map((c) => c.statement)
+    expect(statements.some((s) => /Country not established from the website: No address was stated/.test(s))).toBe(true)
+  })
+
+  it('keeps the country of a company with no website of its own from the listing page that named it', async () => {
+    db.companyEnrichment.findUnique.mockResolvedValue(row())
+    db.discoveredCompany.findFirst.mockResolvedValue(
+      discovered({
+        domain: null,
+        websiteUrl: 'https://directory.example/listing/123',
+        productAnalysis: {
+          companyLocation: {
+            text: 'Akron, OH 44301', city: 'Akron', region: 'OH', postalCode: '44301', country: 'US',
+            source: 'listing page', sourceUrl: 'https://directory.example/listing/123',
+          },
+        },
+      }),
+    )
+    await runCompanyEnrichment('enr_web')
+
+    expect(lastFinish().status).toBe('no_website')
+    expect(signalsOf()).toMatchObject({ country: 'United States', countrySource: 'listing page that named the company' })
     expect(fetchPage).not.toHaveBeenCalled()
   })
 })

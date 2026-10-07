@@ -303,7 +303,7 @@ export const ENRICHMENT: ManualSection = {
       kind: 'terms',
       items: [
         { term: 'What we know about …', meaning: 'A summary: how many technology signals and facts were found, and whether the website could be read.' },
-        { term: 'Company and website', meaning: 'Details copied from NXT Sales (industry, country, website) and details read from the website (page title, description).' },
+        { term: 'Company and website', meaning: 'Details from NXT Sales (industry, country, website) — or, for a company found by the web search and not in NXT Sales yet, from its own website — and details read from the website (page title, description). The country is shown only when a source states it.' },
         { term: 'Technology detected on the site', meaning: 'Each technology found, how sure we are (high, medium or low), and the proof. Click "Why we say this" to see the proof.' },
         { term: 'Reference', meaning: 'Opens the exact piece of the website a detail was read from.' },
       ],

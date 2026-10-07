@@ -1,8 +1,9 @@
 import { env } from '../../config/env.js'
 import { resolveCompanySource } from '../../crm/companySource.js'
-import { discoverPublicSources, readPublicSources, NO_EVIDENCE } from '../../research/publicResearch.js'
+import { discoverPublicSources, readPublicSourcesUntil, NO_EVIDENCE } from '../../research/publicResearch.js'
 import { KIND_INFO, placeOf, readExternalSignals, statedDateOf } from '../externalSignals.js'
 import { outreachAngleFor } from '../outreachAngles.js'
+import { readRedditThread, redditThreadPath } from '../redditThread.js'
 import type { IntentSignalDraft } from '../types.js'
 import type { IntentProvider, ProviderContext, ProviderResult } from './provider.js'
 
@@ -16,10 +17,22 @@ import type { IntentProvider, ProviderContext, ProviderResult } from './provider
 // A platform that serves a logged-out reader a sign-in wall (LinkedIn often
 // does) has shown us nothing: that is recorded and counted, never guessed at.
 
+// WIDER, 2026-10-07. Ten links and eight fetches left most companies with two
+// or three pages actually read: about half of what a search returns refuses a
+// server reader (HTTP 403, a sign-in wall). Now twenty links are asked for,
+// and fetching continues past refusals until ten pages have been READ.
 /** Pages read per company. Each is one request to a third-party host and one model read. */
-const MAX_PAGES = 8
-/** Links asked of the search index across the four searches. */
-const MAX_SOURCES = 10
+const MAX_PAGES = 10
+/** Links asked of the search index across the five searches; also the most fetches tried. */
+const MAX_SOURCES = 20
+/**
+ * Signals kept per company from this source. Its own ceiling: the shared
+ * per-company setting (APIFY_MAX_RESULTS_PER_COMPANY) is the paid scraper's
+ * budget, and cut this source off at ten.
+ */
+const MAX_SIGNALS = 25
+/** How long this source may spend fetching pages, so a whole run stays well inside the job's 15-minute limit. */
+const READ_BUDGET_MS = 240_000
 
 export class ExternalSourcesProvider implements IntentProvider {
   readonly name = 'external_public_sources'
@@ -85,7 +98,23 @@ export class ExternalSourcesProvider implements IntentProvider {
     const readFailures: string[] = []
     let ownSite = 0
 
-    for (const page of await readPublicSources(discovery.sources, MAX_PAGES)) {
+    let redditRefused = false
+    for (const fetched of await readPublicSourcesUntil(discovery.sources, {
+      readable: MAX_PAGES,
+      maxAttempts: MAX_SOURCES,
+      budgetMs: READ_BUDGET_MS,
+      // The company's own pages are skipped below, so they do not use the budget.
+      counts: (p) => Boolean(p.text) && !(companyHost && onHost(p.finalUrl, companyHost)),
+    })) {
+      let page = fetched
+      // Reddit refuses a plain page fetch; its official API serves the thread,
+      // when the deployment has Reddit credentials. Same reader, same rule as
+      // the community-questions source.
+      if (!page.text && !redditRefused && redditThreadPath(page.finalUrl)) {
+        const thread = await readRedditThread(page.finalUrl)
+        if (thread.refused) redditRefused = true
+        page = thread.text ? { ...page, text: thread.text, reason: null } : { ...page, reason: thread.reason ?? page.reason }
+      }
       const place = placeOf(page.finalUrl)
       // The company's own pages are read by the providers built for them.
       if (companyHost && onHost(page.finalUrl, companyHost)) {
@@ -114,7 +143,7 @@ export class ExternalSourcesProvider implements IntentProvider {
 
       let added = 0
       for (const r of read.readings) {
-        if (signals.length >= ctx.maxResults) break
+        if (signals.length >= MAX_SIGNALS) break
         const info = KIND_INFO[r.kind]
         signals.push({
           crmCompanyId: ctx.company.id,

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import type { CrmCompany } from '../crm/types.js'
 import { resolveCompanySource } from '../crm/companySource.js'
+import { getCrm } from '../crm/index.js'
 import { claim, type Claim } from '../domain/provenance.js'
 import { resolvePipelineCompany } from '../prospects/discoveredCompanyAdapter.js'
 import { audit } from '../platform/audit.js'
@@ -10,6 +11,8 @@ import { logger } from '../platform/logger.js'
 import { fetchPage } from '../research/pageFetch.js'
 import type { DetectedTechnology, PageSignals } from '../research/htmlToText.js'
 import { normalizeUrl } from '../research/ssrfGuard.js'
+import type { CompanyLocation } from '../prospects/companyLocation.js'
+import { countryFromWebsite, countryOfLocations, type CountryFinding } from './companyCountry.js'
 import { hostnameOf, sameRegistrableSite } from './siteIdentity.js'
 
 // STAGE 2 — ENRICH COMPANY DATA.
@@ -65,9 +68,23 @@ export const STALE_RUN_REASON =
   'The run did not finish within 30 minutes and was marked failed. The worker may have stopped mid-job; run enrichment again.'
 
 export interface CompanySignals {
+  /**
+   * Where the company came from: an NXT Sales record, or the public web
+   * search of "Find New Company" (not in NXT Sales yet). Absent on runs
+   * recorded before 2026-10-07.
+   */
+  companySource?: 'crm' | 'web_search'
   /** [CRM data] */
   industry: string | typeof UNKNOWN
+  /**
+   * The NXT Sales value when it holds one; otherwise the country a source
+   * states (see companyCountry.ts), with where it was read below.
+   */
   country: string | typeof UNKNOWN
+  countrySource?: string | typeof UNKNOWN
+  countrySourceUrl?: string | typeof UNKNOWN
+  /** The value or address as the source wrote it. */
+  countryStatedAs?: string | typeof UNKNOWN
   domain: string | typeof UNKNOWN
   crmCms: string | typeof UNKNOWN
   /** [Web data] */
@@ -282,17 +299,94 @@ export async function runCompanyEnrichment(enrichmentId: string): Promise<void> 
     }
     const { company, discoveredCompanyId } = found
 
+    // A company found by the web search: what Prospects already verified about
+    // it, and - when it has since been matched to or added to NXT Sales - that
+    // record, used for reference only (industry, country, platform). Not being
+    // in NXT Sales never stops the run: the website is read either way.
+    let storedLocation: CompanyLocation | null = null
+    let linkedName: string | null = null
+    if (discoveredCompanyId) {
+      const extra = await prisma.discoveredCompany.findFirst({
+        where: { id: discoveredCompanyId, tenantId: row.tenantId },
+        select: { crmCompanyId: true, productAnalysis: true },
+      })
+      storedLocation = storedLocationOf(extra?.productAnalysis)
+      if (extra?.crmCompanyId) {
+        const linked = await getCrm()
+          .getCompany(extra.crmCompanyId)
+          .catch(() => null)
+        if (linked) {
+          linkedName = linked.name
+          company.industry = linked.industry
+          company.country = linked.country
+          company.cms = linked.cms
+        }
+      }
+    }
+
     const provenance: Claim[] = discoveredCompanyId
-      ? [
-          claim(
-            'research',
-            `Company "${company.name}" was found by a public web search and is not in NXT Sales yet, so there are no CRM facts to load.`,
-          ),
-        ]
+      ? linkedName
+        ? [
+            claim('research', `Company "${company.name}" was found by a public web search.`),
+            claim(
+              'crm_data',
+              `It is linked to the NXT Sales record "${linkedName}". Industry: ${orUnknown(company.industry)}; country: ${orUnknown(company.country)}.`,
+            ),
+          ]
+        : [
+            claim(
+              'research',
+              `Company "${company.name}" was found by a public web search and is not in NXT Sales yet. That does not stop enrichment: its facts are read from its own website and the pages the search verified.`,
+            ),
+          ]
       : [
           claim('crm_data', `Company "${company.name}" loaded from NXT Sales.`),
           claim('crm_data', `Industry: ${orUnknown(company.industry)}; country: ${orUnknown(company.country)}.`),
         ]
+
+    const companySource: CompanySignals['companySource'] = discoveredCompanyId ? 'web_search' : 'crm'
+
+    /**
+     * The country, from the first source that states one - NXT Sales, the
+     * company's own website (stored by Prospects, or read now from `readSite`),
+     * then the listing page that named it. Every outcome is a provenance line.
+     */
+    const resolveCountry = async (readSite: string | null): Promise<CountryFinding | null> => {
+      if (company.country?.trim()) {
+        return { country: company.country.trim(), source: 'NXT Sales record', sourceUrl: null, statedAs: company.country.trim() }
+      }
+      const stored = storedLocation ? countryOfLocations([storedLocation]) : null
+      const storedFinding = stored && 'finding' in stored ? stored.finding : null
+      if (storedFinding && storedLocation?.source !== 'listing page') {
+        provenance.push(
+          claim('research', `Country ${storedFinding.country}: the company's website states "${storedFinding.statedAs}" (${storedFinding.sourceUrl}), as read by Prospects.`),
+        )
+        return storedFinding
+      }
+      if (readSite) {
+        const fromSite = await countryFromWebsite(readSite)
+        provenance.push(
+          claim('research', fromSite.finding ? `Country ${fromSite.finding.country}: ${fromSite.note}` : `Country not established from the website: ${fromSite.note}`),
+        )
+        if (fromSite.finding) return fromSite.finding
+      }
+      if (storedFinding) {
+        provenance.push(
+          claim('research', `Country ${storedFinding.country}: the page that listed the company states "${storedFinding.statedAs}" (${storedFinding.sourceUrl}).`),
+        )
+        return storedFinding
+      }
+      provenance.push(claim('research', 'Country not recorded: no source read for this company states one.'))
+      return null
+    }
+    const withCountry = (sig: CompanySignals, found: CountryFinding | null): CompanySignals => ({
+      ...sig,
+      companySource,
+      country: found?.country ?? UNKNOWN,
+      countrySource: found?.source ?? UNKNOWN,
+      countrySourceUrl: found?.sourceUrl ?? UNKNOWN,
+      countryStatedAs: found?.statedAs ?? UNKNOWN,
+    })
 
     // ── 2. Website ──────────────────────────────────────────────────────────
     const site = chooseWebsite(company)
@@ -322,9 +416,10 @@ export async function runCompanyEnrichment(enrichmentId: string): Promise<void> 
           ),
         )
       }
+      const country = await resolveCountry(null)
       await finish(enrichmentId, 'no_website', {
         companyName: company.name,
-        signals: baseSignals(company, 'no_website'),
+        signals: withCountry(baseSignals(company, 'no_website'), country),
         technologies: [],
         // The resolver's reason, stored where the screen reads it, so "the
         // domain column holds a social profile" is not re-worded as "the record
@@ -362,10 +457,11 @@ export async function runCompanyEnrichment(enrichmentId: string): Promise<void> 
 
     if (!page.ok) {
       provenance.push(claim('research', `Website could not be read: ${page.reason ?? 'unknown reason'}${cacheNote}`))
+      const country = await resolveCountry(null)
       await finish(enrichmentId, 'unreachable', {
         companyName: company.name,
         sourceUrl: site.url,
-        signals: { ...baseSignals(company, 'unreachable'), finalUrl: UNKNOWN },
+        signals: withCountry({ ...baseSignals(company, 'unreachable'), finalUrl: UNKNOWN }, country),
         technologies: [],
         failureReason: page.reason ?? 'unreachable',
         provenance,
@@ -412,10 +508,11 @@ export async function runCompanyEnrichment(enrichmentId: string): Promise<void> 
           claim('research', `Seen on ${to}, NOT attributed to ${company.name}: ${t.name} (${t.category}) — evidence: ${t.evidence}`),
         ),
       )
+      const country = await resolveCountry(null)
       await finish(enrichmentId, 'partial', {
         companyName: company.name,
         sourceUrl: site.url,
-        signals,
+        signals: withCountry(signals, country),
         technologies: [],
         failureReason: reason,
         provenance,
@@ -438,11 +535,12 @@ export async function runCompanyEnrichment(enrichmentId: string): Promise<void> 
       )
     }
     provenance.push(claim('crm_data', cmsAgreement(company.cms, technologies)))
+    const country = await resolveCountry(page.finalUrl ?? site.url)
 
     await finish(enrichmentId, 'enriched', {
       companyName: company.name,
       sourceUrl: site.url,
-      signals,
+      signals: withCountry(signals, country),
       technologies,
       provenance,
       fetchedAt,
@@ -526,4 +624,21 @@ async function finish(
       finishedAt: new Date(),
     },
   })
+}
+
+/** The location Prospects stored for a discovered company, when it has the expected shape. */
+function storedLocationOf(productAnalysis: unknown): CompanyLocation | null {
+  const l = (productAnalysis as { companyLocation?: unknown } | null)?.companyLocation as Partial<CompanyLocation> | null | undefined
+  if (!l || typeof l !== 'object' || typeof l.text !== 'string' || typeof l.sourceUrl !== 'string') return null
+  const source = l.source
+  if (source !== 'company website (structured data)' && source !== 'company website (address on page)' && source !== 'listing page') return null
+  return {
+    text: l.text,
+    city: typeof l.city === 'string' ? l.city : null,
+    region: typeof l.region === 'string' ? l.region : null,
+    postalCode: typeof l.postalCode === 'string' ? l.postalCode : null,
+    country: typeof l.country === 'string' ? l.country : null,
+    source,
+    sourceUrl: l.sourceUrl,
+  }
 }

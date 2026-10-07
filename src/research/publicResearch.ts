@@ -216,6 +216,14 @@ function queriesFor(topic: ResearchTopic, companyName: string, domain: string | 
           `actually retrieved.`,
         `Find public LinkedIn posts, company updates or social media posts by or about ${where}. ` +
           `Only report pages you actually retrieved.`,
+        // (2026-10-07) What OTHER businesses publish naming this company: a
+        // software vendor's case study, a supplier's or partner's announcement,
+        // a trade association's member news. That is where a change such as
+        // "X partnered with Y to implement NetSuite" is written down — the
+        // company's own site often never says it.
+        `Find case studies, customer stories, testimonials, press releases or partner announcements published by ` +
+          `software vendors, implementation partners, suppliers, distributors or trade associations that name ` +
+          `${where} as a customer, partner or member. Only report pages you actually retrieved.`,
       ]
     case 'community_questions':
       // The communities of "Community Engagement & Trust-Building System"
@@ -284,7 +292,7 @@ export async function discoverPublicSources(input: {
     }
   }
 
-  const maxSources = Math.max(1, Math.min(input.maxSources ?? env.PUBLIC_RESEARCH_MAX_SOURCES, 10))
+  const maxSources = Math.max(1, Math.min(input.maxSources ?? env.PUBLIC_RESEARCH_MAX_SOURCES, MAX_SOURCES_PER_SEARCH))
   const queries = queriesFor(input.topic, companyName, input.domain)
   const seen = new Set<string>()
   const sources: PublicSource[] = []
@@ -383,6 +391,13 @@ export async function discoverPublicSources(input: {
 export const NO_EVIDENCE = 'No additional public evidence found.'
 
 /**
+ * The most links one discovery may return. Was 10 (2026-10-07): with half of
+ * what a search finds refusing a server reader (HTTP 403, sign-in walls), ten
+ * links left a company with two or three pages actually read.
+ */
+export const MAX_SOURCES_PER_SEARCH = 20
+
+/**
  * Step 2: fetch one discovered URL ourselves and return what it served.
  *
  * Nothing about the discovery step is trusted here. The URL goes through the
@@ -395,7 +410,11 @@ export async function readPublicSource(source: PublicSource): Promise<ReadPublic
   try {
     const res = await fetchPageRaw(source.url)
     if (!res.ok) {
-      return { ...base, reason: res.reason ?? 'The page could not be fetched.' }
+      // Where the request LANDED, kept on a failure too. A search result is
+      // usually a redirect link; dropping the destination left every refused
+      // page recorded under that opaque link, and hid a Reddit thread from the
+      // reader built for it (2026-10-07).
+      return { ...base, finalUrl: res.finalUrl ?? source.url, reason: res.reason ?? 'The page could not be fetched.' }
     }
     const finalUrl = res.finalUrl ?? source.url
     const text = htmlToText(res.html).trim()
@@ -420,6 +439,56 @@ export async function readPublicSource(source: PublicSource): Promise<ReadPublic
     const message = (err as Error).message
     logger.info({ url: source.url, err: message }, 'public source not read')
     return { ...base, reason: message }
+  }
+}
+
+/**
+ * Reads discovered sources in order until `readable` of them returned content,
+ * or `maxAttempts` were tried — so a page that refuses a server reader (HTTP
+ * 403, a sign-in wall, an empty script shell) no longer uses up the budget
+ * meant for pages that can be read. Every attempt is returned, read or not,
+ * so the caller still records what refused.
+ *
+ * - Several search links often lead to the SAME page; it is returned once, so
+ *   it is neither read twice nor quoted twice.
+ * - `counts` says which pages count towards `readable` — a caller that skips
+ *   the company's own pages does not spend its budget on them.
+ * - `budgetMs` stops starting new fetches once that long has passed, so a run
+ *   always finishes well inside the job's time limit.
+ *
+ * Sequential for the same reason as readPublicSources.
+ */
+export async function readPublicSourcesUntil(
+  sources: PublicSource[],
+  opts: { readable: number; maxAttempts: number; budgetMs?: number; counts?: (page: ReadPublicSource) => boolean },
+  read: (source: PublicSource) => Promise<ReadPublicSource> = readPublicSource,
+): Promise<ReadPublicSource[]> {
+  const started = Date.now()
+  const counts = opts.counts ?? ((page: ReadPublicSource) => Boolean(page.text))
+  const out: ReadPublicSource[] = []
+  const seen = new Set<string>()
+  let readOk = 0
+  for (const source of sources.slice(0, Math.max(0, opts.maxAttempts))) {
+    if (readOk >= opts.readable) break
+    if (opts.budgetMs !== undefined && Date.now() - started >= opts.budgetMs) break
+    const page = await read(source)
+    const key = samePageKey(page.finalUrl)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(page)
+    if (counts(page)) readOk++
+  }
+  return out
+}
+
+/** One key for the same page reached by different links: no fragment, no trailing slash, no "www.". */
+function samePageKey(url: string): string {
+  try {
+    const u = new URL(url)
+    u.hash = ''
+    return `${u.hostname.replace(/^www\./, '').toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`
+  } catch {
+    return url
   }
 }
 

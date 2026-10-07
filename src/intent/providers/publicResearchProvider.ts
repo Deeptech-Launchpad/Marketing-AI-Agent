@@ -2,7 +2,7 @@ import { env } from '../../config/env.js'
 import { resolveCompanySource } from '../../crm/companySource.js'
 import {
   discoverPublicSources,
-  readPublicSources,
+  readPublicSourcesUntil,
   NO_EVIDENCE,
   type ReadPublicSource,
   type ResearchTopic,
@@ -63,6 +63,13 @@ function categoryFor(event: ReadEvent, topic: ResearchTopic): SignalCategory {
 
 /** Only a date the SOURCE stated — one rule for every intent provider. */
 const statedDate = statedDateOf
+
+/** Links asked of the search index; also the most fetches tried. */
+const MAX_SOURCES = 10
+/** Signals kept per company from this source (see externalSourcesProvider). */
+const MAX_SIGNALS = 25
+/** How long this source may spend fetching pages (see externalSourcesProvider). */
+const READ_BUDGET_MS = 120_000
 
 export class PublicResearchSignalProvider implements IntentProvider {
   readonly name = 'public_web_research'
@@ -131,6 +138,9 @@ export class PublicResearchSignalProvider implements IntentProvider {
         companyName,
         domain: companyHost,
         topic,
+        // Ten links, read past refusals until the configured number of pages
+        // were read (2026-10-07) — see externalSourcesProvider.
+        maxSources: MAX_SOURCES,
         feature: 'intent_public_research',
       })
       costUsd += discovery.costUsd
@@ -141,7 +151,7 @@ export class PublicResearchSignalProvider implements IntentProvider {
       }
       sourcesDiscovered += discovery.sources.length
 
-      for (const page of await readPublicSources(discovery.sources)) {
+      for (const page of await readPublicSourcesUntil(discovery.sources, { readable: env.PUBLIC_RESEARCH_MAX_PAGES, maxAttempts: MAX_SOURCES, budgetMs: READ_BUDGET_MS })) {
         if (page.loginWall) loginWalls += 1
         if (!page.text) {
           pagesRead.push({
@@ -167,7 +177,7 @@ export class PublicResearchSignalProvider implements IntentProvider {
         let added = 0
         const pageType = sourceTypeFor(page, companyHost)
         for (const event of read.events) {
-          if (signals.length >= ctx.maxResults) break
+          if (signals.length >= MAX_SIGNALS) break
           // Grounded is not the same as ABOUT THIS COMPANY. A third-party page
           // must name the company near the sentence; history is not an event.
           if (isHistoryStatement(event)) {

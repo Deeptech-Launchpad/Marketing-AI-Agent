@@ -211,4 +211,52 @@ describe('Enrichment engine', () => {
     await waitFor(() => expect(document.body.textContent).toContain(`with no website this stage could read. ${reason}`))
     expect(document.body.textContent).not.toContain('neither a domain nor a product URL')
   })
+
+  // 2026-10-07: a company found by the web search is not "missing" from the
+  // CRM — its facts come from its own website and what the search verified,
+  // and the country names the source that stated it.
+  it('shows a company found by the web search with its own facts, not as missing from NXT Sales', async () => {
+    routes = [
+      [
+        /\/enrichment\/companies\/co_a/,
+        () =>
+          json(
+            row({
+              signals: {
+                companySource: 'web_search',
+                industry: 'UNKNOWN',
+                country: 'United States',
+                countrySource: 'company website (address on page)',
+                countrySourceUrl: 'https://acme-parts.example/contact',
+                countryStatedAs: 'Indianapolis, IN 46278',
+                domain: 'acme-parts.example',
+                crmCms: 'UNKNOWN',
+                websiteStatus: 'reachable',
+                finalUrl: 'https://acme-parts.example/',
+              },
+            }),
+          ),
+      ],
+    ]
+    render(<Enrichment />)
+    expect(await screen.findByText('Company facts')).toBeInTheDocument()
+    expect(screen.getByText('United States')).toBeInTheDocument()
+    expect(screen.getByText('Website domain')).toBeInTheDocument()
+    expect(screen.queryByText('From NXT Sales')).toBeNull()
+    expect(screen.queryByText('Not held in NXT Sales')).toBeNull()
+    expect(document.body.textContent).toContain('not in NXT Sales yet')
+  })
+
+  it('still reads a CRM company as before', async () => {
+    routes = [
+      [
+        /\/enrichment\/companies\/co_a/,
+        () => json(row({ signals: { companySource: 'crm', country: 'MALTA', countrySource: 'NXT Sales record', industry: 'UNKNOWN' } })),
+      ],
+    ]
+    render(<Enrichment />)
+    expect(await screen.findByText('From NXT Sales')).toBeInTheDocument()
+    expect(screen.getByText('MALTA')).toBeInTheDocument()
+    expect(screen.getAllByText('Not held in NXT Sales').length).toBeGreaterThan(0)
+  })
 })

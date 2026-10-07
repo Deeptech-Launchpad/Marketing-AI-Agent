@@ -1,6 +1,6 @@
 import { env } from '../../config/env.js'
 import { resolveCompanySource } from '../../crm/companySource.js'
-import { discoverPublicSources, readPublicSources, NO_EVIDENCE } from '../../research/publicResearch.js'
+import { discoverPublicSources, readPublicSourcesUntil, NO_EVIDENCE } from '../../research/publicResearch.js'
 import { CLUSTER_WHY, COMMUNITY_ANGLE, communityOf, readCommunityQuestions } from '../communityQuestions.js'
 import { placeOf, statedDateOf } from '../externalSignals.js'
 import { readRedditThread, redditThreadPath } from '../redditThread.js'
@@ -19,7 +19,11 @@ import type { IntentProvider, ProviderContext, ProviderResult } from './provider
 /** Pages read per company. Each is one request to a third-party host and one model read. */
 const MAX_PAGES = 6
 /** Links asked of the search index across the three searches. */
-const MAX_SOURCES = 8
+const MAX_SOURCES = 12
+/** Signals kept per company from this source (see externalSourcesProvider). */
+const MAX_SIGNALS = 25
+/** How long this source may spend fetching pages (see externalSourcesProvider). */
+const READ_BUDGET_MS = 120_000
 
 export class CommunityQuestionsProvider implements IntentProvider {
   readonly name = 'community_questions'
@@ -85,7 +89,13 @@ export class CommunityQuestionsProvider implements IntentProvider {
     const readFailures: string[] = []
 
     let redditRefused = false
-    for (const fetched of await readPublicSources(discovery.sources, MAX_PAGES)) {
+    // Past refusals until MAX_PAGES pages were read (2026-10-07).
+    for (const fetched of await readPublicSourcesUntil(discovery.sources, {
+      readable: MAX_PAGES,
+      maxAttempts: MAX_SOURCES,
+      budgetMs: READ_BUDGET_MS,
+      counts: (p) => Boolean(p.text) && !(companyHost && onHost(p.finalUrl, companyHost)),
+    })) {
       let page = fetched
       // The company's own pages are not community questions.
       if (companyHost && onHost(page.finalUrl, companyHost)) continue
@@ -116,7 +126,7 @@ export class CommunityQuestionsProvider implements IntentProvider {
       const place = placeOf(page.finalUrl)
       let added = 0
       for (const q of read.flagged) {
-        if (signals.length >= ctx.maxResults) break
+        if (signals.length >= MAX_SIGNALS) break
         signals.push({
           crmCompanyId: ctx.company.id,
           signalType: 'community_question',
