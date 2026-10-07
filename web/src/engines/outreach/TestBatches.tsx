@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ArrowLeft, FileEdit, FlaskConical, Pause, Play, Plus, Search, Square } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync } from '../../lib/hooks'
@@ -8,6 +8,7 @@ import { useCall } from './useCall'
 import { InfoTip } from './InfoTip'
 import { emailStatus, stepStatus } from './status'
 import { PHASE_LABEL, fmtDateTime, fmtWindow, type Phase, type SendingStatus } from './types'
+import { timeZoneOptions } from './timeZones'
 
 // TEST BATCHES (2026-09-28).
 //
@@ -205,6 +206,7 @@ function CreateBatch({ sending, onCancel, onCreated }: { sending: SendingStatus 
   const [name, setName] = useState('')
   const [firstSend, setFirstSend] = useState(defaultFirstSend())
   const [timezone, setTimezone] = useState('America/New_York')
+  const zoneOptions = useMemo(() => timeZoneOptions(), [])
   const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5])
   const [start, setStart] = useState('09:00')
   const [end, setEnd] = useState('17:00')
@@ -416,7 +418,28 @@ function CreateBatch({ sending, onCancel, onCreated }: { sending: SendingStatus 
             </label>
             <label>
               <span className="field-label">Sending time zone</span>
-              <input className="otr-input" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+              <select className="otr-input" value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+                {/* A batch saved with a zone not in the list still shows it. */}
+                {!zoneOptions.common.some((z) => z.value === timezone) && !zoneOptions.others.some((z) => z.value === timezone) && (
+                  <option value={timezone}>{timezone}</option>
+                )}
+                <optgroup label="Common">
+                  {zoneOptions.common.map((z) => (
+                    <option key={z.value} value={z.value}>
+                      {z.label}
+                    </option>
+                  ))}
+                </optgroup>
+                {zoneOptions.others.length > 0 && (
+                  <optgroup label="All time zones">
+                    {zoneOptions.others.map((z) => (
+                      <option key={z.value} value={z.value}>
+                        {z.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
             </label>
             <label>
               <span className="field-label">Sending hours from</span>

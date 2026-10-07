@@ -226,6 +226,24 @@ describe('test batches', () => {
     expect(body).toMatchObject({ crmCompanyIds: ['c-acme'], timezone: 'America/New_York', sendDays: [1, 2, 3, 4, 5], sendStart: '09:00', sendEnd: '17:00', spacingMinutes: 10, dailyCap: 20 })
     expect(await screen.findByText(/test batch created/i)).toBeInTheDocument()
   })
+
+  // 2026-10-07: the time zone was free text and could be left empty.
+  it('picks the sending time zone from a list, and sends the one chosen', async () => {
+    stub()
+    render(<Outreach />)
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies \(test run\)$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /new test batch/i }))
+    const zone = (await screen.findByText('Sending time zone')).closest('label')!.querySelector('select')!
+    expect(zone.value).toBe('America/New_York')
+    expect(within(zone).getByRole('option', { name: /^America\/New York \(UTC/ })).toBeInTheDocument()
+    await userEvent.selectOptions(zone, 'Asia/Kolkata')
+    const boxes = await screen.findAllByRole('checkbox', { name: /acme safety/i })
+    await userEvent.click(boxes[0]!)
+    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
+    await waitFor(() => expect(posts().some((c) => /\/outreach\/sequence\/batches$/.test(c.url))).toBe(true))
+    expect((posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>).timezone).toBe('Asia/Kolkata')
+  })
 })
 
 describe('choosing companies for a batch', () => {
