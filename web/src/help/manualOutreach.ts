@@ -472,7 +472,7 @@ export const TROUBLESHOOTING: ManualSection = {
       items: [
         { term: 'I can’t see a button this manual mentions', meaning: 'Your role probably does not include it (see Getting Started → Your role). Ask an administrator.' },
         { term: 'Something stays "Queued" for more than a minute', meaning: 'The background service is probably not running. Tell your administrator — it cannot be fixed from the screen.' },
-        { term: '"The Marketing AI service could not be reached"', meaning: 'The application’s server is not responding. Wait a minute and click "Try again". If it continues, tell your administrator.' },
+        { term: '"The connection to the Marketing AI service was lost"', meaning: 'Your internet connection dropped or changed (Wi-Fi, hotspot or VPN). Check your connection and click "Try again" — nothing is lost. If it continues while your internet works, tell your administrator.' },
         { term: 'The right-hand panel is missing', meaning: 'On a smaller window it hides itself. Click the panel button in the top bar ("Show company context").' },
         { term: '"No company selected" / "Select a company"', meaning: 'Choose a company first — click "Select" in Prospects, or pick one in the Shared context panel.' },
       ],

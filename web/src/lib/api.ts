@@ -192,6 +192,9 @@ interface RequestOptions {
   nullOn404?: boolean
 }
 
+/** Pause before a read that failed at the network level is tried again (doubles on the second try). */
+export const NETWORK_RETRY_MS = 700
+
 /** Fired when a request made WITH a session is refused as signed-out. */
 export const SESSION_EXPIRED_EVENT = 'marketing-ai:session-expired'
 
@@ -201,21 +204,35 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (token) headers.Authorization = `Bearer ${token}`
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
 
-  let res: Response
-  try {
-    res = await fetch(`/api/v1${path}`, {
-      method: options.method ?? 'GET',
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: options.signal,
-    })
-  } catch (err) {
-    if ((err as Error).name === 'AbortError') throw err
-    throw new ApiError(
-      0,
-      'unreachable',
-      'The Marketing AI service could not be reached. It may not be running on port 4100.',
-    )
+  // A READ that fails at the network level is tried again, twice, after a
+  // short pause: a laptop switching Wi-Fi, a hotspot or a VPN drops requests in
+  // flight (net::ERR_NETWORK_CHANGED), and one dropped poll used to turn the
+  // whole screen into "the service could not be reached" (2026-10-07). A write
+  // is never repeated — it may already have reached the server.
+  const method = options.method ?? 'GET'
+  const attempts = method === 'GET' ? 3 : 1
+  let res: Response | null = null
+  for (let attempt = 1; ; attempt++) {
+    try {
+      res = await fetch(`/api/v1${path}`, {
+        method,
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal: options.signal,
+      })
+      break
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') throw err
+      if (attempt < attempts && !options.signal?.aborted) {
+        await new Promise((r) => setTimeout(r, NETWORK_RETRY_MS * attempt))
+        continue
+      }
+      throw new ApiError(
+        0,
+        'unreachable',
+        'The connection to the Marketing AI service was lost. This usually means your internet connection dropped or changed (Wi-Fi, hotspot or VPN).',
+      )
+    }
   }
 
   if (res.status === 204) return undefined as T

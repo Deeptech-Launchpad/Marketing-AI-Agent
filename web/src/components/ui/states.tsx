@@ -146,7 +146,7 @@ export function ErrorState({
   const remediation = permission
     ? 'Ask an administrator to grant your account the permission named above.'
     : api?.status === 0
-      ? 'Start the marketing-agent API, then try again.'
+      ? 'Check your internet connection, then click Try again. Nothing was lost.'
       : api?.status === 404
         ? 'The record may have been removed, or the identifier may be wrong.'
         : 'If this keeps happening, quote the request id below to engineering.'
