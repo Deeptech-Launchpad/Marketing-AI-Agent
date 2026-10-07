@@ -103,19 +103,19 @@ describe('nothing the model writes reaches the email', () => {
     expect(r.body).not.toContain('facility management')
   })
 
-  it('keeps a term that does appear in the verified product data, word for word', async () => {
+  // 2026-10-07: no model is called at all. [Product] is the product's own name.
+  it('calls no model, and nothing a model could write reaches the email', async () => {
     generate.mockResolvedValue({
       model: 'test-model',
       data: { productTerm: 'Safety Helmets', productCategoryTerm: null, line: { text: AI_SENTENCE, factIds: [] } },
     })
     const r = await compose()
-    expect(r.body).toContain('Safety Helmets')
+    expect(generate).not.toHaveBeenCalled()
     expect(r.body).not.toContain(AI_SENTENCE)
-    expect(r.unresolved).not.toContain('product')
+    expect(r.model).toBeNull()
   })
 
-  it('leaves [Product] visibly unfilled rather than guessing, when the model is unavailable', async () => {
-    generate.mockRejectedValue(new Error('model down'))
+  it('leaves [Product] visibly unfilled rather than guessing, when no product was analysed', async () => {
     const r = await compose('v1', { product: null, productPageUrl: null })
     expect(r.unresolved).toContain('product')
     expect(r.body).toContain('[Product]')
@@ -131,12 +131,24 @@ describe('the company and the product fill themselves', () => {
     expect(r.resolution.find((x) => x.placeholder === 'company')).toMatchObject({ factId: 'company.name' })
   })
 
-  it('falls back to the product category leaf when the model offers no usable term', async () => {
-    generate.mockResolvedValue({ model: 'm', data: { productTerm: null, productCategoryTerm: null, line: null } })
+  it('puts the product name exactly as the product page states it', async () => {
     const r = await compose()
-    // "Home > Head Protection > Safety Helmets" -> "Safety Helmets", not the
-    // 40-character DEWALT product title.
-    expect(r.body).toContain('Safety Helmets')
+    expect(r.subject).toContain('DEWALT DPG22 Type II Class E Safety Helmet')
+    expect(r.body).toContain('DEWALT DPG22 Type II Class E Safety Helmet')
+    expect(r.body).not.toContain('[Product]')
+    expect(r.resolution.find((x) => x.placeholder === 'product')).toMatchObject({ factId: 'product.name' })
+  })
+
+  it('uses what Sales typed for the product instead, when they typed one', async () => {
+    const r = await composeStage({
+      template: templateFor('initial', 'v1'),
+      facts: facts() as never,
+      sender: { firstName: 'Mani', fullName: 'Mani', email: 'mani@altius.test', companyName: 'AltiusNxt', signature: '' },
+      inputs: { product: 'safety helmets' },
+      initialSubject: null,
+      tenantId: 't1',
+    })
+    expect(r.body).toContain('safety helmets')
     expect(r.body).not.toContain('DEWALT DPG22')
   })
 
@@ -180,15 +192,18 @@ describe('the approved sentences survive untouched', () => {
     }
   })
 
-  it('appends the sender signature and nothing else after the approved copy', async () => {
+  // 2026-10-07: the sender section is the sender's name (the approved sign-off)
+  // and their email on the line below — nothing else, and no shared signature.
+  it('ends with the sender’s name and email, and nothing else', async () => {
     const r = await composeStage({
       template: templateFor('initial', 'v1'),
       facts: facts() as never,
-      sender: { firstName: 'Mani', fullName: 'Mani', email: 'm@a.test', companyName: 'AltiusNxt', signature: 'AltiusNxt | altiusnxt.com' },
+      sender: { firstName: 'Mani', fullName: 'Mani Kandan', email: 'mani@altius.test', companyName: 'AltiusNxt', signature: 'AltiusNxt | altiusnxt.com' },
       inputs: {},
       initialSubject: null,
       tenantId: 't1',
     })
-    expect(r.body.trimEnd().endsWith('AltiusNxt | altiusnxt.com')).toBe(true)
+    expect(r.body.trimEnd().endsWith('\nMani\nmani@altius.test')).toBe(true)
+    expect(r.body).not.toContain('altiusnxt.com')
   })
 })

@@ -108,7 +108,7 @@ export const OUTREACH: ManualSection = {
     {
       kind: 'terms',
       items: [
-        { term: 'One company / Several companies (test run)', meaning: 'Two tabs at the top. "One company" is for real outreach. "Several companies" is a test run for up to 10 companies (see the next part of this manual).' },
+        { term: 'One company / Several companies', meaning: 'Two tabs at the top. "One company" works on one company at a time. "Several companies" sends the first email to up to 10 companies in one go (see the next part of this manual).' },
         { term: 'Step guide', meaning: 'Company → Decision maker → Email draft → Review & edit → Approve → Send → Follow-ups. The highlighted step is where this company is now.' },
         { term: 'Who we are emailing', meaning: 'The company, the decision maker, the address the email goes to ("Email goes to") and the email version.' },
         { term: 'Next step', meaning: 'Tells you exactly what to do now, with the button for it.' },
@@ -322,7 +322,7 @@ export const OUTREACH: ManualSection = {
         { term: 'Skipped', meaning: 'You chose to leave this step out.' },
         { term: 'Stopped — they replied', meaning: 'Cancelled because the customer replied.' },
         { term: 'Cancelled', meaning: 'Rejected, or the sequence was stopped.' },
-        { term: 'Scheduled / Failed', meaning: 'Only in test runs: waiting to go to the test inbox, or the test send did not go.' },
+        { term: 'Scheduled / Due now', meaning: 'In Several companies: the email has its time and is waiting for it, or its time has come and you can send it.' },
       ],
     },
     {
@@ -333,7 +333,7 @@ export const OUTREACH: ManualSection = {
     { kind: 'heading', text: 'What to do next' },
     {
       kind: 'text',
-      text: 'Check "Companies in outreach" each day — the most urgent company is at the top. To prepare first emails for several companies at once, use "Several companies (test run)".',
+      text: 'Check "Companies in outreach" each day — the most urgent company is at the top. To send first emails to several companies at once, use "Several companies".',
     },
   ],
 }
@@ -341,122 +341,97 @@ export const OUTREACH: ManualSection = {
 export const SEVERAL_COMPANIES: ManualSection = {
   id: 'several-companies',
   title: 'Several Companies',
-  summary: 'Prepare the first email for up to 10 companies at once, as a test run that only reaches our internal test inbox.',
+  summary: 'Send the first email to up to 10 companies in one go: choose them, check the addresses, set the schedule, review, send.',
   blocks: [
     { kind: 'heading', text: 'What it is' },
     {
       kind: 'text',
-      text: 'On the Outreach screen, the "Several companies (test run)" tab lets you prepare the first email for up to 10 companies at once — called a test batch. It is a rehearsal: the emails go only to our internal test inbox, never to the customers.',
+      text: 'On the Outreach screen, the "Several companies" tab sends the first email to up to 10 companies at once. There are no drafts to open one by one: you check every email on one Review screen, and Send approves them all.',
     },
-
-    { kind: 'heading', text: 'Why we use it' },
     {
       kind: 'text',
-      text: 'To prepare and check many emails quickly, see exactly how they would arrive, and rehearse the whole sequence of follow-ups before doing it for real.',
+      text: 'Each email is the approved Version 1, 2 or 3 word for word. Only the company name, the product name, the greeting name and your name and email are filled in — nothing else is written for you.',
     },
     {
       kind: 'warning',
-      text: 'The banner at the top shows the sending setting. "Email sending: OFF" means drafts can be created and approved, but nothing is delivered — not even to the test inbox. "TEST MODE" means approved test emails are delivered to the internal test inbox only. This is set on the server, not on the screen.',
+      text: 'The platform never emails a customer itself. When an email is due, you open it in Gmail, send it from your own mailbox, and click "Mark as sent".',
     },
 
-    { kind: 'heading', text: 'Step 1 — Choose the companies' },
+    { kind: 'heading', text: 'Step 1 — Companies and addresses' },
     {
       kind: 'steps',
       items: [
-        'Open Outreach, click the "Several companies (test run)" tab, then click "New test batch".',
-        'Under "1. Companies", use the search box ("Search by company, decision maker or email") to find companies.',
+        'Open Outreach, click the "Several companies" tab, then click "New send".',
+        'Use the search box to find companies, and tick the ones you want — up to 10.',
         'Check the "Goes to" address under each company. Change it if you know a better address.',
-        'Tick the companies you want — up to 10.',
+        'Click "Next: schedule".',
       ],
     },
     {
       kind: 'terms',
       items: [
-        { term: 'Goes to', meaning: 'The address that company’s email is for. Underneath it says where it came from: "from Decision Makers", "company mailbox", or "you typed this".' },
+        { term: 'Goes to', meaning: 'The address that company’s email goes to. Underneath it says where it came from: "from Decision Makers", "company mailbox", or "you typed this".' },
         { term: 'nothing was found — type one to include this company', meaning: 'No address was found. Type one to make the company selectable.' },
-        { term: '— No shortlisted decision maker.', meaning: 'No person was found for this company. You can still include it by typing an email address you found yourself. The email will start with "[Name]" — type the person’s name over it in the draft before approving.' },
+        { term: 'already in outreach; continue it under One company', meaning: 'This company already has outreach. Carry on with it in the "One company" tab.' },
       ],
-    },
-    {
-      kind: 'tip',
-      text: 'A company can only be ticked once its "Goes to" box holds a proper email address. Only companies that have been through Decision Makers are listed.',
     },
 
-    { kind: 'heading', text: 'Step 2 — Scheduling' },
-    {
-      kind: 'text',
-      text: 'Under "2. Schedule" you choose when approved emails may go out:',
-    },
+    { kind: 'heading', text: 'Step 2 — Schedule' },
     {
       kind: 'terms',
       items: [
-        { term: 'Batch name (optional)', meaning: 'A name to recognise the batch. Left empty, it is named with today’s date.' },
-        { term: 'First emails may go from (your local time)', meaning: 'The earliest time the first emails can be delivered.' },
-        { term: 'Sending time zone', meaning: 'The time zone for the sending hours, for example "America/New_York".' },
-        { term: 'Sending hours from … until', meaning: 'Emails only go out between these times, for example 09:00 to 17:00.' },
-        { term: 'Days', meaning: 'Which days emails may go out. Monday to Friday are ticked to begin with.' },
+        { term: 'Name (optional)', meaning: 'A name to recognise this send. Left empty, it is named with today’s date.' },
+        { term: 'First emails due from (your local time)', meaning: 'The earliest time the first email becomes due.' },
+        { term: 'Sending time zone', meaning: 'Pick from the list, for example "America/New York". The sending hours are in this time zone.' },
+        { term: 'Sending hours from … until', meaning: 'Emails only become due between these times, for example 09:00 to 17:00.' },
+        { term: 'Days', meaning: 'Which days emails may become due. Monday to Friday are ticked to begin with.' },
         { term: 'Minutes between companies', meaning: 'The gap between one company’s email and the next (1 to 240).' },
-        { term: 'At most per day', meaning: 'The most emails sent in one day (1 to 200).' },
+        { term: 'At most per day', meaning: 'The most emails due in one day (1 to 200).' },
       ],
-    },
-    {
-      kind: 'text',
-      text: 'Follow-up days are fixed by the approved templates (Day 9–10, 12–14, 16–18, 18–20) and cannot be changed here. A full rehearsal takes about 20 days.',
     },
     {
       kind: 'example',
-      text: 'You choose 5 companies, first emails from tomorrow at 09:00, 10 minutes apart. Once approved, the first goes at 09:00, the second at 09:10, the third at 09:20, and so on.',
+      text: 'You choose 5 companies, first emails due from tomorrow at 09:00, 10 minutes apart. The first is due at 09:00, the second at 09:10, the third at 09:20, and so on.',
     },
 
-    { kind: 'heading', text: 'Step 3 — Review and create' },
+    { kind: 'heading', text: 'Step 3 — Review and send' },
     {
       kind: 'steps',
       items: [
-        'Click "Review". You see the companies and the schedule in plain words.',
-        'Click "Change" to go back and fix anything, or "Create test batch" to go ahead.',
-        'Each company shows "Drafted" (its first email was prepared) or "Not drafted" with the reason.',
-        'Click "Open the batch".',
-      ],
-    },
-
-    { kind: 'heading', text: 'Step 4 — Approve each email' },
-    {
-      kind: 'text',
-      text: 'Creating the batch only prepares drafts. Nothing is sent until each email is approved.',
-    },
-    {
-      kind: 'steps',
-      items: [
-        'In the batch, click "Review" next to a company.',
-        'Open its email, check it, fill any gaps and approve it — exactly as in Outreach.',
-        'Repeat for each company. Click "Back to the test batch" to return.',
-      ],
-    },
-    {
-      kind: 'text',
-      text: 'Once approved, the email is "Scheduled" and is delivered to the internal test inbox at its planned time. Test emails are delivered automatically, so there is no "Mark as sent" in a test run. Follow-up drafts are prepared automatically when they come due — each still needs your approval.',
-    },
-
-    { kind: 'heading', text: 'The batch screen' },
-    {
-      kind: 'terms',
-      items: [
-        { term: 'Running', meaning: 'The batch is active.' },
-        { term: 'Pause / Resume', meaning: 'Pause holds everything until you click Resume.' },
-        { term: 'Cancel batch', meaning: 'Cancels every unsent email in the batch. This cannot be undone.' },
-        { term: 'Completed', meaning: 'Nothing is left to do.' },
-        { term: 'All batches', meaning: 'Back to the list of batches.' },
+        'Click "Next: review". Every company’s email is shown exactly as it will be sent: who it goes to, the version, the subject — and "Show the email" for the full text.',
+        'A company marked "Will not be sent" says why. If only the greeting name or the product name is missing, type it in "Greeting name" or "Product name" and click the button beside it.',
+        'Tick "I confirm the queries these emails describe were run for each company".',
+        'Click "Send". Each email is approved and given its time.',
       ],
     },
     {
       kind: 'tip',
-      text: 'A test run never counts as contact with the customer, and never changes their real outreach.',
+      text: 'Send approves the emails, so it needs an approver or an administrator.',
     },
 
-    { kind: 'heading', text: 'What to do next' },
+    { kind: 'heading', text: 'Step 4 — Send each email when it is due' },
+    {
+      kind: 'steps',
+      items: [
+        'Open the send. Each email shows "Scheduled" until its time, then "Due now — send it".',
+        'Click "Open in Gmail". The email opens with the address, subject and text filled in. Send it from your mailbox.',
+        'Click "Mark as sent".',
+      ],
+    },
     {
       kind: 'text',
-      text: 'Check the test inbox to see how the emails arrive. When you are happy, do the real outreach for each company from the "One company" tab.',
+      text: 'After that, the company continues under "One company": record replies there, and follow-ups come due on the approved timing (Day 9–10, 12–14, 16–18, 18–20).',
+    },
+
+    { kind: 'heading', text: 'The send screen' },
+    {
+      kind: 'terms',
+      items: [
+        { term: 'Pause / Resume', meaning: 'Pause stops emails showing as due until you click Resume.' },
+        { term: 'Cancel unsent emails', meaning: 'Cancels every email in this send that has not been sent. This cannot be undone.' },
+        { term: 'Needs attention', meaning: 'Something changed between Review and Send. Click "Open under One company" to finish that email there.' },
+        { term: 'Earlier test run', meaning: 'A test batch from before this screen changed. It can still be opened and read.' },
+      ],
     },
   ],
 }
@@ -530,15 +505,15 @@ export const TROUBLESHOOTING: ManualSection = {
       ],
     },
 
-    { kind: 'heading', text: 'Several Companies (test run)' },
+    { kind: 'heading', text: 'Several Companies' },
     {
       kind: 'terms',
       items: [
-        { term: 'I can’t tick a company', meaning: 'Its "Goes to" box needs a proper email address. Type one, or check for a typing mistake.' },
+        { term: 'I can’t tick a company', meaning: 'Its "Goes to" box needs a proper email address, or the company is already in outreach (continue it under One company).' },
         { term: 'A company I expected is not listed', meaning: 'Only companies that have been through Decision Makers are listed. Run Decision Makers for it first.' },
-        { term: 'Emails stay "Scheduled" and never arrive', meaning: 'Check the banner. If it says "Email sending: OFF", or the batch is paused, nothing is delivered.' },
-        { term: '"Approved — not scheduled"', meaning: 'No sending time was left within the allowed hours and days. Open the email and click "Schedule test".' },
-        { term: '"Not drafted" after creating a batch', meaning: 'The reason is shown next to the company. Fix it and include the company in a new batch.' },
+        { term: '"Will not be sent" on the Review screen', meaning: 'The reason is shown under the company. Fix it (for example type the greeting name), or leave it out — the others are still sent.' },
+        { term: 'The Send button is greyed out', meaning: 'Tick the confirmation first. Sending also needs an approver or an administrator.' },
+        { term: 'An email stays "Scheduled"', meaning: 'Its time has not come yet, or the send is paused. It shows "Due now" at its time.' },
       ],
     },
 

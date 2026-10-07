@@ -199,10 +199,142 @@ async function nextRotationVersion(tenantId: string): Promise<InitialVersion> {
   return [...INITIAL_VERSIONS].sort((a, b) => n(a) - n(b))[0]!
 }
 
+/**
+ * The versions the split-test rotation would give the next `n` companies, in
+ * order: each goes to the version with the fewest real prospects so far,
+ * counting the ones before it. Used by a several-company send, so the version
+ * shown at Review is the version created at Send.
+ */
+export async function planRotation(tenantId: string, n: number): Promise<InitialVersion[]> {
+  const counts = await prisma.outreachCampaign.groupBy({
+    by: ['initialVersion'],
+    where: { tenantId, flow: FLOW, isTest: false },
+    _count: { _all: true },
+  })
+  const tally = new Map(INITIAL_VERSIONS.map((v) => [v, counts.find((c) => c.initialVersion === v)?._count._all ?? 0]))
+  const out: InitialVersion[] = []
+  for (let i = 0; i < n; i++) {
+    const v = [...INITIAL_VERSIONS].sort((a, b) => tally.get(a)! - tally.get(b)!)[0]!
+    out.push(v)
+    tally.set(v, tally.get(v)! + 1)
+  }
+  return out
+}
+
+/** One company's first email as it would be sent — composed and checked, nothing written. */
+export interface InitialEmailPreview {
+  crmCompanyId: string
+  companyName: string
+  version: InitialVersion
+  recipientEmail: string | null
+  recipientEmailSource: 'sales_entered' | 'decision_maker' | 'company_mailbox' | null
+  decisionMaker: string | null
+  subject: string | null
+  body: string
+  /** Why it cannot be sent as it stands. Empty when it can. */
+  problems: string[]
+  /**
+   * The values Sales can type at Review when they are all that is missing:
+   * the greeting's [Name] (no named contact) and [Product] (no product was
+   * analysed). Empty when nothing is missing, or something else is wrong too.
+   */
+  fillable: Array<'name' | 'product'>
+}
+
+/**
+ * Composes a company's initial email exactly as Send would, and runs the same
+ * approval checks — with the batch's one confirmation counted as given — so a
+ * several-company send shows every email, and every problem, before anything
+ * is created.
+ */
+export async function previewInitialEmail(
+  actor: Actor,
+  crmCompanyId: string,
+  opts: { version: InitialVersion; recipientEmail?: string | null; name?: string | null; product?: string | null },
+  now = new Date(),
+): Promise<InitialEmailPreview> {
+  const base = { crmCompanyId, companyName: crmCompanyId, version: opts.version, recipientEmail: null, recipientEmailSource: null, decisionMaker: null, subject: null, body: '', fillable: [] as Array<'name' | 'product'> }
+  const existing = await prisma.outreachCampaign.findFirst({
+    where: { tenantId: actor.tenantId, crmCompanyId, flow: FLOW, isTest: false },
+    select: { id: true, companyName: true },
+  })
+  if (existing) {
+    return { ...base, companyName: existing.companyName ?? crmCompanyId, problems: ['This company is already in outreach — continue it under One company.'] }
+  }
+  // One company that cannot be read now (NXT Sales unreachable, say) is that
+  // company's problem, not the whole Review's.
+  let facts: ProspectFacts | null
+  try {
+    facts = await loadProspectFacts(actor.tenantId, crmCompanyId)
+  } catch (err) {
+    return { ...base, problems: [`This company could not be read just now (${(err as Error).message}). Try again in a moment.`] }
+  }
+  if (!facts) return { ...base, problems: ['Company not found.'] }
+  const typed = opts.recipientEmail?.trim() || null
+  const dm = facts.decisionMaker
+  const recipientEmail = typed ?? dm?.email ?? dm?.companyContactEmail?.email ?? null
+  const recipientEmailSource = typed ? 'sales_entered' : dm?.email ? 'decision_maker' : dm?.companyContactEmail ? 'company_mailbox' : null
+  const template = templateFor('initial', opts.version)
+  const sender = await readSenderFor(actor.tenantId, actor.crmUserId)
+  const inputs: MessageInputs = {
+    ...(opts.name?.trim() ? { name: opts.name.trim() } : {}),
+    ...(opts.product?.trim() ? { product: opts.product.trim() } : {}),
+  }
+  const composed = await composeStage({ template, facts, sender, inputs, initialSubject: null, tenantId: actor.tenantId, personalise: false })
+  const suppression = await checkSuppression({
+    tenantId: actor.tenantId,
+    crmCompanyId,
+    companyName: facts.companyName ?? '',
+    companyDomain: facts.companyDomain,
+    destination: recipientEmail,
+    channel: 'email',
+    campaignId: null,
+    openDealCheck: facts.discoveredCompanyId && facts.discoveredCompanyId === crmCompanyId ? 'skip' : 'enforce',
+  })
+  const gates = evaluateGates({
+    template,
+    stage: null,
+    actionStatus: 'draft',
+    subject: composed.subject,
+    body: composed.body,
+    inputs,
+    // The batch's one confirmation, which Send requires before anything is created.
+    attestations: template.attestations.map((a) => ({ key: a.key, statement: a.statement, byCrmUserId: actor.crmUserId, at: now.toISOString() })),
+    confirmedSkus: [],
+    recipientEmail,
+    campaignStatus: 'active',
+    sender,
+    suppression,
+    now,
+  })
+  const failing = gates.items.filter((i) => !i.ok)
+  const typeable = failing.length === 1 && failing[0]!.key === 'placeholders' && composed.unresolved.every((u) => u === 'name' || u === 'product')
+  const fillable = typeable ? (['name', 'product'] as const).filter((k) => composed.unresolved.includes(k)) : []
+  return {
+    crmCompanyId,
+    companyName: facts.companyName ?? crmCompanyId,
+    version: opts.version,
+    recipientEmail,
+    recipientEmailSource,
+    decisionMaker: dm?.fullName ?? null,
+    subject: composed.subject,
+    body: composed.body,
+    problems: failing.map((i) => (i.detail ? `${i.label}: ${i.detail}` : i.label)),
+    fillable,
+  }
+}
+
 export async function startSequence(
   actor: Actor,
   crmCompanyId: string,
-  opts: { version?: InitialVersion; isTest?: boolean; batchId?: string; recipientEmail?: string | null } = {},
+  opts: {
+    version?: InitialVersion
+    /** Who chose `version`: Sales (the default when one is given) or the split-test rotation, planned ahead for a batch. */
+    versionSource?: 'sales_override' | 'auto_rotation'
+    isTest?: boolean
+    batchId?: string
+    recipientEmail?: string | null
+  } = {},
 ) {
   const isTest = Boolean(opts.isTest)
   // A real sequence is one per company. A test campaign belongs to its batch,
@@ -260,7 +392,7 @@ export async function startSequence(
       status: 'active',
       flow: FLOW,
       initialVersion: version,
-      versionSource: opts.version ? 'sales_override' : 'auto_rotation',
+      versionSource: opts.version ? (opts.versionSource ?? 'sales_override') : 'auto_rotation',
       recipientEmail,
       recipientEmailSource,
       autoSendEnabled: false,
@@ -276,7 +408,7 @@ export async function startSequence(
     'started',
     'OutreachCampaign',
     campaignId,
-    `${isTest ? 'TEST ' : ''}Outreach started for ${facts.companyName} — Version ${version.slice(1)} (${opts.version ? 'chosen by Sales' : 'split-test rotation'})`,
+    `${isTest ? 'TEST ' : ''}Outreach started for ${facts.companyName} — Version ${version.slice(1)} (${opts.version && opts.versionSource !== 'auto_rotation' ? 'chosen by Sales' : 'split-test rotation'})`,
   )
 
   try {

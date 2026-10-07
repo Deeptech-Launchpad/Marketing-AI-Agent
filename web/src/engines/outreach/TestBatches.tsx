@@ -109,7 +109,7 @@ export function TestBatches({
       />
     )
   }
-  if (openId) return <BatchDetail batchId={openId} canOperate={canOperate} onBack={() => setOpenId(null)} onOpenCampaign={onOpenCampaign} />
+  if (openId) return <TestBatchDetail batchId={openId} canOperate={canOperate} onBack={() => setOpenId(null)} onOpenCampaign={onOpenCampaign} />
   return <BatchList canOperate={canOperate} onOpen={setOpenId} onNew={() => setCreating(true)} />
 }
 
@@ -530,7 +530,7 @@ function cellText(s: StageCell): { text: string; tone: 'ok' | 'warn' | 'danger' 
   return { text: st.label, tone: st.tone, when: s.window ? fmtWindow(s.window) : null }
 }
 
-function BatchDetail({
+export function TestBatchDetail({
   batchId,
   canOperate,
   onBack,

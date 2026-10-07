@@ -25,7 +25,16 @@ import {
   type Actor,
 } from '../../outreach/salesSequence/service.js'
 import { REPLY_CLASSES } from '../../outreach/salesSequence/stageMachine.js'
-import { MAX_BATCH_COMPANIES, batchCandidates, batchView, createTestBatch, listBatches, setBatchState } from '../../outreach/salesSequence/batches.js'
+import {
+  MAX_BATCH_COMPANIES,
+  batchCandidates,
+  batchView,
+  createSendBatch,
+  createTestBatch,
+  listBatches,
+  previewSendBatch,
+  setBatchState,
+} from '../../outreach/salesSequence/batches.js'
 import { transportStatus } from '../../outreach/salesSequence/sending/transport.js'
 import { audit } from '../../platform/audit.js'
 import { BadRequestError } from '../../platform/errors.js'
@@ -303,6 +312,44 @@ outreachSequenceRoutes.post(
   validateBody(CreateBatchBody),
   asyncHandler(async (req, res) => {
     res.status(201).json(await createTestBatch(actorOf(req), req.body as z.infer<typeof CreateBatchBody>))
+  }),
+)
+
+// ── Several companies: Review, then Send (2026-10-07) ───────────────────────
+
+const PreviewBatchBody = z
+  .object({
+    crmCompanyIds: z.array(z.string().min(1).max(100)).min(1).max(MAX_BATCH_COMPANIES),
+    recipients: z.record(z.string().min(1).max(100), z.string().trim().max(254)).optional(),
+    // A greeting name Sales typed for a company with no named contact.
+    names: z.record(z.string().min(1).max(100), z.string().trim().max(80)).optional(),
+    // A product name Sales typed for a company with no analysed product.
+    products: z.record(z.string().min(1).max(100), z.string().trim().max(160)).optional(),
+  })
+  .strict()
+
+outreachSequenceRoutes.post(
+  '/batches/preview',
+  requirePermission('operate'),
+  validateBody(PreviewBatchBody),
+  asyncHandler(async (req, res) => {
+    res.json(await previewSendBatch(actorOf(req), req.body as z.infer<typeof PreviewBatchBody>))
+  }),
+)
+
+const SendBatchBody = CreateBatchBody.extend({
+  names: z.record(z.string().min(1).max(100), z.string().trim().max(80)).optional(),
+  products: z.record(z.string().min(1).max(100), z.string().trim().max(160)).optional(),
+  confirmQueries: z.boolean(),
+}).strict()
+
+// Send approves every email in the batch, so it needs the approve permission.
+outreachSequenceRoutes.post(
+  '/batches/send',
+  requirePermission('approve'),
+  validateBody(SendBatchBody),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await createSendBatch(actorOf(req), req.body as z.infer<typeof SendBatchBody>))
   }),
 )
 

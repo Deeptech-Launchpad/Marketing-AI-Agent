@@ -94,6 +94,41 @@ const BATCH_VIEW = {
   ],
 }
 
+// A several-company send (2026-10-07): real, sent by the person when due.
+const SEND_BODY = 'Jane,\n\nAda here, from AltiusNxt.\n\nAda\nada@altius.test'
+const SEND_VIEW = {
+  batch: { ...BATCH, id: 'b3', name: 'October send', mode: 'manual' },
+  companies: [],
+  sending: SENDING_TEST,
+  emails: [
+    { campaignId: 'k1', crmCompanyId: 'c-acme', companyName: 'Acme Safety', recipientEmail: 'jane@acme.test', version: 'v1', actionId: 'x1', state: 'due', statusReason: null, scheduledAt: '2026-10-07T13:00:00.000Z', sentAt: null, subject: 'Who AI recommends instead of Acme Safety for Titan Hard Hat X200?', body: SEND_BODY },
+    { campaignId: 'k2', crmCompanyId: 'c-mailbox', companyName: 'Bonnici Stores Ltd', recipientEmail: 'info@bonnicistores.com', version: 'v2', actionId: 'x2', state: 'scheduled', statusReason: null, scheduledAt: '2026-10-08T13:10:00.000Z', sentAt: null, subject: 'Ran a test', body: 'Hi' },
+  ],
+}
+
+function previewFor(id: string, typed?: string, name?: string) {
+  const known: Record<string, { name: string; to: string | null }> = {
+    'c-acme': { name: 'Acme Safety', to: 'jane@acme.test' },
+    'c-mailbox': { name: 'Bonnici Stores Ltd', to: 'info@bonnicistores.com' },
+    'c-noemail': { name: 'Central Cleaning', to: null },
+    'c-none': { name: 'Nobody Inc', to: null },
+  }
+  const k = known[id] ?? { name: id, to: null }
+  const noName = id === 'c-none' && !name
+  return {
+    crmCompanyId: id,
+    companyName: k.name,
+    version: 'v1',
+    recipientEmail: typed ?? k.to,
+    recipientEmailSource: typed ? 'sales_entered' : 'decision_maker',
+    decisionMaker: null,
+    subject: `Who AI recommends instead of ${k.name} for Titan Hard Hat X200?`,
+    body: `${noName ? '[Name]' : name ?? 'Jane'},\n\nAda here, from AltiusNxt.`,
+    problems: noName ? ['Every placeholder is filled: Still unfilled: [Name].'] : [],
+    fillable: noName ? ['name'] : [],
+  }
+}
+
 const BODY = 'Jane,\n\nAda here, from AltiusNxt.\n\nThanks,\nAda'
 function testView(status: string) {
   return {
@@ -139,6 +174,14 @@ function stub(opts: { sending?: unknown; draftStatus?: string } = {}) {
     if (method === 'POST' && /\/batches$/.test(u)) {
       return json({ batchId: 'b2', created: 1, results: [{ crmCompanyId: 'c-acme', ok: true, campaignId: 'tc9', plannedAt: '2026-09-29T13:00:00.000Z', error: null }] }, 201)
     }
+    if (method === 'POST' && /\/batches\/preview$/.test(u)) {
+      const b = (init.body ? JSON.parse(String(init.body)) : {}) as { crmCompanyIds: string[]; recipients?: Record<string, string>; names?: Record<string, string> }
+      return json({ emails: b.crmCompanyIds.map((id) => previewFor(id, b.recipients?.[id], b.names?.[id])), sending: SENDING_TEST })
+    }
+    if (method === 'POST' && /\/batches\/send$/.test(u)) {
+      const b = (init.body ? JSON.parse(String(init.body)) : {}) as { crmCompanyIds: string[] }
+      return json({ batchId: 'b3', scheduled: b.crmCompanyIds.length, results: b.crmCompanyIds.map((id) => ({ crmCompanyId: id, companyName: id, ok: true, scheduledAt: '2026-10-08T13:00:00.000Z', error: null })) }, 201)
+    }
     if (method === 'POST' && /\/test-send$/.test(u)) return json({ status: 'accepted', to: ['sam@altius.test'], transport: 'capture', error: null })
     if (method === 'POST') return json({ ok: true })
     if (/\/outreach\/sequence\/sending$/.test(u)) return json(opts.sending ?? SENDING_TEST)
@@ -151,11 +194,21 @@ function stub(opts: { sending?: unknown; draftStatus?: string } = {}) {
           { crmCompanyId: 'c-mailbox', companyName: 'Bonnici Stores Ltd', companyDomain: 'bonnicistores.com', decisionMaker: { fullName: 'David Bonnici', title: null }, intendedRecipient: 'info@bonnicistores.com', recipientSource: 'company_mailbox', ready: true, reason: null },
           { crmCompanyId: 'c-noemail', companyName: 'Central Cleaning', companyDomain: 'centralcleaning.com.au', decisionMaker: { fullName: 'Joe Camilleri', title: null }, intendedRecipient: null, recipientSource: null, ready: false, reason: 'No email for the decision maker and no verified company mailbox.' },
           { crmCompanyId: 'c-none', companyName: 'Nobody Inc', companyDomain: null, decisionMaker: null, intendedRecipient: null, recipientSource: null, ready: false, reason: 'No shortlisted decision maker.' },
+          { crmCompanyId: 'c-busy', companyName: 'Busy Corp', companyDomain: 'busy.test', decisionMaker: { fullName: 'Bo Busy', title: null }, intendedRecipient: 'bo@busy.test', recipientSource: 'decision_maker', ready: true, reason: null, inOutreach: true },
         ],
       })
     }
+    if (/\/batches\/b3$/.test(u)) return json(SEND_VIEW)
     if (/\/batches\/b\d$/.test(u)) return json(BATCH_VIEW)
-    if (/\/batches$/.test(u)) return json({ batches: [{ ...BATCH, companies: 1, counts: { awaitingApproval: 0, scheduled: 1, sent: 0, failed: 0 } }], sending: SENDING_TEST })
+    if (/\/batches$/.test(u)) {
+      return json({
+        batches: [
+          { ...SEND_VIEW.batch, companies: 2, counts: { scheduled: 1, sent: 0, due: 1 } },
+          { ...BATCH, companies: 1, counts: { awaitingApproval: 0, scheduled: 1, sent: 0, failed: 0 } },
+        ],
+        sending: SENDING_TEST,
+      })
+    }
     if (/\/outreach\/sequence\/companies\/[^/?]+\?campaign=tc1$/.test(u)) return json(testView(opts.draftStatus ?? 'scheduled'))
     if (/\/outreach\/sequence\/companies\//.test(u)) return json({ ...testView('draft'), campaign: null, sequence: null, drafts: [] })
     return json({ error: { code: 'not_found', message: 'none' } }, 404)
@@ -170,8 +223,8 @@ const noSendControl = () => {
 
 async function openTestCampaign() {
   render(<Outreach />)
-  await userEvent.click(await screen.findByRole('button', { name: /^several companies \(test run\)$/i }))
-  await userEvent.click(await screen.findByRole('button', { name: /^open$/i }))
+  await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+  await userEvent.click(within((await screen.findByText('Ohio rehearsal')).closest('tr')!).getByRole('button', { name: /^open$/i }))
   await userEvent.click(await screen.findByRole('button', { name: /^review$/i }))
   await userEvent.click((await screen.findAllByRole('button', { name: /^open$/i }))[0]!)
   return screen.findByRole('dialog')
@@ -201,48 +254,122 @@ describe('test batches', () => {
   it('lists batches and shows each company’s emails step by step', async () => {
     stub()
     render(<Outreach />)
-    await userEvent.click(await screen.findByRole('button', { name: /^several companies \(test run\)$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
     expect(await screen.findByText('Ohio rehearsal')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /^open$/i }))
+    await userEvent.click(within((await screen.findByText('Ohio rehearsal')).closest('tr')!).getByRole('button', { name: /^open$/i }))
     const table = await screen.findByRole('table')
     expect(within(table).getByText('Scheduled')).toBeInTheDocument()
     expect(within(table).getByText(/intended for jane@acme\.test \(not emailed\)/i)).toBeInTheDocument()
     noSendControl()
   })
 
-  it('creates a batch only from ready companies, with the schedule, after a review step', async () => {
+  it('still opens an earlier test run, read-only', async () => {
     stub()
     render(<Outreach />)
-    await userEvent.click(await screen.findByRole('button', { name: /^several companies \(test run\)$/i }))
-    await userEvent.click(await screen.findByRole('button', { name: /new test batch/i }))
-    const boxes = await screen.findAllByRole('checkbox', { name: /acme safety|nobody inc/i })
-    expect(boxes.find((b) => /nobody/i.test(b.closest('label')!.textContent ?? ''))).toBeDisabled()
-    await userEvent.click(boxes.find((b) => /acme/i.test(b.closest('label')!.textContent ?? ''))!)
-    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
-    expect(posts()).toHaveLength(0)
-    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
-    await waitFor(() => expect(posts().some((c) => /\/outreach\/sequence\/batches$/.test(c.url))).toBe(true))
-    const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
-    expect(body).toMatchObject({ crmCompanyIds: ['c-acme'], timezone: 'America/New_York', sendDays: [1, 2, 3, 4, 5], sendStart: '09:00', sendEnd: '17:00', spacingMinutes: 10, dailyCap: 20 })
-    expect(await screen.findByText(/test batch created/i)).toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+    expect(await screen.findByText('Earlier test run')).toBeInTheDocument()
+  })
+})
+
+// SEVERAL COMPANIES (2026-10-07): select → addresses → schedule → review → send.
+describe('sending to several companies', () => {
+  const toReview = async (pick: RegExp[] = [/acme safety/i]) => {
+    stub()
+    render(<Outreach />)
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /new send/i }))
+    for (const re of pick) await userEvent.click(await screen.findByRole('checkbox', { name: re }))
+    await userEvent.click(screen.getByRole('button', { name: /next: schedule/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
+    await screen.findByText(/I confirm the queries/i)
+  }
+
+  it('shows every email exactly as it will be sent, with no draft screens, before anything is created', async () => {
+    await toReview([/acme safety/i, /bonnici/i])
+    expect(posts().some((c) => /\/batches\/send$/.test(c.url))).toBe(false)
+    expect(screen.getAllByText(/who ai recommends instead of/i)).toHaveLength(2)
+    expect(screen.getAllByText('Ready')).toHaveLength(2)
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  // 2026-10-07: the time zone was free text and could be left empty.
+  it('sends only after the one confirmation, with the schedule and the version shown', async () => {
+    await toReview([/acme safety/i, /bonnici/i])
+    const send = screen.getByRole('button', { name: /^send 2 emails$/i })
+    expect(send).toBeDisabled()
+    await userEvent.click(screen.getByRole('checkbox', { name: /i confirm the queries/i }))
+    await userEvent.click(send)
+    await waitFor(() => expect(posts().some((c) => /\/batches\/send$/.test(c.url))).toBe(true))
+    const body = posts().find((c) => /\/batches\/send$/.test(c.url))!.body as Record<string, unknown>
+    expect(body).toMatchObject({ crmCompanyIds: ['c-acme', 'c-mailbox'], timezone: 'America/New_York', sendDays: [1, 2, 3, 4, 5], sendStart: '09:00', sendEnd: '17:00', spacingMinutes: 10, dailyCap: 20, confirmQueries: true })
+    expect(await screen.findByText(/sent to the schedule/i)).toBeInTheDocument()
+  })
+
   it('picks the sending time zone from a list, and sends the one chosen', async () => {
     stub()
     render(<Outreach />)
-    await userEvent.click(await screen.findByRole('button', { name: /^several companies \(test run\)$/i }))
-    await userEvent.click(await screen.findByRole('button', { name: /new test batch/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /new send/i }))
+    await userEvent.click(await screen.findByRole('checkbox', { name: /acme safety/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: schedule/i }))
     const zone = (await screen.findByText('Sending time zone')).closest('label')!.querySelector('select')!
     expect(zone.value).toBe('America/New_York')
     expect(within(zone).getByRole('option', { name: /^America\/New York \(UTC/ })).toBeInTheDocument()
     await userEvent.selectOptions(zone, 'Asia/Kolkata')
-    const boxes = await screen.findAllByRole('checkbox', { name: /acme safety/i })
-    await userEvent.click(boxes[0]!)
-    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
-    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
-    await waitFor(() => expect(posts().some((c) => /\/outreach\/sequence\/batches$/.test(c.url))).toBe(true))
-    expect((posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>).timezone).toBe('Asia/Kolkata')
+    await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
+    await userEvent.click(await screen.findByRole('checkbox', { name: /i confirm the queries/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^send 1 email$/i }))
+    await waitFor(() => expect(posts().some((c) => /\/batches\/send$/.test(c.url))).toBe(true))
+    expect((posts().find((c) => /\/batches\/send$/.test(c.url))!.body as Record<string, unknown>).timezone).toBe('Asia/Kolkata')
+  })
+
+  it('leaves out a company whose email cannot be sent, says why, and lets the greeting name be typed', async () => {
+    stub()
+    render(<Outreach />)
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /new send/i }))
+    await userEvent.type(await screen.findByLabelText(/email address for Nobody Inc/i), 'buyer@nobody.test')
+    await userEvent.click(screen.getByRole('checkbox', { name: /nobody inc/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /acme safety/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: schedule/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
+    expect(await screen.findByText('Will not be sent')).toBeInTheDocument()
+    expect(screen.getByText(/still unfilled: \[name\]/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^send 1 email$/i })).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText(/greeting name for Nobody Inc/i), 'Pat')
+    await userEvent.click(screen.getByRole('button', { name: /use this name/i }))
+    await waitFor(() => expect(screen.queryByText('Will not be sent')).toBeNull())
+    const lastPreview = posts().filter((c) => /\/batches\/preview$/.test(c.url)).pop()!.body as Record<string, unknown>
+    expect(lastPreview.names).toEqual({ 'c-none': 'Pat' })
+    expect(screen.getByRole('button', { name: /^send 2 emails$/i })).toBeInTheDocument()
+  })
+
+  it('will not offer a company already in outreach', async () => {
+    stub()
+    render(<Outreach />)
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /new send/i }))
+    expect(await screen.findByRole('checkbox', { name: /busy corp/i })).toBeDisabled()
+    expect(screen.getByText(/already in outreach; continue it under one company/i)).toBeInTheDocument()
+  })
+
+  it('when an email is due, opens it in Gmail and marks it sent — the platform sends nothing itself', async () => {
+    stub()
+    render(<Outreach />)
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+    await userEvent.click((await screen.findAllByRole('button', { name: /^open$/i }))[0]!)
+    const table = await screen.findByRole('table')
+    const dueRow = within(table).getByText('Acme Safety').closest('tr')!
+    const gmail = within(dueRow).getByRole('link', { name: /open in gmail/i })
+    expect(gmail.getAttribute('href')).toMatch(/^https:\/\/mail\.google\.com\/mail\/\?view=cm/)
+    expect(gmail.getAttribute('href')).toContain(encodeURIComponent('jane@acme.test'))
+    await userEvent.click(within(dueRow).getByRole('button', { name: /mark as sent/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/sequence/actions/x1/mark-sent'))).toBe(true))
+
+    const laterRow = within(table).getByText('Bonnici Stores Ltd').closest('tr')!
+    expect(within(laterRow).getByText('Scheduled')).toBeInTheDocument()
+    expect(within(laterRow).queryByRole('link', { name: /open in gmail/i })).toBeNull()
+    expect(within(laterRow).queryByRole('button', { name: /mark as sent/i })).toBeNull()
   })
 })
 
@@ -253,9 +380,18 @@ describe('choosing companies for a batch', () => {
   const openPicker = async () => {
     stub()
     render(<Outreach />)
-    await userEvent.click(await screen.findByRole('button', { name: /^several companies \(test run\)$/i }))
-    await userEvent.click(await screen.findByRole('button', { name: /new test batch/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /^several companies$/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /new send/i }))
     await screen.findByLabelText(/search companies/i)
+  }
+
+  /** Schedule, review, confirm, Send — and wait for the send. */
+  const sendChosen = async () => {
+    await userEvent.click(screen.getByRole('button', { name: /next: schedule/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
+    await userEvent.click(await screen.findByRole('checkbox', { name: /i confirm the queries/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^send \d+ emails?$/i }))
+    await waitFor(() => expect(posts().some((c) => /\/batches\/send$/.test(c.url))).toBe(true))
   }
 
   it('narrows the list by company name', async () => {
@@ -298,11 +434,8 @@ describe('choosing companies for a batch', () => {
     await userEvent.clear(box)
     await userEvent.type(box, 'purchasing@acme.test')
     await userEvent.click(screen.getByRole('checkbox', { name: /acme safety/i }))
-    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
-    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
-
-    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
-    const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
+    await sendChosen()
+    const body = posts().find((c) => /\/batches\/send$/.test(c.url))!.body as Record<string, unknown>
     expect(body.crmCompanyIds).toEqual(['c-acme'])
     expect(body.recipients).toEqual({ 'c-acme': 'purchasing@acme.test' })
   })
@@ -310,11 +443,8 @@ describe('choosing companies for a batch', () => {
   it('sends no recipients at all when nothing was retyped', async () => {
     await openPicker()
     await userEvent.click(screen.getByRole('checkbox', { name: /acme safety/i }))
-    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
-    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
-
-    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
-    expect((posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>).recipients).toBeUndefined()
+    await sendChosen()
+    expect((posts().find((c) => /\/batches\/send$/.test(c.url))!.body as Record<string, unknown>).recipients).toBeUndefined()
   })
 
   it('lets a typed address bring in a company no address was found for', async () => {
@@ -328,11 +458,8 @@ describe('choosing companies for a batch', () => {
     expect(screen.getByRole('checkbox', { name: /central cleaning/i })).toBeEnabled()
 
     await userEvent.click(screen.getByRole('checkbox', { name: /central cleaning/i }))
-    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
-    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
-
-    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
-    const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
+    await sendChosen()
+    const body = posts().find((c) => /\/batches\/send$/.test(c.url))!.body as Record<string, unknown>
     expect(body.crmCompanyIds).toEqual(['c-noemail'])
     expect(body.recipients).toEqual({ 'c-noemail': 'joe@centralcleaning.com.au' })
   })
@@ -368,13 +495,18 @@ describe('choosing companies for a batch', () => {
     await openPicker()
     await userEvent.type(screen.getByLabelText(/email address for Nobody Inc/i), 'buyer@nobody.test')
     await userEvent.click(screen.getByRole('checkbox', { name: /nobody inc/i }))
-    await userEvent.click(screen.getByRole('button', { name: /^review$/i }))
-    await userEvent.click(screen.getByRole('button', { name: /create test batch/i }))
-
-    await waitFor(() => expect(posts().some((c) => /\/batches$/.test(c.url))).toBe(true))
-    const body = posts().find((c) => /\/batches$/.test(c.url))!.body as Record<string, unknown>
+    await userEvent.click(screen.getByRole('button', { name: /next: schedule/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
+    // No named contact: the greeting name is typed at Review, then it can be sent.
+    await userEvent.type(await screen.findByLabelText(/greeting name for Nobody Inc/i), 'Pat')
+    await userEvent.click(screen.getByRole('button', { name: /use this name/i }))
+    await userEvent.click(await screen.findByRole('checkbox', { name: /i confirm the queries/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /^send 1 email$/i }))
+    await waitFor(() => expect(posts().some((c) => /\/batches\/send$/.test(c.url))).toBe(true))
+    const body = posts().find((c) => /\/batches\/send$/.test(c.url))!.body as Record<string, unknown>
     expect(body.crmCompanyIds).toEqual(['c-none'])
     expect(body.recipients).toEqual({ 'c-none': 'buyer@nobody.test' })
+    expect(body.names).toEqual({ 'c-none': 'Pat' })
   })
 })
 

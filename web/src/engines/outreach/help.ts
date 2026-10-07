@@ -89,9 +89,9 @@ export const HELP = {
     next: 'Open any email to see what it needs.',
   },
   batches: {
-    title: 'Several companies (test run)',
-    what: 'Drafts the first email for up to 10 companies at once. Each email still needs its own approval. In test mode they go only to the internal test inbox.',
-    next: 'Choose companies, set the schedule, then approve each draft.',
+    title: 'Several companies',
+    what: 'Sends the first email to up to 10 companies at once — the approved copy with only the names filled in. One Review screen and one Send; no drafts to open. When each email is due you send it from your own mailbox.',
+    next: 'Choose companies, check the addresses, set the schedule, review, then Send.',
   },
 } satisfies Record<string, Help>
 

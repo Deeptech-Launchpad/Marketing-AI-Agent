@@ -1,6 +1,3 @@
-import { z } from 'zod'
-import { getLlm } from '../../llm/index.js'
-import { logger } from '../../platform/logger.js'
 import { findUnsupportedClaims } from '../../websiteaudit/claimGuard.js'
 import type { Fact, ProspectFacts } from './facts.js'
 import type { MessageInputs } from './gates.js'
@@ -26,18 +23,20 @@ import { EXPO, PRODUCT_PAGE_LINE, type StageKey, type StageTemplate } from './te
 //      or from Settings (the sender). One with no source stays visibly
 //      unfilled — "[Product]" — and blocks approval until Sales fills it.
 //
-//   2. CHOOSE THE PRODUCT WORD. A model picks a short, natural term for
-//      [Product] — "safety helmets" rather than "DEWALT DPG22 Type II Class E
-//      Safety Helmet" — and that term must appear WORD FOR WORD in the
-//      verified product facts or it is thrown away. It writes nothing.
+//   2. NO MODEL AT ALL (2026-10-07). [Product] is the product's name exactly
+//      as the company's own product page states it, and [Company] the
+//      company's name — Sales asked for the approved copy with only those
+//      replaced, so the model that used to pick a shorter product word is no
+//      longer called. The sign-off is the sender's name, with their email on
+//      the line below; nothing else is added.
 //
 // NO AI-WRITTEN SENTENCE EVER REACHES THE EMAIL (2026-09-30).
 //
 // The model used to be allowed one personal line, inserted between two
 // approved paragraphs and marked as AI-added. Sales asked for it to go: an
 // outreach email is now the approved copy and nothing else. Every sentence a
-// customer reads was written by Sales; the model's only remaining job is to
-// decide which of the company's own words fills a placeholder.
+// customer reads was written by Sales, and (since 2026-10-07) no model is
+// involved in composing an email at all.
 
 // Sales asked for the AI's personal line to be removed, so there is no slot
 // for one any more. The shape below is kept on the stored personalisation so
@@ -48,15 +47,6 @@ const NO_AI_LINE: AiLine = {
   factIds: [],
   reason: 'Personal lines are switched off — every sentence is the approved copy.',
 }
-
-const PersonalizeOut = z.object({
-  productTerm: z.string().nullable().optional(),
-  productCategoryTerm: z.string().nullable().optional(),
-  line: z
-    .object({ text: z.string(), factIds: z.array(z.string()).max(4) })
-    .nullable()
-    .optional(),
-})
 
 export interface Resolution {
   placeholder: PlaceholderKey
@@ -151,58 +141,15 @@ export function checkLine(
   return { ok: true }
 }
 
-function productSources(facts: ProspectFacts): string[] {
-  return [facts.product?.name, facts.product?.category].filter((s): s is string => Boolean(s))
-}
-
 export async function composeStage(input: ComposeInput): Promise<ComposeResult> {
   const { template, facts, sender, inputs } = input
   const used = new Set([...placeholdersIn(template.subject), ...placeholdersIn(template.body)])
   const resolution: Resolution[] = []
-  let model: string | null = null
 
-  // ── 2 (first, because 1 needs its product term). Choosing the word. ────
-  let aiTerm: string | null = null
-  let aiCategory: string | null = null
+  // No model is called: the email is the approved copy with its placeholders
+  // filled, and nothing else (2026-10-07).
   const aiLine: AiLine = NO_AI_LINE
-  const wantsProduct = used.has('product') || used.has('productCategory')
-  // Only worth a model call when the email actually has a product placeholder
-  // AND there is a verified product for a term to come from.
-  const personalise = input.personalise !== false && wantsProduct && Boolean(facts.product)
-  if (personalise) {
-    try {
-      const result = await getLlm().generate({
-        promptKey: 'outreach.personalize_stage',
-        variables: {
-          stageLabel: `${template.pdfRef} ${template.label}`,
-          approvedBody: template.body,
-          // Never. The model chooses a word; it does not write a sentence.
-          allowLine: 'no',
-          productName: facts.product?.name ?? '(none)',
-          productCategory: facts.product?.category ?? '(none)',
-          facts: facts.facts.map((f) => `${f.id} | ${f.label}: ${f.value}`).join('\n') || '(none)',
-        },
-        schema: PersonalizeOut,
-        feature: 'outreach.sales_sequence',
-        tenantId: input.tenantId,
-      })
-      model = result.model
-      const out = PersonalizeOut.safeParse(result.data)
-      if (out.success) {
-        const sources = productSources(facts)
-        // A term is taken only if the company's own verified product data
-        // contains it word for word. Anything the model made up is dropped.
-        if (out.data.productTerm && appearsIn(out.data.productTerm, sources)) aiTerm = out.data.productTerm.trim()
-        if (out.data.productCategoryTerm && appearsIn(out.data.productCategoryTerm, sources)) aiCategory = out.data.productCategoryTerm.trim()
-        // out.data.line is ignored on purpose: nothing the model writes goes
-        // into an email any more.
-      }
-    } catch (err) {
-      // Nothing is lost that a person cannot supply: [Product] simply stays
-      // visible and unfilled, and Sales types the word before approving.
-      logger.info({ err: (err as Error).message, stage: template.key }, 'product term step failed; the approved copy is filled without it')
-    }
-  }
+  const model: string | null = null
 
   // ── 1. Fill every placeholder from a verified source ───────────────────
   const values: PlaceholderValues = {}
@@ -218,13 +165,11 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
   set('companyOrProduct', company, 'Company record', 'company.name')
 
   const leaf = categoryLeaf(facts.product?.category)
+  // The product's own name, exactly as its product page states it.
   if (inputs.product?.trim()) set('product', inputs.product, 'Entered by Sales')
-  else if (aiTerm) set('product', aiTerm, 'Product page analysed in Prospects (term chosen by AI, checked word for word)', 'product.name')
-  else if (leaf) set('product', leaf, 'Product category from the analysed product page', 'product.category')
-  else set('product', facts.product?.name ?? null, 'Product page analysed in Prospects', facts.product ? 'product.name' : null)
+  else set('product', facts.product?.name ?? null, 'Product name as the company’s product page states it', facts.product ? 'product.name' : null)
 
   if (inputs.productCategory?.trim()) set('productCategory', inputs.productCategory, 'Entered by Sales')
-  else if (aiCategory) set('productCategory', aiCategory, 'Product page analysed in Prospects (term chosen by AI, checked word for word)', 'product.category')
   else set('productCategory', leaf, 'Product category from the analysed product page', leaf ? 'product.category' : null)
 
   set('clientCompanyName', inputs.clientCompanyName ?? null, 'Entered by Sales')
@@ -254,9 +199,10 @@ export async function composeStage(input: ComposeInput): Promise<ComposeResult> 
   }
 
   // The approved copy with its placeholders filled, and nothing inserted into
-  // it. The signature is the sender's own, from Settings.
+  // it. Under the sign-off (the sender's name), the sender's own email —
+  // the person who sends it (2026-10-07). Nothing else is added.
   let body = fill(approvedBody, values)
-  if (sender.signature.trim()) body = `${body}\n${sender.signature.trim()}`
+  if (sender.email.trim()) body = `${body}\n${sender.email.trim()}`
 
   const subject = template.subject
     ? fill(template.subject, values)

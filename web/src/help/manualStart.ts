@@ -26,7 +26,7 @@ export const GETTING_STARTED: ManualSection = {
         'Intent Signals — look for signs the company may need us.',
         'Decision Makers — find the right person to contact.',
         'Outreach — prepare, check, approve and send the emails.',
-        'Several Companies — do the first email for up to 10 companies at once (a test run).',
+        'Several Companies — send the first email to up to 10 companies at once.',
       ],
     },
     {

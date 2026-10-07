@@ -14,7 +14,7 @@ import { ReplyPanel } from './outreach/ReplyPanel'
 import { CallPointsPanel } from './outreach/CallPointsPanel'
 import { ProspectList } from './outreach/ProspectList'
 import { useCall } from './outreach/useCall'
-import { TestBatches } from './outreach/TestBatches'
+import { SendBatches } from './outreach/SendBatches'
 import { InfoTip } from './outreach/InfoTip'
 import { STATUS_LEGEND, emailStatus } from './outreach/status'
 import {
@@ -143,7 +143,7 @@ export function Outreach() {
                   One company
                 </button>
                 <button type="button" className="otr-seg__btn" aria-pressed={tab === 'batches'} onClick={() => setTab('batches')}>
-                  Several companies (test run)
+                  Several companies
                 </button>
               </div>
               <InfoTip topic={tab === 'batches' ? 'batches' : 'outreach'} />
@@ -154,10 +154,17 @@ export function Outreach() {
             {call.error && <ErrorState error={new Error(call.error)} what="That outreach step did not complete" />}
 
             {tab === 'batches' && !testCampaign && (
-              <TestBatches
+              <SendBatches
                 sending={sending}
                 canOperate={canOperate}
-                onOpenCampaign={(c) => {
+                canApprove={canApprove}
+                onOpenCompany={(c) => {
+                  // A company from a several-company send continues under One company.
+                  setOpenDraftId(null)
+                  select?.({ crmCompanyId: c.crmCompanyId, companyName: c.companyName })
+                  setTab('sequences')
+                }}
+                onOpenTestCampaign={(c) => {
                   setOpenDraftId(null)
                   setTestCampaign(c)
                 }}

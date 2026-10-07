@@ -135,7 +135,8 @@ describe('starting outreach', () => {
     const r = await svc.startSequence(actor, 'c1')
     expect(r.created).toBe(true)
     const m = messageOf(initialAction().id)
-    expect(m.subject).toBe('Who AI recommends instead of Acme Safety for Hard Hat?')
+    // The product's own name, exactly as its page states it — no model picks a shorter word (2026-10-07).
+    expect(m.subject).toBe('Who AI recommends instead of Acme Safety for Titan Hard Hat X200?')
     expect(m.body).toMatch(/^Jane,\n\nAda here, from AltiusNxt\./)
     expect(m.body).toContain("Acme Safety wasn't the one recommended. Two other suppliers were.")
     expect(initialAction().status).toBe('draft')

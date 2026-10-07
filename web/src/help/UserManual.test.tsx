@@ -202,9 +202,10 @@ describe('what the manual covers', () => {
     ['outreach', /Day 9–10/],
     ['outreach', /Confirm reading/],
     ['outreach', /Waiting for approval/],
-    ['several-companies', /New test batch/],
+    ['several-companies', /New send/],
     ['several-companies', /Minutes between companies/],
-    ['several-companies', /No shortlisted decision maker/],
+    ['several-companies', /Greeting name/],
+    ['several-companies', /Open in Gmail/],
     ['getting-started', /\(i\)/],
     ['getting-started', /Create account/],
   ]

@@ -277,3 +277,13 @@
 
 .otr-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s1); }
 .otr-steps { margin: 0 0 var(--s3); padding-left: 1.2em; font-size: var(--fs-sm); line-height: 1.6; }
+
+/* Several companies: steps, and the review of every email (2026-10-07) */
+.otr-wizard { list-style: none; display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0 0 var(--s3); padding: 0; font-size: var(--fs-sm); }
+.otr-wizard li { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--text-soft); }
+.otr-wizard li.is-current { border-color: var(--accent); color: var(--text); font-weight: 600; }
+.otr-review { display: grid; gap: var(--s2); margin-top: var(--s2); }
+.otr-review__email { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s2) var(--s3); display: grid; gap: 4px; background: var(--bg-panel); }
+.otr-review__email.is-blocked { border-color: var(--danger-line); }
+.otr-review__email p { margin: 0; font-size: var(--fs-sm); }
+.otr-review__body { white-space: pre-wrap; font-family: var(--font-ui); font-size: var(--fs-sm); line-height: 1.55; margin: var(--s2) 0 0; padding: var(--s2); background: var(--bg-inset); border-radius: var(--r-sm); max-height: 360px; overflow: auto; color: var(--text); }
