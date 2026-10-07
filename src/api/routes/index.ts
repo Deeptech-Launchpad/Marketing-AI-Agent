@@ -16,6 +16,7 @@ import { crmSyncRoutes } from './crmSync.routes.js'
 import { salesQualificationRoutes } from './salesQualification.routes.js'
 import { outreachRoutes } from './outreach.routes.js'
 import { outreachSequenceRoutes } from './outreachSequence.routes.js'
+import { bulkEmailRoutes } from './bulkEmail.routes.js'
 import { prospectRoutes } from './prospects.routes.js'
 import { companyDiscoveryRoutes } from './companyDiscovery.routes.js'
 import { crmLeadsRoutes } from './crmLeads.routes.js'
@@ -73,6 +74,7 @@ apiRoutes.use('/website-audit', auditApprovalRoutes)
 apiRoutes.use('/website-audit', workbenchRoutes)
 // The Sales-approved sequence, mounted before the legacy routes it sits beside.
 apiRoutes.use('/outreach/sequence', outreachSequenceRoutes)
+apiRoutes.use('/outreach/bulk', bulkEmailRoutes)
 apiRoutes.use('/outreach', outreachRoutes)
 apiRoutes.use('/engagement', engagementRoutes)
 apiRoutes.use('/intent-score', intentScoreRoutes)

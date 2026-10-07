@@ -59,13 +59,14 @@ export interface TimeZoneOption {
 }
 
 /** Common zones first, then every other zone the browser knows, A–Z. */
-export function timeZoneOptions(at: Date = new Date()): { common: TimeZoneOption[]; others: TimeZoneOption[] } {
+export function timeZoneOptions(at: Date = new Date(), pinned: string[] = []): { common: TimeZoneOption[]; others: TimeZoneOption[] } {
   const supported = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.('timeZone') ?? []
   const label = (z: string) => {
     const off = offsetOf(z, at)
     return `${z.replace(/_/g, ' ')}${off ? ` (${off})` : ''}`
   }
-  const common = COMMON.filter(isZone)
+  // `pinned` goes first (Bulk email pins Indianapolis); the list is otherwise unchanged.
+  const common = [...new Set([...pinned, ...COMMON])].filter(isZone)
   const others = supported.filter((z) => !common.includes(z) && isZone(z)).sort()
   return {
     common: common.map((value) => ({ value, label: label(value) })),

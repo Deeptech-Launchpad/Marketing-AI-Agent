@@ -15,6 +15,7 @@ import { CallPointsPanel } from './outreach/CallPointsPanel'
 import { ProspectList } from './outreach/ProspectList'
 import { useCall } from './outreach/useCall'
 import { SendBatches } from './outreach/SendBatches'
+import { BulkEmail } from './outreach/BulkEmail'
 import { InfoTip } from './outreach/InfoTip'
 import { STATUS_LEGEND, emailStatus } from './outreach/status'
 import {
@@ -72,7 +73,7 @@ export function Outreach() {
   const canOperate = can('operate')
   const canApprove = can('approve')
 
-  const [tab, setTab] = useState<'sequences' | 'batches'>('sequences')
+  const [tab, setTab] = useState<'sequences' | 'batches' | 'bulk'>('sequences')
   const [testCampaign, setTestCampaign] = useState<{ crmCompanyId: string; companyName: string; campaignId: string } | null>(null)
   // In the test view, the company workspace shows one TEST campaign; otherwise
   // the selected company's real sequence.
@@ -145,13 +146,18 @@ export function Outreach() {
                 <button type="button" className="otr-seg__btn" aria-pressed={tab === 'batches'} onClick={() => setTab('batches')}>
                   Several companies
                 </button>
+                <button type="button" className="otr-seg__btn" aria-pressed={tab === 'bulk'} onClick={() => setTab('bulk')}>
+                  Bulk email
+                </button>
               </div>
-              <InfoTip topic={tab === 'batches' ? 'batches' : 'outreach'} />
+              <InfoTip topic={tab === 'batches' ? 'batches' : tab === 'bulk' ? 'bulk' : 'outreach'} />
             </div>
 
             {tab === 'sequences' && <FlowGuide step={currentStep(view, Boolean(id))} />}
 
             {call.error && <ErrorState error={new Error(call.error)} what="That outreach step did not complete" />}
+
+            {tab === 'bulk' && <BulkEmail canOperate={canOperate} canApprove={canApprove} />}
 
             {tab === 'batches' && !testCampaign && (
               <SendBatches

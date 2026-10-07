@@ -34,6 +34,8 @@ export const QUEUE_COMPANY_WEB_DISCOVER = 'company.web_discover'
 export const QUEUE_INTENT_MONITOR = 'intent.monitor'
 /** Scheduled sender for approved TEST-batch emails (internal test inboxes only). */
 export const QUEUE_OUTREACH_TEST_DISPATCH = 'outreach.test_dispatch'
+/** Bulk Email Upload (2026-10-07): the one-at-a-time sender. */
+export const QUEUE_BULK_EMAIL_DISPATCH = 'outreach.bulk_dispatch'
 
 const ALL_QUEUES = [
   QUEUE_RUN_STEP,
@@ -50,6 +52,7 @@ const ALL_QUEUES = [
   QUEUE_DM_LEAD_WATCH,
   QUEUE_COMPANY_WEB_DISCOVER,
   QUEUE_OUTREACH_TEST_DISPATCH,
+  QUEUE_BULK_EMAIL_DISPATCH,
   QUEUE_INTENT_MONITOR,
 ]
 

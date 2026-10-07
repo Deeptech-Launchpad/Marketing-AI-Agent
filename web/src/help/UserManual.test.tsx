@@ -166,6 +166,7 @@ describe('what the manual covers', () => {
       'Decision Makers',
       'Outreach',
       'Several Companies',
+      'Bulk Email',
       'Troubleshooting',
     ])
   })

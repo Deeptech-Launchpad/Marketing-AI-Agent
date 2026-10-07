@@ -24,6 +24,7 @@ import {
   QUEUE_KNOWLEDGE_INGEST,
   QUEUE_OUTREACH_ACTION,
   QUEUE_OUTREACH_TEST_DISPATCH,
+  QUEUE_BULK_EMAIL_DISPATCH,
   QUEUE_PROSPECT_DISCOVER,
   QUEUE_QUALIFICATION_EVALUATE,
   QUEUE_RUN_STEP,
@@ -34,6 +35,7 @@ import {
 } from './platform/queue.js'
 import { checkForNewLeads } from './decisionmakers/leadWatch.js'
 import { dispatchTestSends } from './outreach/salesSequence/sending/dispatcher.js'
+import { dispatchBulkEmails } from './outreach/bulk/service.js'
 import { monitorIntentSignals } from './intent/intentMonitor.js'
 import { env } from './config/env.js'
 
@@ -223,6 +225,17 @@ async function main() {
     await boss.schedule(QUEUE_OUTREACH_TEST_DISPATCH, `*/${env.OUTREACH_TEST_DISPATCH_INTERVAL_MINUTES} * * * *`)
   } else {
     await boss.unschedule(QUEUE_OUTREACH_TEST_DISPATCH)
+  }
+
+  // BULK EMAIL UPLOAD (2026-10-07): sends due bulk emails one at a time, each
+  // minute at most one per campaign. Off → no schedule at all.
+  await work(QUEUE_BULK_EMAIL_DISPATCH, async () => {
+    await dispatchBulkEmails()
+  })
+  if (env.BULK_EMAIL_ENABLED) {
+    await boss.schedule(QUEUE_BULK_EMAIL_DISPATCH, '* * * * *')
+  } else {
+    await boss.unschedule(QUEUE_BULK_EMAIL_DISPATCH)
   }
 
   // Live Intent Signals monitoring (2026-09-29): the ordinary Intent run,

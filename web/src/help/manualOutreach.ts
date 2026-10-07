@@ -436,6 +436,98 @@ export const SEVERAL_COMPANIES: ManualSection = {
   ],
 }
 
+export const BULK_EMAIL: ManualSection = {
+  id: 'bulk-email',
+  title: 'Bulk Email',
+  summary: 'Upload an Excel list of contacts; the platform sends the approved template to each company, one email at a time, on your schedule.',
+  blocks: [
+    { kind: 'heading', text: 'What it is' },
+    {
+      kind: 'text',
+      text: 'The "Bulk email" tab on the Outreach screen sends the approved Static Site email to a whole list of contacts from an Excel file. Each company gets one email: the first named person receives it, and colleagues from the same company are copied. Unlike One company and Several companies, the platform sends these emails itself, from the company mailbox set up on the server.',
+    },
+    {
+      kind: 'text',
+      text: 'The email is the approved template word for word. Only [First Name] and [Company Name] are filled in from the Excel file. Under it come your signature and a short opt-out line with the postal address, which US law requires.',
+    },
+
+    { kind: 'heading', text: 'Why we use it' },
+    {
+      kind: 'text',
+      text: 'To reach a long list of contacts without preparing each email by hand — while still sending them one at a time, spaced out, only in working hours and within a daily limit, so they arrive like ordinary emails and not all at once.',
+    },
+
+    { kind: 'heading', text: 'Step 1 — Upload the Excel file' },
+    {
+      kind: 'steps',
+      items: [
+        'Open Outreach, click the "Bulk email" tab, then "New bulk email".',
+        'Click "Choose Excel file" and pick the .xlsx file. The first sheet is read.',
+        'Check the list: each company, who it goes to, and who is copied. Companies whose Status says "not interested" or "Outreach - <date>" are skipped and say so.',
+      ],
+    },
+    {
+      kind: 'terms',
+      items: [
+        { term: 'Work email only', meaning: 'Only the "Primary" or company address is used. Addresses marked "Personal", or on gmail, yahoo, comcast and similar, are never emailed.' },
+        { term: 'One email per company', meaning: 'Several people from the same company — on one row or several rows — receive one email: the first is the recipient, the others are in CC.' },
+      ],
+    },
+
+    { kind: 'heading', text: 'Step 2 — Sender, CC and signature' },
+    {
+      kind: 'terms',
+      items: [
+        { term: 'From / sender email', meaning: 'The company mailbox the emails are sent from. Only mailboxes set up on the server are offered.' },
+        { term: 'CC on every email', meaning: 'Optional addresses copied on every email, for example a colleague.' },
+        { term: 'Signature', meaning: 'Shown under the email, exactly as you type it.' },
+        { term: 'Postal address', meaning: 'Required. Shown in the small opt-out line at the bottom.' },
+      ],
+    },
+
+    { kind: 'heading', text: 'Step 3 — Schedule' },
+    {
+      kind: 'terms',
+      items: [
+        { term: 'Start date and time', meaning: 'When the first email goes, in the time zone you choose — 8:00 AM Indianapolis time means 8:00 AM in Indianapolis.' },
+        { term: 'Time zone', meaning: 'Indianapolis is chosen to begin with. All times are shown in 12-hour AM/PM.' },
+        { term: 'Sending hours and days', meaning: 'Emails only go inside these hours and on these days.' },
+        { term: 'Minutes between emails', meaning: 'The gap between one email and the next, for example 5 minutes: 8:00, 8:05, 8:10 …' },
+        { term: 'At most per day', meaning: 'The daily limit. When it is reached, the rest continue in the next allowed period.' },
+      ],
+    },
+
+    { kind: 'heading', text: 'Step 4 — Review, approve and start' },
+    {
+      kind: 'steps',
+      items: [
+        'Click "Next: review". You see how many emails will be sent and how many are skipped, every company with its To, CC and time, and the estimated completion time.',
+        'Click "Preview" on any company to read its email exactly as it will be sent.',
+        'Tick the confirmation and click "Approve and start sending". This needs an approver or an administrator.',
+      ],
+    },
+
+    { kind: 'heading', text: 'While it runs' },
+    {
+      kind: 'terms',
+      items: [
+        { term: 'Scheduled / Sending / Sent / Failed / Skipped', meaning: 'Where each email is. A failed email shows the reason; the others carry on.' },
+        { term: 'Pause / Resume', meaning: 'Pause stops sending. Resume carries on from now, still spaced out.' },
+        { term: 'Cancel unsent', meaning: 'Stops the send; emails not yet sent are skipped.' },
+        { term: 'Unsubscribe', meaning: 'When someone replies "unsubscribe", click this beside them. They are never emailed again.' },
+        { term: 'Bulk sequence completed', meaning: 'Shown when every email has been processed, with the totals sent, failed and skipped.' },
+      ],
+    },
+
+    { kind: 'heading', text: 'What to do next' },
+    {
+      kind: 'text',
+      text: 'Watch the mailbox for replies. Reply to interested contacts yourself, and click Unsubscribe for anyone who asks not to be contacted.',
+    },
+  ],
+}
+
+
 export const TROUBLESHOOTING: ManualSection = {
   id: 'troubleshooting',
   title: 'Troubleshooting',

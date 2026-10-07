@@ -2791,3 +2791,85 @@ model EmailOtp {
   @@index([tenantId, email, purpose, createdAt])
   @@index([expiresAt])
 }
+
+// BULK EMAIL UPLOAD (2026-10-07). A separate Outreach option: contacts from an
+// uploaded Excel file, one static approved template filled with only the
+// contact's first name and company name, sent BY THE PLATFORM from a company
+// mailbox configured on the server — one email at a time, spaced by the
+// interval, inside the sending hours, under a daily limit. The One company and
+// Several companies flows are not involved.
+model BulkEmailCampaign {
+  id       String @id
+  tenantId String
+  name     String
+  // running | paused | completed | cancelled
+  status   String @default("running")
+
+  // The approved template, as it was when the send was approved.
+  templateKey String
+  subject     String
+  body        String
+
+  fromEmail     String
+  fromName      String?
+  // Extra CC on every email (string[]).
+  ccEmails      Json
+  signature     String
+  // The postal address in the opt-out footer (CAN-SPAM).
+  postalAddress String
+  sourceFileName String?
+
+  timezone        String
+  startAt         DateTime
+  // ISO weekdays (1 = Monday … 7 = Sunday).
+  sendDays        Json
+  sendStartMinute Int
+  sendEndMinute   Int
+  intervalMinutes Int
+  dailyCap        Int
+  totalRows       Int @default(0)
+
+  createdByCrmUserId  String
+  approvedByCrmUserId String
+  approvedAt          DateTime
+  completedAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  recipients BulkEmailRecipient[]
+
+  @@index([tenantId, status])
+}
+
+model BulkEmailRecipient {
+  id         String @id
+  tenantId   String
+  campaignId String
+  campaign   BulkEmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  // Order in the queue (0-based).
+  position   Int
+
+  companyName String
+  contactName String?
+  toEmail     String?
+  // The other people of the same company, copied (string[]).
+  ccEmails    Json
+  // The spreadsheet rows this company came from (number[]).
+  sourceRows  Json
+  // Exactly what is sent: the template with only its placeholders filled.
+  subject     String?
+  body        String?
+
+  // scheduled | sending | sent | failed | skipped
+  status      String
+  reason      String?
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  messageId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([campaignId, status, scheduledAt])
+  @@index([tenantId, status, scheduledAt])
+  @@index([tenantId, toEmail])
+}
