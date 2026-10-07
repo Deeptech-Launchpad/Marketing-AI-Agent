@@ -1,5 +1,3 @@
-import { EXPO } from '../salesSequence/templates.js'
-
 // THE STATIC APPROVED TEMPLATE FOR BULK EMAIL (2026-10-07).
 //
 // Sales supplied this text and it is used exactly as written. Nothing writes
@@ -48,6 +46,9 @@ export const OPT_OUT_LINE = 'If you would rather not hear from us, reply "unsubs
 
 /** The words in the approved text that link to the expo registration page, in the HTML part only. */
 const REGISTER_WORDS = 'register here'
+/** B2B eCommerce World 2026, Indianapolis — the guest registration with code ALTIUSVIP. */
+export const EXPO_REGISTRATION_URL =
+  'https://events.b2becommerceworld.org/v2/registrations/event/696f763a5e592e8a0a92da6e/ticketType/6971a5671dfa01967fe37b30?couponCode=ALTIUSVIP'
 
 const PLACEHOLDER = /\[(First Name|Company Name)\]/g
 
@@ -96,7 +97,7 @@ export function composeBulkEmail(input: {
   const para = (p: string) => {
     const safe = escapeHtml(p)
     return safe.includes(REGISTER_WORDS)
-      ? safe.replace(REGISTER_WORDS, `<a href="${escapeHtml(EXPO.registrationUrl)}">${REGISTER_WORDS}</a>`)
+      ? safe.replace(REGISTER_WORDS, `<a href="${escapeHtml(EXPO_REGISTRATION_URL)}">${REGISTER_WORDS}</a>`)
       : safe
   }
   const html = [

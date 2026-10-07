@@ -15,7 +15,7 @@ import { CallPointsPanel } from './outreach/CallPointsPanel'
 import { ProspectList } from './outreach/ProspectList'
 import { useCall } from './outreach/useCall'
 import { SendBatches } from './outreach/SendBatches'
-import { BulkEmail } from './outreach/BulkEmail'
+import { BulkEmail } from './bulk/BulkEmail'
 import { InfoTip } from './outreach/InfoTip'
 import { STATUS_LEGEND, emailStatus } from './outreach/status'
 import {
@@ -150,7 +150,7 @@ export function Outreach() {
                   Bulk email
                 </button>
               </div>
-              <InfoTip topic={tab === 'batches' ? 'batches' : tab === 'bulk' ? 'bulk' : 'outreach'} />
+              {tab !== 'bulk' && <InfoTip topic={tab === 'batches' ? 'batches' : 'outreach'} />}
             </div>
 
             {tab === 'sequences' && <FlowGuide step={currentStep(view, Boolean(id))} />}

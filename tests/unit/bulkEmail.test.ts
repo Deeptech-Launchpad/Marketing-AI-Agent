@@ -152,6 +152,13 @@ describe('reading the spreadsheet', () => {
     expect(workAddress('').email).toBeNull()
   })
 
+  it('with the test option on, also uses webmail — but still never an address marked personal', () => {
+    expect(workAddress('dtlpsaranya@gmail.com', { allowWebmail: true }).email).toBe('dtlpsaranya@gmail.com')
+    expect(workAddress('Primary: jeff@armourscrew.com Personal: jefflg@sbcglobal.net', { allowWebmail: true }).email).toBe('jeff@armourscrew.com')
+    expect(workAddress('Personal: jefflg@sbcglobal.net', { allowWebmail: true }).email).toBeNull()
+    expect(workAddress('dtlpsaranya@gmail.com').email).toBeNull()
+  })
+
   it('takes the first name, tidily, and never invents one', () => {
     expect(firstNameOf('hank Rossman')).toBe('Hank')
     expect(firstNameOf('Mr. John T')).toBe('John')
@@ -314,6 +321,21 @@ describe('review, start, and sending one at a time', () => {
       expect(sent).toEqual([])
     } finally {
       env.BULK_EMAIL_ENABLED = true
+    }
+  })
+})
+
+// BULK EMAIL IS A STANDALONE WORKFLOW (2026-10-07): it shares no code with
+// the One company or Several companies flows. Only the opt-out list is shared,
+// on purpose — an unsubscribe must hold everywhere.
+describe('a standalone workflow', () => {
+  it('imports nothing from the sales sequence or the several-companies code', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const dir = 'src/outreach/bulk'
+    for (const f of readdirSync(dir)) {
+      const src = readFileSync(`${dir}/${f}`, 'utf8')
+      const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]!)
+      for (const i of imports) expect(i, `${f} imports ${i}`).not.toMatch(/salesSequence|batches|outreach\/engine/)
     }
   })
 })

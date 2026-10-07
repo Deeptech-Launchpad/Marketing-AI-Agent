@@ -67,13 +67,16 @@ export function isFreeMail(email: string): boolean {
  * The work address in one cell, or null with the reason.
  * "Primary: jeff@acme.com Personal: jeff@gmail.com" → jeff@acme.com.
  */
-export function workAddress(cell: string | null | undefined): { email: string | null; reason: string | null } {
+export function workAddress(cell: string | null | undefined, opts: { allowWebmail?: boolean } = {}): { email: string | null; reason: string | null } {
+  // The test option: webmail allowed (a sheet of the team's own addresses).
+  // An address labelled "Personal" is still never used.
+  const ok = (e: string) => opts.allowWebmail || !isFreeMail(e)
   const text = (cell ?? '').replace(/\s+/g, ' ').trim()
   if (!text) return { email: null, reason: 'No email address' }
   const primary = /primary\s*:?\s*\[?\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/i.exec(text)
   if (primary) {
     const e = strictEmail(primary[1])
-    if (e && !isFreeMail(e)) return { email: e, reason: null }
+    if (e && ok(e)) return { email: e, reason: null }
   }
   // Every address in the cell, minus any labelled personal.
   const labelledPersonal = new Set(
@@ -82,7 +85,7 @@ export function workAddress(cell: string | null | undefined): { email: string | 
   const found = (text.match(FIND_EMAIL) ?? []).map((e) => e.toLowerCase())
   for (const raw of found) {
     const e = strictEmail(raw)
-    if (e && !labelledPersonal.has(e) && !isFreeMail(e)) return { email: e, reason: null }
+    if (e && !labelledPersonal.has(e) && ok(e)) return { email: e, reason: null }
   }
   return { email: null, reason: found.length ? 'Only a personal / webmail address (not used)' : 'No valid email address' }
 }
@@ -142,7 +145,7 @@ const SKIP_RULES: Array<[RegExp, string]> = [
   [/outreach\s*-/i, 'Already contacted'],
 ]
 
-export function extractContacts(rows: string[][]): Extraction {
+export function extractContacts(rows: string[][], opts: { allowWebmail?: boolean } = {}): Extraction {
   // The heading row: the first with both a company and an email heading.
   let headerRow = rows.findIndex((r) => {
     const c = detectColumns(r)
@@ -178,7 +181,7 @@ export function extractContacts(rows: string[][]): Extraction {
     const reasons: string[] = []
     for (const p of cols.pairs) {
       const cell = String(r[p.email] ?? '')
-      const { email, reason } = workAddress(cell)
+      const { email, reason } = workAddress(cell, opts)
       if (!email) {
         if (cell.trim()) reasons.push(reason ?? 'No valid email address')
         continue

@@ -93,11 +93,6 @@ export const HELP = {
     what: 'Sends the first email to up to 10 companies at once — the approved copy with only the names filled in. One Review screen and one Send; no drafts to open. When each email is due you send it from your own mailbox.',
     next: 'Choose companies, check the addresses, set the schedule, review, then Send.',
   },
-  bulk: {
-    title: 'Bulk email',
-    what: 'Upload an Excel list of contacts. Each company gets one email — the approved template with only the first name and company name filled — and the platform sends them one at a time from the company mailbox, on your schedule and in the chosen time zone.',
-    next: 'Upload the file, set the sender, CC and signature, set the schedule, review every email, then approve and start.',
-  },
 } satisfies Record<string, Help>
 
 export type HelpKey = keyof typeof HELP

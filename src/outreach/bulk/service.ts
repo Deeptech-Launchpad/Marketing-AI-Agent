@@ -4,7 +4,7 @@ import { newId, prisma } from '../../platform/db.js'
 import { BadRequestError, ConflictError, NotFoundError } from '../../platform/errors.js'
 import { logger } from '../../platform/logger.js'
 import { checkSuppression } from '../suppression.js'
-import { parseClock, withinWindow, type SendWindow } from '../salesSequence/sending/schedule.js'
+import { parseClock, withinWindow, type SendWindow } from './clock.js'
 import { readSpreadsheet } from './excel.js'
 import { extractContacts, firstNameOf, recipientsOf, strictEmail } from './extract.js'
 import { fmtLocal, localDay, localToUtc, planBulkSlots } from './schedule.js'
@@ -67,9 +67,9 @@ function decodeFile(fileBase64: string): Buffer {
 }
 
 /** What the uploaded file contains: one entry per company, and the rows with no usable address. Nothing is stored. */
-export async function analyzeUpload(input: { fileBase64: string; fileName?: string }) {
+export async function analyzeUpload(input: { fileBase64: string; fileName?: string; allowWebmail?: boolean }) {
   const rows = await readSpreadsheet(decodeFile(input.fileBase64))
-  const x = extractContacts(rows)
+  const x = extractContacts(rows, { allowWebmail: input.allowWebmail === true })
   if (!x.columns.company || x.columns.contacts.length === 0) {
     throw new BadRequestError('No "Company Name" and "Email" columns were found in the first sheet. Check the headings row.')
   }
@@ -96,6 +96,8 @@ export interface BulkSetup {
   intervalMinutes: number
   dailyCap: number
   name?: string
+  /** Test option: also use webmail addresses (gmail, yahoo …). Off by default. */
+  allowWebmail?: boolean
 }
 
 export interface ReviewRow {
@@ -158,7 +160,7 @@ function checkedSetup(s: BulkSetup) {
 /** Every company's email, its time and its status — exactly what Start would store. Nothing is written. */
 export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const setup = checkedSetup(s)
-  const upload = await analyzeUpload({ fileBase64: s.fileBase64, fileName: s.fileName })
+  const upload = await analyzeUpload({ fileBase64: s.fileBase64, fileName: s.fileName, allowWebmail: s.allowWebmail })
   if (upload.companies.length > MAX_RECIPIENTS) throw new BadRequestError(`At most ${MAX_RECIPIENTS} companies per upload.`)
 
   // Already emailed by an earlier bulk send, inside the cooldown, or queued now.

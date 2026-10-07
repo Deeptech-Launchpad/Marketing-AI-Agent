@@ -4,12 +4,13 @@ import { api } from '../../lib/api'
 import { useAsync, usePolling } from '../../lib/hooks'
 import { Button, Chip, Panel, Unset } from '../../components/ui/primitives'
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/states'
-import { useCall } from './useCall'
-import { fmtDateTime } from './types'
-import { timeZoneOptions } from './timeZones'
+import { useBulkCall as useCall } from './useBulkCall'
+import { timeZoneOptions } from './bulkTimeZones'
+import './bulk.css'
 
-// OUTREACH → BULK EMAIL (2026-10-07). A separate option; One company and
-// Several companies are not involved.
+// OUTREACH → BULK EMAIL (2026-10-07). A completely standalone workflow: its
+// own upload, processing, email, sender settings, schedule, review, approval,
+// sending and tracking, sharing no code with One company or Several companies.
 //
 //   1. Upload the Excel file   2. Sender, CC, signature   3. Schedule
 //   4. Review every email      5. Approve and start sending
@@ -91,6 +92,12 @@ interface RecipientRow {
 }
 
 const DAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+}
 const CAMPAIGN_STATUS: Record<string, { word: string; tone: 'ok' | 'warn' | 'info' | 'neutral' }> = {
   running: { word: 'Sending', tone: 'info' },
   paused: { word: 'Paused', tone: 'warn' },
@@ -238,6 +245,9 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
 
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<{ name: string; base64: string } | null>(null)
+  // Test option (off by default): also use webmail addresses, for a first run
+  // with the team's own gmail / yahoo addresses.
+  const [allowWebmail, setAllowWebmail] = useState(false)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [fromEmail, setFromEmail] = useState('')
   const [fromName, setFromName] = useState('')
@@ -262,21 +272,28 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   const ccList = cc.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)
   const ccBad = ccList.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
 
+  const readFile = async (picked: { name: string; base64: string }, webmail: boolean) => {
+    setAnalysis(null)
+    setReview(null)
+    const r = (await api.post('/outreach/bulk/analyze', { fileBase64: picked.base64, fileName: picked.name, allowWebmail: webmail })) as Analysis
+    setAnalysis(r)
+  }
+  /** Read again, e.g. after the webmail option changed. One request at a time. */
+  const analyze = (picked: { name: string; base64: string }, webmail: boolean) => void call.run('upload', () => readFile(picked, webmail))
+
   const upload = (f: File | undefined) => {
     if (!f) return
     void call.run('upload', async () => {
-      const base64 = await readAsBase64(f)
-      setFile({ name: f.name, base64 })
-      setAnalysis(null)
-      setReview(null)
-      const r = (await api.post('/outreach/bulk/analyze', { fileBase64: base64, fileName: f.name })) as Analysis
-      setAnalysis(r)
+      const picked = { name: f.name, base64: await readAsBase64(f) }
+      setFile(picked)
+      await readFile(picked, allowWebmail)
     })
   }
 
   const body = () => ({
     fileBase64: file!.base64,
     fileName: file!.name,
+    allowWebmail,
     templateKey: template?.key ?? 'static_site_v1',
     fromEmail: chosenFrom,
     fromName: fromName.trim() || null,
@@ -319,7 +336,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
         </Button>
       }
     >
-      <ol className="otr-wizard" aria-label="Steps">
+      <ol className="bulk-steps" aria-label="Steps">
         {STEPS.map((s) => (
           <li key={s.key} className={s.key === step ? 'is-current' : undefined} aria-current={s.key === step ? 'step' : undefined}>
             {s.label}
@@ -353,6 +370,20 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
             </Button>
             {file && <span className="cell-dim">{file.name}</span>}
           </div>
+          <label className="bulk-test">
+            <input
+              type="checkbox"
+              checked={allowWebmail}
+              onChange={(e) => {
+                setAllowWebmail(e.target.checked)
+                if (file) analyze(file, e.target.checked)
+              }}
+            />
+            <span>
+              Include personal / webmail addresses (gmail, yahoo …) — <strong>for a test with your own team&rsquo;s addresses</strong>. Leave this off for a
+              real customer list: only work addresses are used.
+            </span>
+          </label>
           {analysis && (
             <>
               <ul className="otr-list">
@@ -455,7 +486,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               <p>
                 <span className="field-label">Subject</span> {template.subject}
               </p>
-              <pre className="otr-review__body">{template.body.split('\n').join('\n\n')}</pre>
+              <pre className="bulk-body">{template.body.split('\n').join('\n\n')}</pre>
             </details>
           )}
           <div className="row" style={{ marginTop: 'var(--s3)' }}>
@@ -619,7 +650,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                 </table>
               </div>
               {preview && (
-                <article className="otr-review__email" aria-label="Email preview">
+                <article className="bulk-email" aria-label="Email preview">
                   <p className="cell-dim">
                     To: {preview.toEmail}
                     {preview.ccEmails.length ? ` · CC: ${preview.ccEmails.join(', ')}` : ''} · {preview.scheduledLocal}
@@ -627,7 +658,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   <p>
                     <span className="field-label">Subject</span> {preview.subject}
                   </p>
-                  <pre className="otr-review__body">{preview.text}</pre>
+                  <pre className="bulk-body">{preview.text}</pre>
                 </article>
               )}
               <label className="otr-check">
@@ -705,7 +736,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
       }
     >
       {c.status === 'completed' && (
-        <p className="otr-ok" role="status">
+        <p className="bulk-ok" role="status">
           <CheckCircle2 size={14} aria-hidden="true" /> <strong>Bulk sequence completed</strong> {c.completedLocal ? `· ${c.completedLocal}` : ''} — {processed} processed: {counts.sent} sent,{' '}
           {counts.failed} failed, {counts.skipped} skipped.
         </p>
@@ -745,7 +776,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
                       <details open={open === r.id} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open ? r.id : null)}>
                         <summary>Show the email</summary>
                         <p className="cell-dim">{r.subject}</p>
-                        <pre className="otr-review__body">{r.body}</pre>
+                        <pre className="bulk-body">{r.body}</pre>
                       </details>
                     )}
                   </td>

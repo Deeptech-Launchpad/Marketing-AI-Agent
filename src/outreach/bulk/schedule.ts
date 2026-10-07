@@ -1,5 +1,4 @@
-import { addLocalDays, startOfLocalDay } from '../salesSequence/businessDays.js'
-import { nextSendSlot, type SendWindow } from '../salesSequence/sending/schedule.js'
+import { addLocalDays, nextSendSlot, offsetAt, startOfLocalDay, type SendWindow } from './clock.js'
 
 // WHEN EACH BULK EMAIL GOES (2026-10-07). Pure.
 //
@@ -17,19 +16,8 @@ export function localToUtc(date: string, time: string, tz: string): Date | null 
   const wanted = Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]))
   // The offset at the guess, applied twice so a DST edge settles.
   let guess = wanted
-  for (let i = 0; i < 2; i++) guess = wanted - offsetMs(new Date(guess), tz)
+  for (let i = 0; i < 2; i++) guess = wanted - offsetAt(new Date(guess), tz)
   return new Date(guess)
-}
-
-/** How far `tz` is ahead of UTC at `at`, in ms. */
-function offsetMs(at: Date, tz: string): number {
-  const p = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      .formatToParts(at)
-      .map((x) => [x.type, x.value]),
-  )
-  const asUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second))
-  return asUtc - Math.floor(at.getTime() / 1000) * 1000
 }
 
 /** The local calendar day of `at` in `tz`, as "YYYY-MM-DD". */

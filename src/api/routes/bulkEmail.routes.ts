@@ -24,7 +24,12 @@ export const bulkEmailRoutes = Router()
 const actorOf = (req: Request): Actor => ({ tenantId: req.principal!.tenantId, crmUserId: req.principal!.crmUserId, requestId: req.requestId })
 
 // ~5 MB of spreadsheet, base64-encoded.
-const File = { fileBase64: z.string().min(8).max(7_200_000), fileName: z.string().max(200).optional() }
+const File = {
+  fileBase64: z.string().min(8).max(7_200_000),
+  fileName: z.string().max(200).optional(),
+  // Test option: also use webmail addresses (gmail, yahoo …). Off by default.
+  allowWebmail: z.boolean().optional(),
+}
 
 const Setup = z
   .object({
@@ -68,7 +73,7 @@ bulkEmailRoutes.post(
   requirePermission('operate'),
   validateBody(z.object(File).strict()),
   asyncHandler(async (req, res) => {
-    res.json(await analyzeUpload(req.body as { fileBase64: string; fileName?: string }))
+    res.json(await analyzeUpload(req.body as { fileBase64: string; fileName?: string; allowWebmail?: boolean }))
   }),
 )
 

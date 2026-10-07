@@ -287,7 +287,3 @@
 .otr-review__email.is-blocked { border-color: var(--danger-line); }
 .otr-review__email p { margin: 0; font-size: var(--fs-sm); }
 .otr-review__body { white-space: pre-wrap; font-family: var(--font-ui); font-size: var(--fs-sm); line-height: 1.55; margin: var(--s2) 0 0; padding: var(--s2); background: var(--bg-inset); border-radius: var(--r-sm); max-height: 360px; overflow: auto; color: var(--text); }
-
-/* Bulk email: the "completed" notice (2026-10-07) */
-.otr-ok { display: flex; gap: var(--s2); align-items: flex-start; padding: var(--s2) var(--s3); border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line)); border-radius: var(--r-sm); color: var(--text); font-size: var(--fs-sm); margin: 0 0 var(--s3); }
-.otr-ok svg { flex: none; margin-top: 3px; color: var(--ok); }

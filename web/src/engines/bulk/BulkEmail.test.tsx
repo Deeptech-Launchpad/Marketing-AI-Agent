@@ -106,6 +106,19 @@ describe('a new bulk email', () => {
     expect(typeof analyze.body!.fileBase64).toBe('string')
   })
 
+  it('has a test option for the team’s own webmail addresses — off unless ticked — and reads the file again with it', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
+    const option = screen.getByRole('checkbox', { name: /include personal \/ webmail addresses/i })
+    expect(option).not.toBeChecked()
+    await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK'], 'sample test.xlsx'))
+    await screen.findByText('Thermohvac')
+    expect(posts().filter((c) => c.url.endsWith('/analyze')).pop()!.body).toMatchObject({ allowWebmail: false })
+    await userEvent.click(option)
+    await waitFor(() => expect(posts().filter((c) => c.url.endsWith('/analyze')).pop()!.body).toMatchObject({ allowWebmail: true }))
+  })
+
   it('offers only the configured company mailbox as the sender', async () => {
     stub()
     render(<BulkEmail canOperate canApprove />)
@@ -165,5 +178,17 @@ describe('a bulk email that has run', () => {
     expect(screen.getByText('550 mailbox unavailable')).toBeInTheDocument()
     await userEvent.click(screen.getAllByRole('button', { name: /unsubscribe/i })[0]!)
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/recipients/r1/unsubscribe'))).toBe(true))
+  })
+})
+
+// Bulk Email is standalone (2026-10-07): nothing in its folder comes from the
+// One company or Several companies screens.
+describe('a standalone workflow', () => {
+  it('imports nothing from the other Outreach flows', () => {
+    const sources = import.meta.glob('./*.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
+    expect(Object.keys(sources).length).toBeGreaterThan(2)
+    for (const [file, src] of Object.entries(sources)) {
+      for (const m of src.matchAll(/from '([^']+)'/g)) expect(m[1], `${file}`).not.toMatch(/outreach\//)
+    }
   })
 })
