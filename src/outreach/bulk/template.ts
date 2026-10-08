@@ -9,8 +9,7 @@
 //
 // Each line of the approved text is one paragraph; paragraphs are separated
 // by a blank line in the email, which changes the layout, never the words.
-// Under it come the signature the sender typed and the opt-out footer that
-// US law (CAN-SPAM) requires: a way to unsubscribe and a postal address.
+// Nothing else is added to the email (2026-10-08): no signature, no footer.
 
 export interface BulkTemplate {
   key: string
@@ -40,9 +39,6 @@ export const BULK_TEMPLATES: BulkTemplate[] = [STATIC_SITE]
 export function bulkTemplate(key: string): BulkTemplate | null {
   return BULK_TEMPLATES.find((t) => t.key === key) ?? null
 }
-
-/** The opt-out line every bulk email carries (CAN-SPAM). */
-export const OPT_OUT_LINE = 'If you would rather not hear from us, reply "unsubscribe" and we will not email you again.'
 
 /** The words in the approved text that link to the expo registration page, in the HTML part only. */
 const REGISTER_WORDS = 'register here'
@@ -77,22 +73,13 @@ const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 
 /**
  * The email exactly as it is sent: the approved template with its two
- * placeholders filled, then the sender's signature, then the opt-out footer.
+ * placeholders filled, and nothing else.
  */
-export function composeBulkEmail(input: {
-  template: BulkTemplate
-  firstName: string | null
-  companyName: string | null
-  signature: string
-  postalAddress: string
-}): ComposedBulkEmail {
+export function composeBulkEmail(input: { template: BulkTemplate; firstName: string | null; companyName: string | null }): ComposedBulkEmail {
   const subject = fillTemplate(input.template.subject, input)
   const body = fillTemplate(input.template.body, input)
   const paragraphs = body.text.split('\n').map((p) => p.trim()).filter(Boolean)
-  const signature = input.signature.replace(/\r\n/g, '\n').trim()
-  const footer = [OPT_OUT_LINE, input.postalAddress.replace(/\r\n/g, '\n').trim()].filter(Boolean)
-
-  const text = [paragraphs.join('\n\n'), signature, `--\n${footer.join('\n')}`].filter(Boolean).join('\n\n')
+  const text = paragraphs.join('\n\n')
 
   const para = (p: string) => {
     const safe = escapeHtml(p)
@@ -103,8 +90,6 @@ export function composeBulkEmail(input: {
   const html = [
     '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222">',
     ...paragraphs.map((p) => `<p style="margin:0 0 12px">${para(p)}</p>`),
-    signature ? `<p style="margin:16px 0 12px">${escapeHtml(signature).replace(/\n/g, '<br>')}</p>` : '',
-    `<p style="margin:24px 0 0;font-size:12px;color:#777">${footer.map(escapeHtml).join('<br>')}</p>`,
     '</div>',
   ].join('')
 

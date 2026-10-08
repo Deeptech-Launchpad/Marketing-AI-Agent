@@ -468,8 +468,6 @@ const schema = z.object({
   // The From addresses this mailbox may send as, comma-separated. Empty means
   // only BULK_SMTP_USER itself. The screen offers only these.
   BULK_FROM_ADDRESSES: z.string().default(''),
-  // A ceiling on the daily limit anyone can choose on the screen.
-  BULK_MAX_PER_DAY: z.coerce.number().int().min(1).max(2000).default(200),
 
 
   // ── Task #983: engagement tracking ──────────────────────────────────────

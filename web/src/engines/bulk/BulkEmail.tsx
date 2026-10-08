@@ -1,37 +1,32 @@
-import { useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowLeft, CheckCircle2, FileSpreadsheet, Pause, Play, Plus, Send, Square, UserX } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync, usePolling } from '../../lib/hooks'
 import { Button, Chip, Panel, Unset } from '../../components/ui/primitives'
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/states'
 import { useBulkCall as useCall } from './useBulkCall'
-import { timeZoneOptions } from './bulkTimeZones'
 import './bulk.css'
 
-// OUTREACH → BULK EMAIL (2026-10-07). A completely standalone workflow: its
-// own upload, processing, email, sender settings, schedule, review, approval,
-// sending and tracking, sharing no code with One company or Several companies.
+// BULK EMAIL (2026-10-08) — simple and standalone:
 //
-//   1. Upload the Excel file   2. Sender, CC, signature   3. Schedule
-//   4. Review every email      5. Approve and start sending
+//   Upload Excel → analyze contacts → review emails → date, time and minutes
+//   between emails (IST) → approve → start sending
 //
-// The approved static template is used word for word — only [First Name] and
-// [Company Name] are filled. One email per company: the first named person
-// receives it, colleagues are copied. The PLATFORM sends them, one at a time,
-// from the company mailbox configured on the server, interval minutes apart,
-// inside the sending hours, under the daily limit — in the chosen time zone.
+// The email is the approved template only, with [First Name] and [Company
+// Name] filled from the Excel file. The platform sends the emails one after
+// another from the mailbox configured on the server: email 1 at the start
+// time, then one every N minutes, until the list is done. It shares no code
+// with One company or Several companies.
 
 interface SendingStatus {
   enabled: boolean
   mailboxConfigured: boolean
   senders: string[]
   reason: string | null
-  maxPerDay: number
 }
 interface Settings {
   sending: SendingStatus
   templates: Array<{ key: string; label: string; subject: string; body: string; placeholders: string[] }>
-  defaults: { timezone: string; startTime: string; sendStart: string; sendEnd: string; sendDays: number[]; intervalMinutes: number; dailyCap: number }
 }
 interface Analysis {
   fileName: string | null
@@ -54,12 +49,10 @@ interface ReviewRow {
   scheduledLocal: string | null
 }
 interface Review {
-  fileName: string | null
   counts: { rowsWithCompany: number; companies: number; validEmails: number; skipped: number; noWorkAddress: number }
   rows: ReviewRow[]
   noAddress: Array<{ row: number; companyName: string; reason: string }>
-  schedule: { timezone: string; startLocal: string; firstLocal: string | null; estimatedCompletionLocal: string | null; intervalMinutes: number; dailyCap: number }
-  from: { email: string | null; name: string | null }
+  schedule: { firstLocal: string | null; estimatedCompletionLocal: string | null; intervalMinutes: number }
   sending: SendingStatus
 }
 interface CampaignRow {
@@ -67,11 +60,8 @@ interface CampaignRow {
   name: string
   status: string
   fromEmail: string
-  timezone: string
   startLocal: string
-  sendHours: string
   intervalMinutes: number
-  dailyCap: number
   createdAt: string
   completedLocal: string | null
   estimatedCompletionLocal?: string | null
@@ -91,13 +81,6 @@ interface RecipientRow {
   sentLocal: string | null
 }
 
-const DAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
-function fmtDateTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
-}
 const CAMPAIGN_STATUS: Record<string, { word: string; tone: 'ok' | 'warn' | 'info' | 'neutral' }> = {
   running: { word: 'Sending', tone: 'info' },
   paused: { word: 'Paused', tone: 'warn' },
@@ -112,7 +95,7 @@ const RECIPIENT_STATUS: Record<string, { word: string; tone: 'ok' | 'warn' | 'da
   skipped: { word: 'Skipped', tone: 'neutral' },
 }
 
-/** "08:00" → "8:00 AM". */
+/** "10:00" → "10:00 AM". */
 function ampm(hhmm: string): string {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm)
   if (!m) return hhmm
@@ -120,11 +103,9 @@ function ampm(hhmm: string): string {
   return `${((h + 11) % 12) + 1}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`
 }
 
-function tomorrow(): string {
-  const d = new Date()
-  d.setDate(d.getDate() + 1)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+/** Today's date in India, as YYYY-MM-DD. */
+function todayIst(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 }
 
 function readAsBase64(file: File): Promise<string> {
@@ -157,7 +138,7 @@ export function BulkEmail({ canOperate, canApprove }: { canOperate: boolean; can
 
 function SendingNote({ sending }: { sending: SendingStatus | null }) {
   if (!sending || !sending.reason) return null
-  return <p className="otr-warn">{sending.reason} Nothing is sent until an administrator configures the sending mailbox on the server.</p>
+  return <p className="otr-warn">{sending.reason}</p>
 }
 
 function BulkList({ canOperate, onOpen, onNew }: { canOperate: boolean; onOpen: (id: string) => void; onNew: () => void }) {
@@ -168,7 +149,7 @@ function BulkList({ canOperate, onOpen, onNew }: { canOperate: boolean; onOpen: 
   return (
     <Panel
       title="Bulk email"
-      subtitle="Upload an Excel list, check every email, and the platform sends them one at a time on your schedule."
+      subtitle="Upload an Excel list, review the emails, choose when to start — they go one after another."
       actions={
         canOperate && (
           <Button size="sm" variant="primary" icon={Plus} onClick={onNew}>
@@ -177,7 +158,6 @@ function BulkList({ canOperate, onOpen, onNew }: { canOperate: boolean; onOpen: 
         )
       }
     >
-      <SendingNote sending={data?.sending ?? null} />
       {list.loading && !list.data ? (
         <Unset what="Loading…" />
       ) : list.error ? (
@@ -228,12 +208,11 @@ function BulkList({ canOperate, onOpen, onNew }: { canOperate: boolean; onOpen: 
   )
 }
 
-type Step = 'upload' | 'sender' | 'schedule' | 'review'
+type Step = 'upload' | 'review' | 'schedule'
 const STEPS: Array<{ key: Step; label: string }> = [
   { key: 'upload', label: '1. Upload Excel' },
-  { key: 'sender', label: '2. Sender, CC and signature' },
-  { key: 'schedule', label: '3. Schedule' },
-  { key: 'review', label: '4. Review and start' },
+  { key: 'review', label: '2. Review emails' },
+  { key: 'schedule', label: '3. Date, time and start' },
 ]
 
 function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onCancel: () => void; onStarted: (id: string) => void }) {
@@ -241,7 +220,6 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   const settings = settingsState.data as Settings | null
   const template = settings?.templates[0] ?? null
   const sending = settings?.sending ?? null
-  const zoneOptions = useMemo(() => timeZoneOptions(new Date(), ['America/Indiana/Indianapolis']), [])
 
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<{ name: string; base64: string } | null>(null)
@@ -249,28 +227,19 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   // with the team's own gmail / yahoo addresses.
   const [allowWebmail, setAllowWebmail] = useState(false)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
-  const [fromEmail, setFromEmail] = useState('')
-  const [fromName, setFromName] = useState('')
-  const [cc, setCc] = useState('')
-  const [signature, setSignature] = useState('')
-  const [postal, setPostal] = useState('')
-  const [startDate, setStartDate] = useState(tomorrow())
-  const [startTime, setStartTime] = useState('08:00')
-  const [timezone, setTimezone] = useState('America/Indiana/Indianapolis')
-  const [sendStart, setSendStart] = useState('08:00')
-  const [sendEnd, setSendEnd] = useState('17:00')
-  const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5])
+  const [startDate, setStartDate] = useState(todayIst())
+  const [startTime, setStartTime] = useState('10:00')
   const [interval, setIntervalMinutes] = useState('5')
-  const [cap, setCap] = useState('100')
   const [review, setReview] = useState<Review | null>(null)
   const [previewPos, setPreviewPos] = useState<number | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const call = useCall(() => undefined)
   const fileInput = useRef<HTMLInputElement>(null)
 
+  // The mailbox configured on the server. With several, the first is used
+  // unless another is chosen.
+  const [fromEmail, setFromEmail] = useState('')
   const chosenFrom = fromEmail || sending?.senders[0] || ''
-  const ccList = cc.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)
-  const ccBad = ccList.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
 
   const readFile = async (picked: { name: string; base64: string }, webmail: boolean) => {
     setAnalysis(null)
@@ -278,9 +247,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     const r = (await api.post('/outreach/bulk/analyze', { fileBase64: picked.base64, fileName: picked.name, allowWebmail: webmail })) as Analysis
     setAnalysis(r)
   }
-  /** Read again, e.g. after the webmail option changed. One request at a time. */
   const analyze = (picked: { name: string; base64: string }, webmail: boolean) => void call.run('upload', () => readFile(picked, webmail))
-
   const upload = (f: File | undefined) => {
     if (!f) return
     void call.run('upload', async () => {
@@ -296,27 +263,16 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     allowWebmail,
     templateKey: template?.key ?? 'static_site_v1',
     fromEmail: chosenFrom,
-    fromName: fromName.trim() || null,
-    ccEmails: ccList,
-    signature,
-    postalAddress: postal,
     startDate,
     startTime,
-    timezone,
-    sendStart,
-    sendEnd,
-    sendDays: days,
     intervalMinutes: Number(interval),
-    dailyCap: Number(cap),
   })
-
   const loadReview = () =>
     void call.run('review', async () => {
       const r = (await api.post('/outreach/bulk/review', body())) as Review
       setReview(r)
       setPreviewPos(r.rows.find((x) => x.status === 'ready')?.position ?? null)
     })
-
   const start = () =>
     void call.run('start', async () => {
       const r = (await api.post('/outreach/bulk/start', { ...body(), confirm: confirmed })) as { campaignId: string }
@@ -325,11 +281,12 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
 
   const sendable = analysis ? analysis.companies.filter((c) => !c.skip && c.people.length > 0) : []
   const preview = review?.rows.find((r) => r.position === previewPos) ?? null
+  const intervalOk = /^\d+$/.test(interval) && Number(interval) >= 1 && Number(interval) <= 240
 
   return (
     <Panel
       title="New bulk email"
-      subtitle="The approved template, word for word — only [First Name] and [Company Name] are filled in"
+      subtitle={template ? `${template.label} — the approved email, with only [First Name] and [Company Name] filled in` : undefined}
       actions={
         <Button size="sm" variant="quiet" icon={ArrowLeft} onClick={onCancel}>
           Back
@@ -343,7 +300,6 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
           </li>
         ))}
       </ol>
-      <SendingNote sending={sending} />
       {call.error && (
         <p className="otr-err" role="alert">
           {call.error}
@@ -353,8 +309,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
       {step === 'upload' && (
         <>
           <p className="note">
-            Upload the Excel file (.xlsx). The first sheet is read: the company name, each contact&rsquo;s name and email, and the Status
-            column. One email goes to each company — the first named person receives it, colleagues are copied.
+            Upload the Excel file (.xlsx). Each company gets one email: the first named person receives it, colleagues from the same company are copied.
           </p>
           <div className="row">
             <input
@@ -388,15 +343,8 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
             <>
               <ul className="otr-list">
                 <li>
-                  <strong>{analysis.totalRows}</strong> rows with a company · <strong>{analysis.companies.length}</strong> companies
-                </li>
-                <li>
-                  <strong>{sendable.length}</strong> companies with a valid work email address ·{' '}
-                  {analysis.companies.filter((c) => c.skip).length} skipped by Status · {analysis.noAddress.length} rows with no usable work address
-                </li>
-                <li className="cell-dim">
-                  Columns read: {analysis.columns.company} · {analysis.columns.contacts.map((c) => `${c.name ?? '—'} / ${c.email}`).join(' · ')}
-                  {analysis.columns.status ? ` · ${analysis.columns.status}` : ''}
+                  <strong>{sendable.length}</strong> companies with a valid email address · {analysis.companies.filter((c) => c.skip).length} skipped by Status ·{' '}
+                  {analysis.noAddress.length} rows with no usable address ({analysis.totalRows} rows in the file)
                 </li>
               </ul>
               <div className="otr-scroll" style={{ maxHeight: 320, overflowY: 'auto' }}>
@@ -414,10 +362,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                       .filter((c) => c.people.length > 0 || c.skip)
                       .map((c) => (
                         <tr key={c.key}>
-                          <td>
-                            {c.companyName}
-                            <div className="cell-dim">row {c.rows.join(', ')}</div>
-                          </td>
+                          <td>{c.companyName}</td>
                           <td>
                             {c.people[0] ? (
                               <>
@@ -438,154 +383,17 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
             </>
           )}
           <div className="row" style={{ marginTop: 'var(--s3)' }}>
-            <Button variant="primary" disabled={!analysis || sendable.length === 0} onClick={() => setStep('sender')}>
-              Next: sender
-            </Button>
-          </div>
-        </>
-      )}
-
-      {step === 'sender' && (
-        <>
-          <div className="otr-grid">
-            <label>
-              <span className="field-label">From / sender email</span>
-              {sending && sending.senders.length > 0 ? (
-                <select className="otr-input" value={chosenFrom} onChange={(e) => setFromEmail(e.target.value)}>
-                  {sending.senders.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <Unset what="No sending mailbox is configured on the server" />
-              )}
-            </label>
-            <label>
-              <span className="field-label">Sender name (optional)</span>
-              <input className="otr-input" value={fromName} maxLength={80} placeholder="e.g. Manoj | AltiusNxt" onChange={(e) => setFromName(e.target.value)} />
-            </label>
-            <label>
-              <span className="field-label">CC on every email (optional)</span>
-              <input className="otr-input" value={cc} placeholder="name@altiusnxt.com, …" onChange={(e) => setCc(e.target.value)} />
-            </label>
-          </div>
-          {ccBad.length > 0 && <p className="otr-err">Not an email address: {ccBad.join(', ')}</p>}
-          <label className="field-label" htmlFor="bulk-signature" style={{ marginTop: 'var(--s3)' }}>
-            Signature
-          </label>
-          <textarea id="bulk-signature" className="textarea" rows={4} maxLength={1000} value={signature} onChange={(e) => setSignature(e.target.value)} />
-          <label className="field-label" htmlFor="bulk-postal" style={{ marginTop: 'var(--s3)' }}>
-            Postal address for the opt-out footer (required by US law)
-          </label>
-          <input id="bulk-postal" className="otr-input" maxLength={300} value={postal} placeholder="Street, City, State ZIP, Country" onChange={(e) => setPostal(e.target.value)} />
-          {template && (
-            <details style={{ marginTop: 'var(--s3)' }}>
-              <summary>The approved template ({template.label}) — used word for word</summary>
-              <p>
-                <span className="field-label">Subject</span> {template.subject}
-              </p>
-              <pre className="bulk-body">{template.body.split('\n').join('\n\n')}</pre>
-            </details>
-          )}
-          <div className="row" style={{ marginTop: 'var(--s3)' }}>
-            <Button variant="quiet" onClick={() => setStep('upload')}>
-              Back
-            </Button>
-            <Button variant="primary" disabled={ccBad.length > 0 || !postal.trim()} onClick={() => setStep('schedule')}>
-              Next: schedule
-            </Button>
-          </div>
-          {/* Why the button is greyed out, in words — it used to be silent. */}
-          {(!postal.trim() || ccBad.length > 0) && (
-            <p className="otr-warn" role="status">
-              {!postal.trim() ? 'Enter the postal address to continue — US law requires it in the opt-out line.' : 'Fix the CC address to continue.'}
-            </p>
-          )}
-          {!chosenFrom && postal.trim() && (
-            <p className="note">You can schedule and review now. Starting needs a sending mailbox configured on the server.</p>
-          )}
-        </>
-      )}
-
-      {step === 'schedule' && (
-        <>
-          <div className="otr-grid">
-            <label>
-              <span className="field-label">Start date</span>
-              <input className="otr-input" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-            </label>
-            <label>
-              <span className="field-label">Start time ({ampm(startTime)})</span>
-              <input className="otr-input" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-            </label>
-            <label>
-              <span className="field-label">Time zone</span>
-              <select className="otr-input" value={timezone} onChange={(e) => setTimezone(e.target.value)}>
-                <optgroup label="Common">
-                  {zoneOptions.common.map((z) => (
-                    <option key={z.value} value={z.value}>
-                      {z.label}
-                    </option>
-                  ))}
-                </optgroup>
-                {zoneOptions.others.length > 0 && (
-                  <optgroup label="All time zones">
-                    {zoneOptions.others.map((z) => (
-                      <option key={z.value} value={z.value}>
-                        {z.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </label>
-            <label>
-              <span className="field-label">Sending hours from ({ampm(sendStart)})</span>
-              <input className="otr-input" type="time" value={sendStart} onChange={(e) => setSendStart(e.target.value)} />
-            </label>
-            <label>
-              <span className="field-label">until ({ampm(sendEnd)})</span>
-              <input className="otr-input" type="time" value={sendEnd} onChange={(e) => setSendEnd(e.target.value)} />
-            </label>
-            <label>
-              <span className="field-label">Minutes between emails</span>
-              <input className="otr-input" type="number" min={1} max={240} value={interval} onChange={(e) => setIntervalMinutes(e.target.value)} />
-            </label>
-            <label>
-              <span className="field-label">At most per day{sending ? ` (up to ${sending.maxPerDay})` : ''}</span>
-              <input className="otr-input" type="number" min={1} max={sending?.maxPerDay ?? 200} value={cap} onChange={(e) => setCap(e.target.value)} />
-            </label>
-          </div>
-          <div className="row" role="group" aria-label="Sending days" style={{ marginTop: 'var(--s2)' }}>
-            {DAY.map((d, i) => (
-              <label key={d} className="otr-check">
-                <input type="checkbox" checked={days.includes(i + 1)} onChange={() => setDays((p) => (p.includes(i + 1) ? p.filter((x) => x !== i + 1) : [...p, i + 1].sort()))} />
-                {d}
-              </label>
-            ))}
-          </div>
-          <p className="note">
-            Emails go one at a time, {interval || '…'} minutes apart, only {ampm(sendStart)}–{ampm(sendEnd)} {timezone.replace(/_/g, ' ')} time, at most {cap || '…'} a day. When
-            the day&rsquo;s limit or hours run out, the rest continue in the next allowed period.
-          </p>
-          <div className="row" style={{ marginTop: 'var(--s3)' }}>
-            <Button variant="quiet" onClick={() => setStep('sender')}>
-              Back
-            </Button>
             <Button
               variant="primary"
-              disabled={!startDate || !startTime || days.length === 0}
+              disabled={!analysis || sendable.length === 0}
               busy={call.busy === 'review'}
               onClick={() => {
                 setConfirmed(false)
-                setReview(null)
                 setStep('review')
                 loadReview()
               }}
             >
-              Next: review
+              Next: review emails
             </Button>
           </div>
         </>
@@ -597,37 +405,10 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
             <LoadingState what="Preparing every email" />
           ) : (
             <>
-              <dl className="enrich__readout">
-                <div>
-                  <dt>Contacts</dt>
-                  <dd>
-                    {review.counts.companies} companies · <strong>{review.counts.validEmails} emails will be sent</strong> · {review.counts.skipped} skipped ·{' '}
-                    {review.counts.noWorkAddress} rows with no usable work address
-                  </dd>
-                </div>
-                <div>
-                  <dt>From</dt>
-                  <dd>
-                    {review.from.email
-                      ? review.from.name
-                        ? `${review.from.name} <${review.from.email}>`
-                        : review.from.email
-                      : 'No sending mailbox configured on the server yet'}
-                    {ccList.length > 0 ? ` · CC on every email: ${ccList.join(', ')}` : ''}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Schedule</dt>
-                  <dd>
-                    First email {review.schedule.firstLocal ?? '—'} ({review.schedule.timezone.replace(/_/g, ' ')}), {review.schedule.intervalMinutes} minutes apart, at most{' '}
-                    {review.schedule.dailyCap} a day, {ampm(sendStart)}–{ampm(sendEnd)} {days.map((d) => DAY[d - 1]).join(' ')}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Estimated completion</dt>
-                  <dd>{review.schedule.estimatedCompletionLocal ?? '—'}</dd>
-                </div>
-              </dl>
+              <p className="note">
+                <strong>{review.counts.validEmails} emails</strong> will be sent · {review.counts.skipped} skipped · {review.counts.noWorkAddress} rows with no usable address. Click Preview to read
+                any email exactly as it will be sent.
+              </p>
               <div className="otr-scroll" style={{ maxHeight: 360, overflowY: 'auto' }}>
                 <table className="otr-table">
                   <thead>
@@ -636,7 +417,6 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                       <th>Person</th>
                       <th>To</th>
                       <th>CC</th>
-                      <th>When</th>
                       <th />
                     </tr>
                   </thead>
@@ -647,14 +427,13 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                         <td>{r.contactName ?? '—'}</td>
                         <td>{r.toEmail ?? '—'}</td>
                         <td className="cell-dim">{r.ccEmails.join(', ') || '—'}</td>
-                        <td className="cell-dim">{r.status === 'ready' ? r.scheduledLocal : <Chip tone="neutral">Skipped</Chip>}</td>
                         <td>
                           {r.status === 'ready' ? (
                             <Button size="sm" variant="quiet" onClick={() => setPreviewPos(r.position)}>
                               Preview
                             </Button>
                           ) : (
-                            <span className="cell-dim">{r.reason}</span>
+                            <span className="cell-dim">Skipped — {r.reason}</span>
                           )}
                         </td>
                       </tr>
@@ -666,7 +445,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                 <article className="bulk-email" aria-label="Email preview">
                   <p className="cell-dim">
                     To: {preview.toEmail}
-                    {preview.ccEmails.length ? ` · CC: ${preview.ccEmails.join(', ')}` : ''} · {preview.scheduledLocal}
+                    {preview.ccEmails.length ? ` · CC: ${preview.ccEmails.join(', ')}` : ''}
                   </p>
                   <p>
                     <span className="field-label">Subject</span> {preview.subject}
@@ -674,30 +453,134 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   <pre className="bulk-body">{preview.text}</pre>
                 </article>
               )}
-              <label className="otr-check">
-                <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
-                <span>
-                  I reviewed this list and approve sending {review.counts.validEmails} emails from {review.from.email ?? 'the configured mailbox'} on this schedule.
-                </span>
-              </label>
-              {!canApprove && <p className="note">Starting a bulk email needs an approver or an administrator.</p>}
-              <SendingNote sending={review.sending} />
             </>
           )}
           <div className="row" style={{ marginTop: 'var(--s3)' }}>
-            <Button variant="quiet" onClick={() => setStep('schedule')}>
+            <Button variant="quiet" onClick={() => setStep('upload')}>
               Back
             </Button>
-            <Button
-              variant="primary"
-              icon={Send}
-              disabled={!review || review.counts.validEmails === 0 || !confirmed || !canApprove || Boolean(review.sending.reason) || !review.from.email}
-              busy={call.busy === 'start'}
-              onClick={start}
-            >
-              Approve and start sending
+            <Button variant="primary" disabled={!review || review.counts.validEmails === 0} onClick={() => setStep('schedule')}>
+              Next: date and time
             </Button>
           </div>
+        </>
+      )}
+
+      {step === 'schedule' && (
+        <>
+          <div className="otr-grid">
+            <label>
+              <span className="field-label">Date</span>
+              <input
+                className="otr-input"
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value)
+                  setReview(null)
+                }}
+              />
+            </label>
+            <label>
+              <span className="field-label">Time, IST ({ampm(startTime)})</span>
+              <input
+                className="otr-input"
+                type="time"
+                value={startTime}
+                onChange={(e) => {
+                  setStartTime(e.target.value)
+                  setReview(null)
+                }}
+              />
+            </label>
+            <label>
+              <span className="field-label">Minutes between emails</span>
+              <input
+                className="otr-input"
+                type="number"
+                min={1}
+                max={240}
+                value={interval}
+                onChange={(e) => {
+                  setIntervalMinutes(e.target.value)
+                  setReview(null)
+                }}
+              />
+            </label>
+          </div>
+          {sending && sending.senders.length > 1 && (
+            <label style={{ display: 'block', marginTop: 'var(--s2)' }}>
+              <span className="field-label">Send from</span>
+              <select className="otr-input" value={chosenFrom} onChange={(e) => setFromEmail(e.target.value)}>
+                {sending.senders.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!review ? (
+            <div className="row" style={{ marginTop: 'var(--s3)' }}>
+              <Button
+                variant="quiet"
+                onClick={() => {
+                  setStep('review')
+                  loadReview()
+                }}
+              >
+                Back
+              </Button>
+              <Button variant="primary" disabled={!startDate || !startTime || !intervalOk} busy={call.busy === 'review'} onClick={loadReview}>
+                Show the sending times
+              </Button>
+            </div>
+          ) : (
+            <>
+              <ul className="otr-list">
+                <li>
+                  <strong>{review.counts.validEmails} emails</strong>, one every {review.schedule.intervalMinutes} minutes, from <strong>{review.schedule.firstLocal ?? '—'}</strong> until{' '}
+                  <strong>{review.schedule.estimatedCompletionLocal ?? '—'}</strong>.
+                </li>
+                <li>From: {chosenFrom || 'no sending mailbox configured on the server yet'}</li>
+              </ul>
+              <div className="otr-scroll" style={{ maxHeight: 220, overflowY: 'auto' }}>
+                <table className="otr-table">
+                  <tbody>
+                    {review.rows
+                      .filter((r) => r.status === 'ready')
+                      .map((r) => (
+                        <tr key={r.position}>
+                          <td className="cell-dim">{r.scheduledLocal}</td>
+                          <td>{r.companyName}</td>
+                          <td className="cell-dim">{r.toEmail}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+              <label className="otr-check">
+                <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+                <span>I reviewed these {review.counts.validEmails} emails and approve sending them at these times.</span>
+              </label>
+              {!canApprove && <p className="note">Starting a bulk email needs an approver or an administrator.</p>}
+              <SendingNote sending={review.sending} />
+              <div className="row" style={{ marginTop: 'var(--s3)' }}>
+                <Button variant="quiet" onClick={() => setStep('review')}>
+                  Back
+                </Button>
+                <Button
+                  variant="primary"
+                  icon={Send}
+                  disabled={review.counts.validEmails === 0 || !confirmed || !canApprove || Boolean(review.sending.reason) || !chosenFrom}
+                  busy={call.busy === 'start'}
+                  onClick={start}
+                >
+                  Approve and start sending
+                </Button>
+              </div>
+            </>
+          )}
         </>
       )}
     </Panel>
@@ -724,7 +607,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
   return (
     <Panel
       title={c.name}
-      subtitle={`From ${c.fromEmail} · ${c.intervalMinutes} min apart · ${c.sendHours} ${c.timezone.replace(/_/g, ' ')} · at most ${c.dailyCap}/day`}
+      subtitle={`From ${c.fromEmail} · started ${c.startLocal} · one every ${c.intervalMinutes} min`}
       actions={
         <div className="row">
           <Button size="sm" variant="quiet" icon={ArrowLeft} onClick={onBack}>
@@ -764,7 +647,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
         <li>
           {counts.sent} sent · {counts.scheduled} scheduled · {counts.sending} sending · {counts.failed} failed · {counts.skipped} skipped — of {counts.total}
         </li>
-        {c.status !== 'completed' && c.estimatedCompletionLocal && <li className="cell-dim">Estimated completion {c.estimatedCompletionLocal}</li>}
+        {c.status !== 'completed' && c.estimatedCompletionLocal && <li className="cell-dim">Last email due {c.estimatedCompletionLocal}</li>}
       </ul>
       <div className="otr-scroll">
         <table className="otr-table">
@@ -772,7 +655,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
             <tr>
               <th>Company</th>
               <th>To / CC</th>
-              <th>When</th>
+              <th>When (IST)</th>
               <th>Status</th>
               <th />
             </tr>
@@ -815,7 +698,6 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
           </tbody>
         </table>
       </div>
-      <p className="note">Created {fmtDateTime(c.createdAt)}. When a contact replies &ldquo;unsubscribe&rdquo;, click Unsubscribe: they are added to the suppression list and never emailed again.</p>
     </Panel>
   )
 }

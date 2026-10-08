@@ -6,10 +6,11 @@ import { MemoryRouter } from 'react-router-dom'
 import { ThemeProvider } from '../../lib/theme'
 import { BulkEmail } from './BulkEmail'
 
-// OUTREACH → BULK EMAIL (2026-10-07): upload → sender → schedule → review →
-// approve and start. The sender is only ever a configured company mailbox;
-// times are shown in 12-hour AM/PM in the chosen time zone (Indianapolis by
-// default); nothing starts without the confirmation; a finished send says so.
+// OUTREACH → BULK EMAIL (2026-10-08), simple and standalone: upload Excel →
+// review the emails → date, time (IST) and minutes between emails → approve
+// and start. The email is the approved template only — no signature, no
+// footer. No time zone, sending hours, days or daily limit. Nothing starts
+// without the confirmation; a finished send says so.
 
 const render = (ui: ReactElement) => rtlRender(<ThemeProvider><MemoryRouter>{ui}</MemoryRouter></ThemeProvider>)
 
@@ -17,11 +18,10 @@ interface Call { url: string; method: string; body: Record<string, unknown> | nu
 let calls: Call[] = []
 const posts = () => calls.filter((c) => c.method === 'POST')
 
-const SENDING: { enabled: boolean; mailboxConfigured: boolean; senders: string[]; reason: string | null; maxPerDay: number } = { enabled: true, mailboxConfigured: true, senders: ['manoj@altiusnxt.com'], reason: null, maxPerDay: 200 }
+const SENDING: { enabled: boolean; mailboxConfigured: boolean; senders: string[]; reason: string | null } = { enabled: true, mailboxConfigured: true, senders: ['manoj@altiusnxt.com'], reason: null }
 const SETTINGS = {
   sending: SENDING,
   templates: [{ key: 'static_site_v1', label: 'Static Site', subject: 'Are AI tools recommending [Company Name]?', body: '[First Name],\nManoj here, from AltiusNxt.', placeholders: ['[First Name]', '[Company Name]'] }],
-  defaults: {},
 }
 const ANALYSIS = {
   fileName: 'leads.xlsx',
@@ -33,25 +33,26 @@ const ANALYSIS = {
   ],
   noAddress: [{ row: 4, companyName: 'No Email Co', reason: 'No email address' }],
 }
-const TEXT = 'Maddie,\n\nManoj here, from AltiusNxt.'
+const TEXT = ['Maddie,', 'Manoj here, from AltiusNxt.', 'Would you like me to send it?'].join('\n\n')
 const REVIEW = {
   fileName: 'leads.xlsx',
-  counts: { rowsWithCompany: 4, companies: 3, validEmails: 1, skipped: 1, noWorkAddress: 1 },
+  counts: { rowsWithCompany: 4, companies: 3, validEmails: 2, skipped: 1, noWorkAddress: 1 },
   rows: [
-    { position: 0, companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], rows: [2], subject: 'Are AI tools recommending Thermohvac?', text: TEXT, status: 'ready', reason: null, scheduledLocal: 'Mon, Oct 12, 2026, 8:00 AM' },
-    { position: 1, companyName: 'Progressive power', contactName: 'hank', toEmail: 'hank@progressivepower.net', ccEmails: [], rows: [3], subject: null, text: null, status: 'skipped', reason: 'Said not interested', scheduledLocal: null },
+    { position: 0, companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], rows: [2], subject: 'Are AI tools recommending Thermohvac?', text: TEXT, status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:00 AM IST' },
+    { position: 1, companyName: 'Babsco', contactName: 'Steve Kile', toEmail: 'skile@babsco.com', ccEmails: [], rows: [5], subject: 'Are AI tools recommending Babsco?', text: 'Steve,', status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:05 AM IST' },
+    { position: 2, companyName: 'Progressive power', contactName: 'hank', toEmail: 'hank@progressivepower.net', ccEmails: [], rows: [3], subject: null, text: null, status: 'skipped', reason: 'Said not interested', scheduledLocal: null },
   ],
   noAddress: ANALYSIS.noAddress,
-  schedule: { timezone: 'America/Indiana/Indianapolis', startLocal: 'Mon, Oct 12, 2026, 8:00 AM', firstLocal: 'Mon, Oct 12, 2026, 8:00 AM', estimatedCompletionLocal: 'Mon, Oct 12, 2026, 8:00 AM', intervalMinutes: 5, dailyCap: 100 },
-  from: { email: 'manoj@altiusnxt.com', name: null },
+  schedule: { timezone: 'Asia/Kolkata', startLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', firstLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', estimatedCompletionLocal: 'Sat, Oct 10, 2026, 10:05 AM IST', intervalMinutes: 5 },
+  from: { email: 'manoj@altiusnxt.com' },
   sending: SENDING,
 }
 const DETAIL = {
-  campaign: { id: 'bk1', name: 'leads — 2026-10-12', status: 'completed', fromEmail: 'manoj@altiusnxt.com', timezone: 'America/Indiana/Indianapolis', startLocal: 'Mon, Oct 12, 2026, 8:00 AM', sendHours: '8:00 AM – 5:00 PM', intervalMinutes: 5, dailyCap: 100, createdAt: '2026-10-12T12:00:00Z', completedLocal: 'Mon, Oct 12, 2026, 8:10 AM' },
+  campaign: { id: 'bk1', name: 'leads — 2026-10-10', status: 'completed', templateKey: 'static_site_v1', fromEmail: 'manoj@altiusnxt.com', startLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', intervalMinutes: 5, sourceFileName: 'leads.xlsx', createdAt: '2026-10-09T12:00:00Z', completedAt: '2026-10-10T04:40:00Z', completedLocal: 'Sat, Oct 10, 2026, 10:10 AM IST' },
   counts: { scheduled: 0, sending: 0, sent: 2, failed: 1, skipped: 1, total: 4 },
   recipients: [
-    { id: 'r1', companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], subject: 'Are AI tools recommending Thermohvac?', body: TEXT, status: 'sent', reason: null, scheduledLocal: 'Mon, Oct 12, 2026, 8:00 AM', sentLocal: 'Mon, Oct 12, 2026, 8:00 AM' },
-    { id: 'r2', companyName: 'Armour Screw', contactName: 'Jeff', toEmail: 'jeff@armourscrew.com', ccEmails: [], subject: 's', body: 'b', status: 'failed', reason: '550 mailbox unavailable', scheduledLocal: 'Mon, Oct 12, 2026, 8:05 AM', sentLocal: null },
+    { id: 'r1', companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], subject: 'Are AI tools recommending Thermohvac?', body: TEXT, status: 'sent', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', sentLocal: 'Sat, Oct 10, 2026, 10:00 AM IST' },
+    { id: 'r2', companyName: 'Armour Screw', contactName: 'Jeff', toEmail: 'jeff@armourscrew.com', ccEmails: [], subject: 's', body: 'b', status: 'failed', reason: '550 mailbox unavailable', scheduledLocal: 'Sat, Oct 10, 2026, 10:05 AM IST', sentLocal: null },
   ],
   sending: SENDING,
 }
@@ -66,7 +67,7 @@ function stub(opts: { sending?: typeof SENDING } = {}) {
     const sending = opts.sending ?? SENDING
     if (method === 'POST' && u.endsWith('/outreach/bulk/analyze')) return json(ANALYSIS)
     if (method === 'POST' && u.endsWith('/outreach/bulk/review')) return json({ ...REVIEW, sending })
-    if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 1, skipped: 1 }, 201)
+    if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
     if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending })
     if (u.endsWith('/outreach/bulk/bk1')) return json(DETAIL)
@@ -75,124 +76,110 @@ function stub(opts: { sending?: typeof SENDING } = {}) {
   })
 }
 
-async function toReview() {
+async function upload() {
   render(<BulkEmail canOperate canApprove />)
   await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
-  const file = new File(['PK-fake-xlsx'], 'leads.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-  await userEvent.upload(screen.getByLabelText(/excel file/i), file)
-  expect(await screen.findByText(/companies with a valid work email address/i)).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: /next: sender/i }))
-  await userEvent.type(screen.getByLabelText(/postal address/i), '1 Main St, Indianapolis, IN 46204')
-  await userEvent.type(screen.getByLabelText(/^signature$/i), 'Manoj')
-  await userEvent.click(screen.getByRole('button', { name: /next: schedule/i }))
-  await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  await screen.findByText(/emails will be sent/i)
+  await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK-fake-xlsx'], 'leads.xlsx'))
+  await screen.findByText('Thermohvac')
 }
+
+async function toSchedule() {
+  await upload()
+  await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+  await screen.findByLabelText('Email preview')
+  await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+}
+
+const field = (text: string) => screen.getByText(text).closest('label')!.querySelector('input')!
 
 beforeEach(() => {
   calls = []
 })
 
-describe('a new bulk email', () => {
+describe('step 1: upload Excel', () => {
   it('reads the upload and shows the contacts and the number of valid addresses', async () => {
     stub()
-    render(<BulkEmail canOperate canApprove />)
-    await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
-    await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK'], 'leads.xlsx'))
-    expect(await screen.findByText('Thermohvac')).toBeInTheDocument()
+    await upload()
     expect(screen.getByText(/skipped — said not interested/i)).toBeInTheDocument()
+    expect(screen.getByText(/companies with a valid email address/i)).toBeInTheDocument()
     const analyze = posts().find((c) => c.url.endsWith('/analyze'))!
-    expect(analyze.body).toMatchObject({ fileName: 'leads.xlsx' })
+    expect(analyze.body).toMatchObject({ fileName: 'leads.xlsx', allowWebmail: false })
     expect(typeof analyze.body!.fileBase64).toBe('string')
   })
 
   it('has a test option for the team’s own webmail addresses — off unless ticked — and reads the file again with it', async () => {
     stub()
-    render(<BulkEmail canOperate canApprove />)
-    await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
+    await upload()
     const option = screen.getByRole('checkbox', { name: /include personal \/ webmail addresses/i })
     expect(option).not.toBeChecked()
-    await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK'], 'sample test.xlsx'))
-    await screen.findByText('Thermohvac')
-    expect(posts().filter((c) => c.url.endsWith('/analyze')).pop()!.body).toMatchObject({ allowWebmail: false })
     await userEvent.click(option)
     await waitFor(() => expect(posts().filter((c) => c.url.endsWith('/analyze')).pop()!.body).toMatchObject({ allowWebmail: true }))
   })
 
-  it('offers only the configured company mailbox as the sender', async () => {
+  it('shows three steps only, and nothing about senders, signatures, postal addresses or time zones', async () => {
     stub()
-    render(<BulkEmail canOperate canApprove />)
-    await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
-    await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK'], 'leads.xlsx'))
-    await userEvent.click(await screen.findByRole('button', { name: /next: sender/i }))
-    const from = screen.getByText('From / sender email').closest('label')!.querySelector('select')!
-    expect([...from.options].map((o) => o.value)).toEqual(['manoj@altiusnxt.com'])
-    expect(document.body.textContent).not.toMatch(/dtlpmanikandan|Manikandan/)
-  })
-
-  it('schedules in Indianapolis time by default and shows times in AM/PM', async () => {
-    stub()
-    render(<BulkEmail canOperate canApprove />)
-    await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
-    await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK'], 'leads.xlsx'))
-    await userEvent.click(await screen.findByRole('button', { name: /next: sender/i }))
-    await userEvent.type(screen.getByLabelText(/postal address/i), '1 Main St')
-    await userEvent.click(screen.getByRole('button', { name: /next: schedule/i }))
-    const zone = screen.getByText('Time zone').closest('label')!.querySelector('select')!
-    expect(zone.value).toBe('America/Indiana/Indianapolis')
-    expect(screen.getByText('Start time (8:00 AM)')).toBeInTheDocument()
-    expect(screen.getByText(/until \(5:00 PM\)/)).toBeInTheDocument()
-  })
-
-  it('reviews everything, and starts only after the confirmation, with the schedule chosen', async () => {
-    stub()
-    await toReview()
-    expect(screen.getByText(/1 emails will be sent/i)).toBeInTheDocument()
-    expect(screen.getByText(/estimated completion/i)).toBeInTheDocument()
-    expect(within(screen.getByLabelText('Email preview')).getByText(/Are AI tools recommending Thermohvac\?/)).toBeInTheDocument()
-    const start = screen.getByRole('button', { name: /approve and start sending/i })
-    expect(start).toBeDisabled()
-    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed this list/i }))
-    await userEvent.click(start)
-    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
-    const body = posts().find((c) => c.url.endsWith('/start'))!.body!
-    expect(body).toMatchObject({ confirm: true, fromEmail: 'manoj@altiusnxt.com', timezone: 'America/Indiana/Indianapolis', startTime: '08:00', intervalMinutes: 5, postalAddress: '1 Main St, Indianapolis, IN 46204', signature: 'Manoj' })
-  })
-
-  it('cannot start while no sending mailbox is configured, and says why', async () => {
-    stub({ sending: { ...SENDING, enabled: false, senders: ['manoj@altiusnxt.com'], reason: 'Bulk sending is switched off on the server (BULK_EMAIL_ENABLED).' } })
-    await toReview()
-    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed this list/i }))
-    expect(screen.getByRole('button', { name: /approve and start sending/i })).toBeDisabled()
-    expect(screen.getAllByText(/switched off on the server/i).length).toBeGreaterThan(0)
+    await upload()
+    expect(within(screen.getByRole('list', { name: 'Steps' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. Upload Excel',
+      '2. Review emails',
+      '3. Date, time and start',
+    ])
+    expect(document.body.textContent).not.toMatch(/signature|postal address|time zone|sending hours|daily limit|Indianapolis|select compan/i)
   })
 })
 
-// 2026-10-08: "Next: schedule" was greyed out with no word of why — and
-// blocked Review whenever no mailbox was configured, though the screen said
-// review was possible.
-describe('before a sending mailbox is configured', () => {
-  const NO_MAILBOX = { enabled: false, mailboxConfigured: false, senders: [] as string[], reason: 'No sending mailbox is configured on the server.', maxPerDay: 200 }
+describe('step 2: review emails', () => {
+  it('shows every company, its To and CC, and the email exactly as it will be sent', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    const preview = await screen.findByLabelText('Email preview')
+    expect(within(preview).getByText(/Are AI tools recommending Thermohvac\?/)).toBeInTheDocument()
+    expect(within(preview).getByText(/CC: mmurray@thermohvac.com/)).toBeInTheDocument()
+    expect(preview.querySelector('pre')!.textContent).toBe(TEXT)
+    expect(screen.getByText(/skipped — said not interested/i)).toBeInTheDocument()
+    expect(posts().find((c) => c.url.endsWith('/review'))!.body).toMatchObject({ startTime: '10:00', intervalMinutes: 5 })
+  })
+})
 
-  it('says what is missing, and goes on to schedule and review once the postal address is in', async () => {
-    stub({ sending: NO_MAILBOX })
-    render(<BulkEmail canOperate canApprove />)
-    await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
-    await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK'], 'sample test.xlsx'))
-    await userEvent.click(await screen.findByRole('button', { name: /next: sender/i }))
-    const next = screen.getByRole('button', { name: /next: schedule/i })
-    expect(next).toBeDisabled()
-    expect(screen.getByText(/enter the postal address to continue/i)).toBeInTheDocument()
+describe('step 3: date, time (IST) and minutes between emails', () => {
+  it('asks for only date, time and minutes — and shows each email’s time in IST', async () => {
+    stub()
+    await toSchedule()
+    expect(field('Date').type).toBe('date')
+    expect(field('Time, IST (10:00 AM)').value).toBe('10:00')
+    expect(field('Minutes between emails').value).toBe('5')
+    expect(screen.queryByText(/send from/i)).not.toBeInTheDocument()
 
-    await userEvent.type(screen.getByLabelText(/postal address/i), '1 Main St, Indianapolis, IN 46204')
-    expect(next).toBeEnabled()
-    expect(screen.getByText(/you can schedule and review now/i)).toBeInTheDocument()
-    await userEvent.click(next)
-    await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
-    expect(await screen.findByText(/emails will be sent/i)).toBeInTheDocument()
-    expect(posts().find((c) => c.url.endsWith('/review'))!.body).toMatchObject({ fromEmail: '' })
-    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed this list/i }))
+    await userEvent.clear(field('Date'))
+    await userEvent.type(field('Date'), '2026-10-10')
+    await userEvent.clear(field('Minutes between emails'))
+    await userEvent.type(field('Minutes between emails'), '5')
+    await userEvent.click(screen.getByRole('button', { name: /show the sending times/i }))
+    expect(await screen.findByText('Sat, Oct 10, 2026, 10:00 AM IST', { selector: 'td' })).toBeInTheDocument()
+    expect(screen.getByText('Sat, Oct 10, 2026, 10:05 AM IST', { selector: 'td' })).toBeInTheDocument()
+    expect(posts().filter((c) => c.url.endsWith('/review')).pop()!.body).toMatchObject({ startDate: '2026-10-10', startTime: '10:00', intervalMinutes: 5 })
+  })
+
+  it('starts only after the confirmation, with the date, time and minutes chosen', async () => {
+    stub()
+    await toSchedule()
+    const start = await screen.findByRole('button', { name: /approve and start sending/i })
+    expect(start).toBeDisabled()
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(start)
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    const body = posts().find((c) => c.url.endsWith('/start'))!.body!
+    expect(body).toMatchObject({ confirm: true, fromEmail: 'manoj@altiusnxt.com', startTime: '10:00', intervalMinutes: 5, templateKey: 'static_site_v1' })
+    expect(Object.keys(body).sort()).toEqual(['allowWebmail', 'confirm', 'fileBase64', 'fileName', 'fromEmail', 'intervalMinutes', 'startDate', 'startTime', 'templateKey'])
+  })
+
+  it('cannot start while no sending mailbox is configured, and says why', async () => {
+    stub({ sending: { enabled: false, mailboxConfigured: false, senders: [], reason: 'No sending mailbox is configured on the server.' } })
+    await toSchedule()
+    await userEvent.click(await screen.findByRole('checkbox', { name: /I reviewed these/i }))
     expect(screen.getByRole('button', { name: /approve and start sending/i })).toBeDisabled()
+    expect(screen.getByText(/no sending mailbox is configured on the server\./i)).toBeInTheDocument()
   })
 })
 
@@ -203,20 +190,21 @@ describe('a bulk email that has run', () => {
     await userEvent.click(await screen.findByRole('button', { name: /^open$/i }))
     expect(await screen.findByText('Bulk sequence completed')).toBeInTheDocument()
     expect(screen.getByText(/4 processed: 2 sent, 1 failed, 1 skipped/)).toBeInTheDocument()
+    expect(screen.getByText(/one every 5 min/)).toBeInTheDocument()
     expect(screen.getByText('550 mailbox unavailable')).toBeInTheDocument()
     await userEvent.click(screen.getAllByRole('button', { name: /unsubscribe/i })[0]!)
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/recipients/r1/unsubscribe'))).toBe(true))
   })
 })
 
-// Bulk Email is standalone (2026-10-07): nothing in its folder comes from the
-// One company or Several companies screens.
+// Bulk Email is standalone: nothing in its folder comes from the One company
+// or Several companies screens.
 describe('a standalone workflow', () => {
   it('imports nothing from the other Outreach flows', () => {
     const sources = import.meta.glob('./*.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
-    expect(Object.keys(sources).length).toBeGreaterThan(2)
+    expect(Object.keys(sources).length).toBeGreaterThanOrEqual(2)
     for (const [file, src] of Object.entries(sources)) {
-      for (const m of src.matchAll(/from '([^']+)'/g)) expect(m[1], `${file}`).not.toMatch(/outreach\//)
+      for (const m of src.matchAll(/from '([^']+)'/g)) expect(m[1], `${file}`).not.toMatch(/outreach\/|\.\.\/Outreach/)
     }
   })
 })

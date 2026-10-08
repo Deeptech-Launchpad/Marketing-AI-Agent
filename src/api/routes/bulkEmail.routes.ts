@@ -35,20 +35,12 @@ const Setup = z
   .object({
     ...File,
     templateKey: z.string().min(1).max(60),
-    // Empty until a sending mailbox is configured; Start requires it.
-    fromEmail: z.string().max(254),
-    fromName: z.string().max(80).nullable().optional(),
-    ccEmails: z.array(z.string().max(254)).max(10).optional(),
-    signature: z.string().max(1000),
-    postalAddress: z.string().max(300),
+    // Empty until a sending mailbox is configured; with one configured, it is used.
+    fromEmail: z.string().max(254).optional(),
+    // When sending starts, in Indian Standard Time, and the gap between emails.
     startDate: z.string().max(10),
     startTime: z.string().max(5),
-    timezone: z.string().max(64),
-    sendStart: z.string().max(5),
-    sendEnd: z.string().max(5),
-    sendDays: z.array(z.number().int().min(1).max(7)).min(1).max(7),
     intervalMinutes: z.number().int().min(1).max(240),
-    dailyCap: z.number().int().min(1).max(2000),
     name: z.string().max(120).optional(),
   })
   .strict()

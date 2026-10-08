@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ExcelJS from 'exceljs'
 
-// BULK EMAIL UPLOAD (2026-10-07).
+// BULK EMAIL (2026-10-08) — simple and standalone.
 //
-// The approved static template is used word for word, with only [First Name]
-// and [Company Name] filled. One email per company: the first named person
+// The approved static template and nothing else, with only [First Name] and
+// [Company Name] filled. One email per company: the first named person
 // receives it and colleagues are copied; only work addresses are used; rows
-// marked not interested or already contacted are skipped. 8:00 AM in
-// Indianapolis is 8:00 AM in Indianapolis, emails are spaced by the interval,
-// inside the sending hours, under the daily limit. The sender sends ONE at a
-// time, a failure does not stop the rest, and the send completes.
+// marked not interested or already contacted are skipped. Date, time (IST) and
+// minutes between emails: 10:00, 10:05, 10:10 … until the list is done. The
+// sender sends ONE at a time, a failure does not stop the rest, and the send
+// completes.
 
 // ── An in-memory store ─────────────────────────────────────────────────────
 type Row = Record<string, unknown>
@@ -89,7 +89,6 @@ const env = {
   BULK_SMTP_USER: 'manoj@altiusnxt.test',
   BULK_SMTP_PASS: 'x',
   BULK_FROM_ADDRESSES: 'manoj@altiusnxt.test',
-  BULK_MAX_PER_DAY: 200,
   OUTREACH_COOLDOWN_DAYS: 30,
 }
 vi.mock('../../src/config/env.js', () => ({ env }))
@@ -101,13 +100,12 @@ vi.mock('../../src/outreach/suppression.js', () => ({
   checkSuppression: vi.fn(async (i: { destination: string | null }) => ({ suppressed: Boolean(i.destination && suppressed.has(i.destination)), detail: 'Opted out' })),
 }))
 
-const { composeBulkEmail, STATIC_SITE, OPT_OUT_LINE } = await import('../../src/outreach/bulk/template.js')
+const { composeBulkEmail, STATIC_SITE } = await import('../../src/outreach/bulk/template.js')
 const { extractContacts, workAddress, firstNameOf, recipientsOf } = await import('../../src/outreach/bulk/extract.js')
-const { localToUtc, planBulkSlots, fmtLocal } = await import('../../src/outreach/bulk/schedule.js')
+const { istToUtc, planSequential, fmtIst } = await import('../../src/outreach/bulk/schedule.js')
 const svc = await import('../../src/outreach/bulk/service.js')
 const { setBulkSenderForTests } = await import('../../src/outreach/bulk/transport.js')
 
-const INDY = 'America/Indiana/Indianapolis'
 const actor = { tenantId: 't1', crmUserId: 'u1' }
 
 async function xlsx(rows: unknown[][]): Promise<string> {
@@ -124,21 +122,21 @@ beforeEach(() => {
   setBulkSenderForTests(null)
 })
 
-describe('the approved template, word for word', () => {
-  it('changes nothing but [First Name] and [Company Name], then adds the signature and the opt-out footer', () => {
-    const e = composeBulkEmail({ template: STATIC_SITE, firstName: 'Ed', companyName: 'First Electric Supply', signature: 'Manoj\nAltiusNxt', postalAddress: '1 Main St, Indianapolis, IN 46204' })
+describe('the approved template, and nothing else', () => {
+  it('changes nothing but [First Name] and [Company Name], and adds no signature, footer or other text', () => {
+    const e = composeBulkEmail({ template: STATIC_SITE, firstName: 'Ed', companyName: 'First Electric Supply' })
     expect(e.subject).toBe('Are AI tools recommending First Electric Supply?')
-    const expected = STATIC_SITE.body.replace('[First Name]', 'Ed').split('\n').join('\n\n')
-    expect(e.text).toBe(`${expected}\n\nManoj\nAltiusNxt\n\n--\n${OPT_OUT_LINE}\n1 Main St, Indianapolis, IN 46204`)
+    expect(e.text).toBe(STATIC_SITE.body.replace('[First Name]', 'Ed').split('\n').join('\n\n'))
+    expect(e.text.endsWith('Would you like me to send it?')).toBe(true)
+    expect(e.text).not.toMatch(/unsubscribe|--/)
     expect(e.text).toContain("You didn't come up as a recommended supplier.")
     expect(e.unfilled).toEqual([])
     // The HTML part: the same words; "register here" links to the expo registration.
-    expect(e.html).toContain('<a href="https://events.b2becommerceworld.org/')
     expect(e.html).toContain('>register here</a> with code ALTIUSVIP.')
   })
 
   it('reports a placeholder it could not fill, rather than sending it', () => {
-    expect(composeBulkEmail({ template: STATIC_SITE, firstName: null, companyName: 'X', signature: '', postalAddress: 'a' }).unfilled).toEqual(['[First Name]'])
+    expect(composeBulkEmail({ template: STATIC_SITE, firstName: null, companyName: 'X' }).unfilled).toEqual(['[First Name]'])
   })
 })
 
@@ -197,28 +195,19 @@ describe('reading the spreadsheet', () => {
   })
 })
 
-describe('the schedule, in the chosen US time zone', () => {
-  const w = { tz: INDY, days: [1, 2, 3, 4, 5], startMinute: 8 * 60, endMinute: 17 * 60 }
-
-  it('8:00 AM in Indianapolis is 8:00 AM in Indianapolis', () => {
-    const at = localToUtc('2026-10-12', '08:00', INDY)!
-    expect(at.toISOString()).toBe('2026-10-12T12:00:00.000Z')
-    expect(fmtLocal(at, INDY)).toBe('Mon, Oct 12, 2026, 8:00 AM')
+describe('the schedule: date, time (IST) and minutes between emails', () => {
+  it('10:00 AM on 10 October 2026 is 10:00 AM in India', () => {
+    const at = istToUtc('2026-10-10', '10:00')!
+    expect(at.toISOString()).toBe('2026-10-10T04:30:00.000Z')
+    expect(fmtIst(at)).toBe('Sat, Oct 10, 2026, 10:00 AM IST')
   })
 
-  it('queues the emails one after another, interval minutes apart', () => {
-    const slots = planBulkSlots(localToUtc('2026-10-12', '08:00', INDY)!, 4, 5, w, 100)
-    expect(slots.map((s) => fmtLocal(s!, INDY).split(', ').pop())).toEqual(['8:00 AM', '8:05 AM', '8:10 AM', '8:15 AM'])
-  })
-
-  it('continues the next allowed day when the daily limit is reached, and skips the weekend', () => {
-    const slots = planBulkSlots(localToUtc('2026-10-16', '08:00', INDY)!, 3, 5, w, 2) // a Friday
-    expect(slots.map((s) => fmtLocal(s!, INDY))).toEqual(['Fri, Oct 16, 2026, 8:00 AM', 'Fri, Oct 16, 2026, 8:05 AM', 'Mon, Oct 19, 2026, 8:00 AM'])
-  })
-
-  it('stops at the end of the sending hours and carries on the next day', () => {
-    const slots = planBulkSlots(localToUtc('2026-10-12', '16:50', INDY)!, 3, 5, w, 100)
-    expect(slots.map((s) => fmtLocal(s!, INDY).replace('2026, ', ''))).toEqual(['Mon, Oct 12, 4:50 PM', 'Mon, Oct 12, 4:55 PM', 'Tue, Oct 13, 8:00 AM'])
+  it('sends one after another, interval minutes apart — no hours, days or limits', () => {
+    const slots = planSequential(istToUtc('2026-10-10', '10:00')!, 4, 5)
+    expect(slots.map((d) => fmtIst(d).split(', ').pop())).toEqual(['10:00 AM IST', '10:05 AM IST', '10:10 AM IST', '10:15 AM IST'])
+    // Late at night and over the weekend too: nothing holds them back.
+    const late = planSequential(istToUtc('2026-10-10', '23:55')!, 2, 10)
+    expect(late.map((d) => fmtIst(d))).toEqual(['Sat, Oct 10, 2026, 11:55 PM IST', 'Sun, Oct 11, 2026, 12:05 AM IST'])
   })
 })
 
@@ -235,40 +224,33 @@ describe('review, start, and sending one at a time', () => {
     fileName: 'Indianapolis - Static Leads.xlsx',
     templateKey: 'static_site_v1',
     fromEmail: 'manoj@altiusnxt.test',
-    fromName: 'Manoj | AltiusNxt',
-    ccEmails: ['sales@altiusnxt.test'],
-    signature: 'Manoj\nAltiusNxt',
-    postalAddress: '1 Main St, Indianapolis, IN 46204',
-    startDate: '2026-10-12',
-    startTime: '08:00',
-    timezone: INDY,
-    sendStart: '08:00',
-    sendEnd: '17:00',
-    sendDays: [1, 2, 3, 4, 5],
+    startDate: '2026-10-10',
+    startTime: '10:00',
     intervalMinutes: 5,
-    dailyCap: 100,
     ...over,
   })
-  const BEFORE = new Date('2026-10-11T12:00:00Z')
+  const BEFORE = new Date('2026-10-09T12:00:00Z')
+  const at = (hhmm: string) => istToUtc('2026-10-10', hhmm)!
 
   it('Review shows every company, its To and CC, its email and its time — and writes nothing', async () => {
     const r = await svc.reviewBulk(actor, await setup(), BEFORE)
     expect(r.counts).toMatchObject({ validEmails: 3, skipped: 1, noWorkAddress: 1 })
     const thermo = r.rows.find((x) => x.companyName === 'Thermohvac')!
-    expect(thermo).toMatchObject({ toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com', 'sales@altiusnxt.test'], status: 'ready' })
+    expect(thermo).toMatchObject({ toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], status: 'ready' })
     expect(thermo.text!.startsWith('Maddie,\n\nManoj here, from AltiusNxt.')).toBe(true)
     expect(r.rows.find((x) => x.companyName === 'Armour Screw')!.text!.startsWith('Jeff,')).toBe(true)
-    expect(r.rows.filter((x) => x.status === 'ready').map((x) => x.scheduledLocal!.split(', ').pop())).toEqual(['8:00 AM', '8:05 AM', '8:10 AM'])
-    expect(r.schedule.estimatedCompletionLocal).toBe('Mon, Oct 12, 2026, 8:10 AM')
+    expect(r.rows.filter((x) => x.status === 'ready').map((x) => x.scheduledLocal!.split(', ').pop())).toEqual(['10:00 AM IST', '10:05 AM IST', '10:10 AM IST'])
+    expect(r.schedule.estimatedCompletionLocal).toBe('Sat, Oct 10, 2026, 10:10 AM IST')
     expect(store.bulkEmailCampaign).toHaveLength(0)
   })
 
-  it('reviews before any sending mailbox is chosen, but will not start without one', async () => {
+  it('reviews before any sending mailbox is chosen; Start uses the one configured mailbox', async () => {
     const r = await svc.reviewBulk(actor, await setup({ fromEmail: '' }), BEFORE)
     expect(r.counts.validEmails).toBe(3)
     expect(r.from.email).toBeNull()
-    await expect(svc.startBulk(actor, { ...(await setup({ fromEmail: '' })), confirm: true }, BEFORE)).rejects.toThrow(/Choose the From/)
-    expect(store.bulkEmailCampaign).toHaveLength(0)
+    const { scheduled } = await svc.startBulk(actor, { ...(await setup({ fromEmail: '' })), confirm: true }, BEFORE)
+    expect(scheduled).toBe(3)
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ fromEmail: 'manoj@altiusnxt.test', timezone: 'Asia/Kolkata', intervalMinutes: 5 })
   })
 
   it('will not start without the confirmation, or from an address the server does not send as', async () => {
@@ -278,29 +260,29 @@ describe('review, start, and sending one at a time', () => {
   })
 
   it('sends one email at a time, interval apart, records a failure and carries on, then completes', async () => {
-    const sent: Array<{ to: string; cc: string[]; from: string; subject: string }> = []
+    const sent: Array<{ to: string; cc: string[]; from: string; subject: string; text: string }> = []
     setBulkSenderForTests({
       send: async (e) => {
         if (e.to === 'jeff@armourscrew.com') throw new Error('550 mailbox unavailable')
-        sent.push({ to: e.to, cc: e.cc, from: e.fromEmail, subject: e.subject })
+        sent.push({ to: e.to, cc: e.cc, from: e.fromEmail, subject: e.subject, text: e.text })
         return { messageId: `m${sent.length}` }
       },
     })
     const { campaignId, scheduled } = await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
     expect(scheduled).toBe(3)
 
-    const at = (hhmm: string) => localToUtc('2026-10-12', hhmm, INDY)!
-    // 7:59 — before the sending hours: nothing.
-    await svc.dispatchBulkEmails(at('07:59'))
+    // 9:59 — before the start: nothing.
+    await svc.dispatchBulkEmails(at('09:59'))
     expect(sent).toHaveLength(0)
-    // 8:00 — the first. 8:02 — too soon after it, even though nothing else is due.
-    await svc.dispatchBulkEmails(at('08:00'))
-    await svc.dispatchBulkEmails(at('08:02'))
+    // 10:00 — the first. 10:02 — too soon after it.
+    await svc.dispatchBulkEmails(at('10:00'))
+    await svc.dispatchBulkEmails(at('10:02'))
     expect(sent.map((s) => s.to)).toEqual(['mstellick@thermohvac.com'])
-    expect(sent[0]).toMatchObject({ from: 'manoj@altiusnxt.test', cc: ['mmurray@thermohvac.com', 'sales@altiusnxt.test'], subject: 'Are AI tools recommending Thermohvac?' })
-    // 8:05 — the second fails; it is recorded and the send carries on.
-    await svc.dispatchBulkEmails(at('08:05'))
-    await svc.dispatchBulkEmails(at('08:10'))
+    expect(sent[0]).toMatchObject({ from: 'manoj@altiusnxt.test', cc: ['mmurray@thermohvac.com'], subject: 'Are AI tools recommending Thermohvac?' })
+    expect(sent[0]!.text.endsWith('Would you like me to send it?')).toBe(true)
+    // 10:05 — the second fails; it is recorded and the send carries on.
+    await svc.dispatchBulkEmails(at('10:05'))
+    await svc.dispatchBulkEmails(at('10:10'))
     expect(sent.map((s) => s.to)).toEqual(['mstellick@thermohvac.com', 'skile@babsco.com'])
     const view = await svc.bulkView('t1', campaignId)
     expect(view.recipients.find((r) => r.companyName === 'Armour Screw')).toMatchObject({ status: 'failed', reason: '550 mailbox unavailable' })
@@ -314,7 +296,7 @@ describe('review, start, and sending one at a time', () => {
     setBulkSenderForTests({ send: async (e) => (sent.push(e.to), { messageId: 'm' }) })
     await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
     suppressed.add('mstellick@thermohvac.com')
-    await svc.dispatchBulkEmails(localToUtc('2026-10-12', '08:00', INDY)!)
+    await svc.dispatchBulkEmails(at('10:00'))
     expect(sent).toEqual([])
     expect(store.bulkEmailRecipient!.find((r) => r.toEmail === 'mstellick@thermohvac.com')).toMatchObject({ status: 'skipped' })
   })
@@ -325,7 +307,7 @@ describe('review, start, and sending one at a time', () => {
     await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
     env.BULK_EMAIL_ENABLED = false
     try {
-      await svc.dispatchBulkEmails(localToUtc('2026-10-12', '08:00', INDY)!)
+      await svc.dispatchBulkEmails(at('10:00'))
       expect(sent).toEqual([])
     } finally {
       env.BULK_EMAIL_ENABLED = true

@@ -39,7 +39,6 @@ export interface BulkSendingStatus {
   senders: string[]
   /** Why nothing can be sent, in words; null when it can. */
   reason: string | null
-  maxPerDay: number
 }
 
 export function bulkSendingStatus(): BulkSendingStatus {
@@ -52,7 +51,7 @@ export function bulkSendingStatus(): BulkSendingStatus {
       : senders.length === 0
         ? 'No From address is configured on the server (BULK_FROM_ADDRESSES).'
         : null
-  return { enabled: env.BULK_EMAIL_ENABLED, mailboxConfigured, senders, reason, maxPerDay: env.BULK_MAX_PER_DAY }
+  return { enabled: env.BULK_EMAIL_ENABLED, mailboxConfigured, senders, reason }
 }
 
 /** A header value with no line breaks (no header can be injected). */

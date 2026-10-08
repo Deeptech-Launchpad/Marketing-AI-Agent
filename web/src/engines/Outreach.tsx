@@ -127,6 +127,35 @@ export function Outreach() {
 
   const pickProspect = (r: ProspectRow) => select?.({ crmCompanyId: r.crmCompanyId, companyName: r.companyName })
 
+  const tabs = (
+    <div className="row otr-tabs">
+      <div className="otr-seg" role="group" aria-label="Outreach view">
+        <button type="button" className="otr-seg__btn" aria-pressed={tab === 'sequences'} onClick={() => setTab('sequences')}>
+          One company
+        </button>
+        <button type="button" className="otr-seg__btn" aria-pressed={tab === 'batches'} onClick={() => setTab('batches')}>
+          Several companies
+        </button>
+        <button type="button" className="otr-seg__btn" aria-pressed={tab === 'bulk'} onClick={() => setTab('bulk')}>
+          Bulk email
+        </button>
+      </div>
+      {tab !== 'bulk' && <InfoTip topic={tab === 'batches' ? 'batches' : 'outreach'} />}
+    </div>
+  )
+
+  // Bulk email is a standalone workflow on its own full-width page: no
+  // company list, no sending banner and nothing else from the One company or
+  // Several companies screens beside it (2026-10-08).
+  if (tab === 'bulk') {
+    return (
+      <EnginePage engineId="outreach" state="idle" signature={<SequencePath accent={engine.accent} />}>
+        {tabs}
+        <BulkEmail canOperate={canOperate} canApprove={canApprove} />
+      </EnginePage>
+    )
+  }
+
   return (
     <EnginePage
       engineId="outreach"
@@ -138,26 +167,11 @@ export function Outreach() {
         main={
           <>
             <SendingBanner sending={sending} />
-            <div className="row otr-tabs">
-              <div className="otr-seg" role="group" aria-label="Outreach view">
-                <button type="button" className="otr-seg__btn" aria-pressed={tab === 'sequences'} onClick={() => setTab('sequences')}>
-                  One company
-                </button>
-                <button type="button" className="otr-seg__btn" aria-pressed={tab === 'batches'} onClick={() => setTab('batches')}>
-                  Several companies
-                </button>
-                <button type="button" className="otr-seg__btn" aria-pressed={tab === 'bulk'} onClick={() => setTab('bulk')}>
-                  Bulk email
-                </button>
-              </div>
-              {tab !== 'bulk' && <InfoTip topic={tab === 'batches' ? 'batches' : 'outreach'} />}
-            </div>
+            {tabs}
 
             {tab === 'sequences' && <FlowGuide step={currentStep(view, Boolean(id))} />}
 
             {call.error && <ErrorState error={new Error(call.error)} what="That outreach step did not complete" />}
-
-            {tab === 'bulk' && <BulkEmail canOperate={canOperate} canApprove={canApprove} />}
 
             {tab === 'batches' && !testCampaign && (
               <SendBatches

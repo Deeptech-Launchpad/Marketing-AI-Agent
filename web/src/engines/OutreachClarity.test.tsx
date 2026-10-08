@@ -143,3 +143,18 @@ describe('status words', () => {
     expect(emailStatus('cancelled', 'Stopped by Sales.').label).toBe('Cancelled')
   })
 })
+
+// Bulk email is its own screen (2026-10-08): even with a company selected, the
+// Bulk email tab shows nothing of One company or Several companies.
+describe('the Bulk email tab', () => {
+  it('shows only the bulk screen — no company, steps, prospects or company selection', async () => {
+    stub(view('https://acme.test/p/x200'))
+    render(<Outreach />)
+    await screen.findByLabelText('Outreach steps')
+    await userEvent.click(screen.getByRole('button', { name: 'Bulk email' }))
+    expect(await screen.findByRole('button', { name: /new bulk email/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Outreach steps')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start outreach/i })).not.toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/Acme Safety|Jane Smith|select compan|prospect/i)
+  })
+})
