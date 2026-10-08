@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer'
 import { env } from '../../config/env.js'
 import { strictEmail } from './extract.js'
+import { inlineImages } from './signature.js'
 
 // THE BULK EMAIL TRANSPORT (2026-10-08).
 //
@@ -90,6 +91,9 @@ export function bulkMailOptions(account: TransportAccount, email: BulkOutgoing) 
   const cc = email.cc.map((c) => strictEmail(c)).filter((c): c is string => Boolean(c))
   if (!from) throw new Error(`"${email.fromEmail}" is not a valid From address.`)
   if (!to) throw new Error(`"${email.to}" is not a valid email address.`)
+  // Images embedded in the signature travel inside the email (cid:), so mail
+  // programs show them.
+  const inline = inlineImages(email.html)
   return {
     from: email.fromName ? { name: oneLine(email.fromName).slice(0, 80), address: from } : from,
     to,
@@ -98,7 +102,8 @@ export function bulkMailOptions(account: TransportAccount, email: BulkOutgoing) 
     replyTo: from,
     subject: oneLine(email.subject),
     text: email.text,
-    html: email.html,
+    html: inline.html,
+    ...(inline.attachments.length ? { attachments: inline.attachments } : {}),
     // Lets the recipient's mail program offer a one-click unsubscribe, to the From address.
     headers: { 'List-Unsubscribe': `<mailto:${from}?subject=unsubscribe>` },
     // The SMTP envelope is the account's own (providers require it); bounces return there.

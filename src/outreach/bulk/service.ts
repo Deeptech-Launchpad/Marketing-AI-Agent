@@ -8,6 +8,7 @@ import { readSpreadsheet } from './excel.js'
 import { extractContacts, firstNameOf, recipientsOf, strictEmail } from './extract.js'
 import { fmtIst, IST, istToUtc, planSequential } from './schedule.js'
 import { checkSender, type SenderCheck } from './senders.js'
+import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
 import { bulkTemplate, cleanSignature, composeBulkEmail, STATIC_SITE, type BulkTemplate } from './template.js'
 import { bulkSender, bulkSendingStatus, bulkTransportAccount } from './transport.js'
 
@@ -80,7 +81,12 @@ const MAX_CC = 10
 export interface BulkSenderProfile {
   fromEmail: string
   ccEmails: string[]
+  /** The signature as plain text (derived from signatureHtml when one is set). */
   signature: string
+  /** The signature exactly as pasted, cleaned of active content. */
+  signatureHtml: string
+  /** What cleaning took out of the last pasted signature, in words. */
+  signatureRemoved: string[]
   updatedAt: string | null
   updatedByCrmUserId: string | null
 }
@@ -103,6 +109,8 @@ function profileOf(settings: Settings): BulkSenderProfile {
     fromEmail: typeof raw.fromEmail === 'string' ? raw.fromEmail : '',
     ccEmails: Array.isArray(raw.ccEmails) ? raw.ccEmails.filter((x): x is string => typeof x === 'string') : [],
     signature: typeof raw.signature === 'string' ? raw.signature : '',
+    signatureHtml: typeof raw.signatureHtml === 'string' ? raw.signatureHtml : '',
+    signatureRemoved: Array.isArray(raw.signatureRemoved) ? raw.signatureRemoved.filter((x): x is string => typeof x === 'string') : [],
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
     updatedByCrmUserId: typeof raw.updatedByCrmUserId === 'string' ? raw.updatedByCrmUserId : null,
   }
@@ -180,6 +188,8 @@ export async function senderView(tenantId: string) {
     fromEmail: profile.fromEmail || null,
     ccEmails: profile.ccEmails,
     signature: profile.signature,
+    signatureHtml: profile.signatureHtml,
+    signatureRemoved: profile.signatureRemoved,
     updatedAt: profile.updatedAt,
     check: check ? { authorized: check.authorized, reason: check.reason, warning: check.warning, checkedAt: check.checkedAt, checkedLocal: fmtIst(new Date(check.checkedAt)) } : null,
     authorized: problem === null,
@@ -189,7 +199,7 @@ export async function senderView(tenantId: string) {
 }
 
 /** Saves the From, CC and signature, and checks the From straight away. */
-export async function saveBulkSender(actor: Actor, input: { fromEmail: string; ccEmails: string[]; signature: string }, now = new Date()) {
+export async function saveBulkSender(actor: Actor, input: { fromEmail: string; ccEmails: string[]; signatureHtml: string }, now = new Date()) {
   const fromEmail = strictEmail(input.fromEmail)
   if (!fromEmail) throw new BadRequestError(`"${input.fromEmail}" is not a valid From email address.`)
   const ccEmails: string[] = []
@@ -199,7 +209,18 @@ export async function saveBulkSender(actor: Actor, input: { fromEmail: string; c
     if (!ccEmails.includes(cc)) ccEmails.push(cc)
   }
   if (ccEmails.length > MAX_CC) throw new BadRequestError(`At most ${MAX_CC} CC addresses.`)
-  const profile: BulkSenderProfile = { fromEmail, ccEmails, signature: cleanSignature(input.signature), updatedAt: now.toISOString(), updatedByCrmUserId: actor.crmUserId }
+  if ((input.signatureHtml ?? '').length > MAX_SIGNATURE_HTML) throw new BadRequestError('The signature is too large — use smaller images.')
+  // Kept exactly as pasted; only active content and images that cannot travel are taken out.
+  const sig = cleanSignatureHtml(input.signatureHtml ?? '')
+  const profile: BulkSenderProfile = {
+    fromEmail,
+    ccEmails,
+    signature: cleanSignature(sig.text),
+    signatureHtml: sig.html,
+    signatureRemoved: sig.removed,
+    updatedAt: now.toISOString(),
+    updatedByCrmUserId: actor.crmUserId,
+  }
   await patchSettings(actor.tenantId, { [SENDER_KEY]: profile })
   await authorizeFrom(actor, fromEmail, now, true)
   return senderView(actor.tenantId)
@@ -277,6 +298,7 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const setup = checkedSetup(s)
   const profile = profileOf(await tenantSettings(actor.tenantId))
   const signature = cleanSignature(profile.signature)
+  const signatureHtml = profile.signatureHtml
   const upload = await analyzeUpload({ fileBase64: s.fileBase64, fileName: s.fileName, allowWebmail: s.allowWebmail })
   if (upload.companies.length > MAX_RECIPIENTS) throw new BadRequestError(`At most ${MAX_RECIPIENTS} companies per upload.`)
 
@@ -333,7 +355,7 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     }
     // The sender's CC addresses are copied on every email too.
     for (const extra of profile.ccEmails) if (!ccOk.includes(extra) && extra !== to.email) ccOk.push(extra)
-    const email = composeBulkEmail({ template: setup.template, firstName: firstNameOf(to.name), companyName: c.companyName, signature })
+    const email = composeBulkEmail({ template: setup.template, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
     if (email.unfilled.length) {
       skip(`Could not fill ${email.unfilled.join(', ')}.`)
       continue
@@ -412,6 +434,7 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       fromName: null,
       ccEmails: profile.ccEmails as never,
       signature: cleanSignature(profile.signature),
+      signatureHtml: profile.signatureHtml,
       postalAddress: '',
       sourceFileName: s.fileName ?? null,
       timezone: IST,
@@ -633,7 +656,7 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
     return 'skipped'
   }
   const template: BulkTemplate = bulkTemplate(c.templateKey) ?? STATIC_SITE
-  const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName, signature: c.signature })
+  const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName, signature: c.signature, signatureHtml: c.signatureHtml })
   // What goes is what was reviewed: the stored text. The HTML part is the same
   // words, laid out, and is only used when it matches.
   const html = email.text === r.body ? email.html : `<pre style="font-family:Arial,Helvetica,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`

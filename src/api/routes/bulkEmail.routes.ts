@@ -60,7 +60,8 @@ const Sender = z
   .object({
     fromEmail: z.string().min(3).max(254),
     ccEmails: z.array(z.string().max(254)).max(10),
-    signature: z.string().max(1000),
+    // The signature as pasted (HTML, embedded images included).
+    signatureHtml: z.string().max(1_500_000),
   })
   .strict()
 

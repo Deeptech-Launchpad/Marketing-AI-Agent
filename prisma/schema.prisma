@@ -2818,6 +2818,8 @@ model BulkEmailCampaign {
   // Extra CC on every email (string[]).
   ccEmails      Json
   signature     String
+  // The signature as pasted (HTML), used in the HTML part; '' = none.
+  signatureHtml String @default("")
   // The postal address in the opt-out footer (CAN-SPAM).
   postalAddress String
   sourceFileName String?

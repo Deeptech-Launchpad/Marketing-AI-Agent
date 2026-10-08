@@ -471,6 +471,11 @@ export const BULK_EMAIL: ManualSection = {
           meaning:
             'The reason is shown, and nothing is sent from that address. For example, a company domain with a strict anti-spoofing (DMARC) policy, such as altiusnxt.com, can only be sent as by its own mailbox — so the server needs that mailbox as its sending account. For a Gmail account, the From must be a confirmed "Send mail as" address (Gmail → Settings → Accounts).',
         },
+        {
+          term: 'Signature',
+          meaning:
+            'Copy your signature from Gmail or Outlook and paste it into the Signature box: it keeps its lines, spacing, fonts, colours, layout, links and logo, and goes into every email exactly as it looks there. "Insert image" adds a logo from your computer (PNG, JPG, GIF or WebP, up to 400 KB). Only code that could run is taken out, and an image that is only on your computer cannot be pasted — the page says so.',
+        },
         { term: 'Check sender', meaning: 'Checks again, for example after you added the "Send mail as" address. A Gmail check sends one message to the sending account itself, never to a customer.' },
       ],
     },

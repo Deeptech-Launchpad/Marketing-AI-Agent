@@ -114,6 +114,7 @@ const { istToUtc, planSequential, fmtIst } = await import('../../src/outreach/bu
 const svc = await import('../../src/outreach/bulk/service.js')
 const { setBulkSenderForTests, bulkTransportAccount, bulkMailOptions } = await import('../../src/outreach/bulk/transport.js')
 const { checkSender, parseDmarc, setSenderCheckDepsForTests } = await import('../../src/outreach/bulk/senders.js')
+const { cleanSignatureHtml, inlineImages } = await import('../../src/outreach/bulk/signature.js')
 
 // The sender check, without DNS or a mailbox: each test says what they answer.
 const dmarcCalls: string[] = []
@@ -147,8 +148,18 @@ beforeEach(() => {
 })
 
 /** The From, CC and signature set on the screen (the account itself: authorized without a probe). */
-const setSender = (over: Partial<{ fromEmail: string; ccEmails: string[]; signature: string }> = {}) =>
-  svc.saveBulkSender(actor, { fromEmail: 'manoj@altiusnxt.test', ccEmails: [], signature: '', ...over }, new Date('2026-10-09T11:00:00Z'))
+const setSender = (over: Partial<{ fromEmail: string; ccEmails: string[]; signatureHtml: string }> = {}) =>
+  svc.saveBulkSender(actor, { fromEmail: 'manoj@altiusnxt.test', ccEmails: [], signatureHtml: '', ...over }, new Date('2026-10-09T11:00:00Z'))
+
+// A signature as Gmail puts it on the clipboard: a table, a logo, styles, links.
+const LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+const GMAIL_SIG = [
+  '<div dir="ltr"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tbody><tr>',
+  '<td style="padding-right:15px;vertical-align:top"><span style="color:#555555;font-size:16px">Best Regards,</span><br /><img src="' + LOGO + '" width="200" height="60" alt="AltiusNxt" /></td>',
+  '<td style="border-left:1px solid #555555;padding-left:15px;color:#333333"><b>Manoj S</b><br />Digital Commerce Lead<br /><br />',
+  'm: <a href="tel:+13134869697">+13134869697</a><br />e: <a href="mailto:Manoj@altiusnxt.com">Manoj@altiusnxt.com</a><br />w:<a href="http://www.altiusnxt.com" target="_blank">www.altiusnxt.com</a></td>',
+  '</tr></tbody></table></div>',
+].join('')
 
 describe('the approved template, and nothing else', () => {
   it('changes nothing but [First Name] and [Company Name], and adds no signature, footer or other text', () => {
@@ -451,22 +462,24 @@ describe('the sender on a bulk send: From, CC and signature', () => {
   it('the email carries the CC on every email and the signature under the approved text, sent from the chosen From', async () => {
     Object.assign(env, GMAIL_SYSTEM)
     probeAnswer = { deliveredFrom: 'sales@example.org' }
-    const view = await setSender({ fromEmail: 'sales@example.org', ccEmails: ['team@example.org'], signature: 'Manoj\nAltiusNxt' })
+    const view = await setSender({ fromEmail: 'sales@example.org', ccEmails: ['team@example.org'], signatureHtml: GMAIL_SIG })
     expect(view).toMatchObject({ fromEmail: 'sales@example.org', authorized: true, problem: null, account: { email: 'dtlpmanikandan@gmail.com', source: 'system' } })
 
     const r = await svc.reviewBulk(actor, await setup(), BEFORE)
     const thermo = r.rows.find((x) => x.companyName === 'Thermohvac')!
     expect(thermo.ccEmails).toEqual(['mmurray@thermohvac.com', 'team@example.org'])
-    expect(thermo.text!.endsWith('Would you like me to send it?\n\nManoj\nAltiusNxt')).toBe(true)
+    expect(thermo.text!.endsWith('Would you like me to send it?\n\nBest Regards,\nAltiusNxt\nManoj S\nDigital Commerce Lead\n\nm: +13134869697\ne: Manoj@altiusnxt.com\nw:www.altiusnxt.com')).toBe(true)
+    // The pasted signature, unchanged, under the approved text.
+    expect(thermo.html).toContain(GMAIL_SIG)
 
     const sent: Array<{ from: string; cc: string[]; text: string; html: string }> = []
     setBulkSenderForTests({ send: async (e) => (sent.push({ from: e.fromEmail, cc: e.cc, text: e.text, html: e.html }), { messageId: 'm' }) })
     await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
-    expect(store.bulkEmailCampaign![0]).toMatchObject({ fromEmail: 'sales@example.org', ccEmails: ['team@example.org'], signature: 'Manoj\nAltiusNxt' })
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ fromEmail: 'sales@example.org', ccEmails: ['team@example.org'], signatureHtml: GMAIL_SIG })
     await svc.dispatchBulkEmails(at('10:00'))
     expect(sent[0]).toMatchObject({ from: 'sales@example.org', cc: ['mmurray@thermohvac.com', 'team@example.org'] })
-    expect(sent[0]!.text.endsWith('\n\nManoj\nAltiusNxt')).toBe(true)
-    expect(sent[0]!.html).toContain('<p style="margin:0 0 12px">Manoj<br>AltiusNxt</p>')
+    expect(sent[0]!.text.endsWith('w:www.altiusnxt.com')).toBe(true)
+    expect(sent[0]!.html).toContain(GMAIL_SIG)
   })
 
   it('cannot even start from sales@altiusnxt.com through the gmail.com system account', async () => {
@@ -509,9 +522,60 @@ describe('the sender on a bulk send: From, CC and signature', () => {
     expect((await svc.bulkView('t1', campaignId)).campaign.status).toBe('paused')
   })
 
+  it('a plain-text signature saved earlier still goes, line by line', async () => {
+    const r = await composeBulkEmail({ template: STATIC_SITE, firstName: 'Ed', companyName: 'X', signature: 'Manoj\nAltiusNxt' })
+    expect(r.text.endsWith('\n\nManoj\nAltiusNxt')).toBe(true)
+    expect(r.html).toContain('<p style="margin:0 0 12px">Manoj<br>AltiusNxt</p>')
+  })
+
   it('rejects an invalid From or CC address', async () => {
     await expect(setSender({ fromEmail: 'not an email' })).rejects.toThrow(/not a valid From email/)
     await expect(setSender({ ccEmails: ['ok@example.org', 'bad address'] })).rejects.toThrow(/CC "bad address"/)
+  })
+})
+
+// THE SIGNATURE AS PASTED (2026-10-08): kept exactly — only what could run
+// code, or cannot travel in an email, is taken out, and the screen says what.
+describe('the signature, exactly as pasted', () => {
+  it('keeps a Gmail signature whole: table, styles, logo, links', () => {
+    const c = cleanSignatureHtml(GMAIL_SIG)
+    expect(c.html).toBe(GMAIL_SIG)
+    expect(c.removed).toEqual([])
+    expect(c.text.split('\n')[0]).toBe('Best Regards,')
+  })
+
+  it('keeps a logo hosted on the web as it is', () => {
+    const html = '<p>Thanks</p><img src="https://ci3.googleusercontent.com/mail-sig/AIorK4x" width="200" />'
+    expect(cleanSignatureHtml(html).html).toBe(html)
+  })
+
+  it('takes out only what could run code — and says so', () => {
+    const c = cleanSignatureHtml(
+      '<p onclick="steal()">Manoj</p><script>alert(1)</script><a href="javascript:alert(1)">x</a><td style="color:#333;background:url(javascript:alert(1))">S</td><img src="https://x.test/a.png" onerror="alert(1)" />',
+    )
+    expect(c.html).not.toMatch(/onclick|script|javascript|onerror|alert/i)
+    expect(c.html).toContain('<p>Manoj</p>')
+    expect(c.html).toContain('<img src="https://x.test/a.png" />')
+    expect(c.html).toContain('style="color:#333"')
+    expect(c.removed).toContain('scripts and active content')
+  })
+
+  it('cannot send an image that is on the computer, not the web — and says so', () => {
+    const c = cleanSignatureHtml('<p>Manoj</p><img src="file:///C:/Users/m/logo.png" />')
+    expect(c.html).toBe('<p>Manoj</p>')
+    expect(c.removed.join(' ')).toMatch(/not on the web/)
+  })
+
+  it('embedded images travel inside the email as inline attachments', () => {
+    const i = inlineImages(`<div>${GMAIL_SIG}</div>`)
+    expect(i.html).not.toContain('data:image')
+    expect(i.html).toContain('src="cid:sig1@altius-bulk"')
+    expect(i.attachments).toHaveLength(1)
+    expect(i.attachments[0]).toMatchObject({ cid: 'sig1@altius-bulk', contentType: 'image/png', contentDisposition: 'inline' })
+    expect(i.attachments[0]!.content.subarray(1, 4).toString()).toBe('PNG')
+    const o = bulkMailOptions({ host: 'smtp.gmail.com', port: 587, secure: false, user: 'manoj@altiusnxt.com', pass: 'x', source: 'bulk' }, { fromEmail: 'manoj@altiusnxt.com', fromName: null, to: 'a@b.test', cc: [], subject: 's', text: 't', html: `<div>${GMAIL_SIG}</div>` })
+    expect(o.attachments).toHaveLength(1)
+    expect(o.html).toContain('cid:sig1@altius-bulk')
   })
 })
 

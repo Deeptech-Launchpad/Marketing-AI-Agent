@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render as rtlRender, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
@@ -24,11 +24,16 @@ const SENDING: { enabled: boolean; mailboxConfigured: boolean; account: { email:
   account: { email: 'dtlpmanikandan@gmail.com', source: 'system' },
   reason: null,
 }
-type Sender = { fromEmail: string | null; ccEmails: string[]; signature: string; check: { authorized: boolean; reason: string; warning: string | null; checkedLocal: string } | null; authorized: boolean; problem: string | null; account: typeof SENDING.account }
+type Sender = { fromEmail: string | null; ccEmails: string[]; signature: string; signatureHtml?: string; signatureRemoved?: string[]; check: { authorized: boolean; reason: string; warning: string | null; checkedLocal: string } | null; authorized: boolean; problem: string | null; account: typeof SENDING.account }
+// A signature as Gmail copies it: a table with the logo and the details.
+const SIG_HTML =
+  '<table cellpadding="0" cellspacing="0"><tbody><tr><td style="padding-right:15px">Best Regards,<br /><img src="https://ci3.googleusercontent.com/mail-sig/logo" width="200" alt="AltiusNxt" /></td><td style="border-left:1px solid #555555;padding-left:15px"><b>Manoj S</b><br />Digital Commerce Lead<br />m: <a href="tel:+13134869697">+13134869697</a></td></tr></tbody></table>'
 const SENDER_OK: Sender = {
   fromEmail: 'sales@example.org',
   ccEmails: ['team@example.org'],
-  signature: 'Manoj\nAltiusNxt',
+  signature: 'Best Regards,\nAltiusNxt\nManoj S\nDigital Commerce Lead\nm: +13134869697',
+  signatureHtml: SIG_HTML,
+  signatureRemoved: [],
   check: { authorized: true, reason: 'Checked: Gmail sends as sales@example.org.', warning: null, checkedLocal: 'Thu, Oct 8, 2026, 11:00 AM IST' },
   authorized: true,
   problem: null,
@@ -61,7 +66,7 @@ const REVIEW = {
   fileName: 'leads.xlsx',
   counts: { rowsWithCompany: 4, companies: 3, validEmails: 2, skipped: 1, noWorkAddress: 1 },
   rows: [
-    { position: 0, companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], rows: [2], subject: 'Are AI tools recommending Thermohvac?', text: TEXT, status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:00 AM IST' },
+    { position: 0, companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], rows: [2], subject: 'Are AI tools recommending Thermohvac?', text: TEXT, html: `<div style="font-family:Arial"><p>Maddie,</p><p>Manoj here, from AltiusNxt.</p><div>${SIG_HTML}</div></div>`, status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:00 AM IST' },
     { position: 1, companyName: 'Babsco', contactName: 'Steve Kile', toEmail: 'skile@babsco.com', ccEmails: [], rows: [5], subject: 'Are AI tools recommending Babsco?', text: 'Steve,', status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:05 AM IST' },
     { position: 2, companyName: 'Progressive power', contactName: 'hank', toEmail: 'hank@progressivepower.net', ccEmails: [], rows: [3], subject: null, text: null, status: 'skipped', reason: 'Said not interested', scheduledLocal: null },
   ],
@@ -164,7 +169,9 @@ describe('step 2: review emails', () => {
     const preview = await screen.findByLabelText('Email preview')
     expect(within(preview).getByText(/Are AI tools recommending Thermohvac\?/)).toBeInTheDocument()
     expect(within(preview).getByText(/CC: mmurray@thermohvac.com/)).toBeInTheDocument()
-    expect(preview.querySelector('pre')!.textContent).toBe(TEXT)
+    // The email as it will look, the pasted signature included.
+    expect(preview.querySelector('.bulk-email-html table img')!.getAttribute('src')).toBe('https://ci3.googleusercontent.com/mail-sig/logo')
+    expect(within(preview).getByText('Manoj S')).toBeInTheDocument()
     expect(screen.getByText(/skipped — said not interested/i)).toBeInTheDocument()
     expect(posts().find((c) => c.url.endsWith('/review'))!.body).toMatchObject({ startTime: '10:00', intervalMinutes: 5 })
   })
@@ -229,12 +236,41 @@ describe('the sender: From, CC and signature', () => {
     await userEvent.click(await screen.findByRole('button', { name: /set sender/i }))
     await userEvent.type(screen.getByLabelText('From email'), 'sales@altiusnxt.com')
     await userEvent.type(screen.getByLabelText('CC emails'), 'a@altiusnxt.com, b@altiusnxt.com')
-    await userEvent.type(screen.getByLabelText('Signature'), 'Manoj')
+    // Paste the signature copied from Gmail into the (cleared) box.
+    screen.getByRole('textbox', { name: 'Signature' }).innerHTML = ''
+    fireEvent.paste(screen.getByRole('textbox', { name: 'Signature' }), { clipboardData: { getData: (t: string) => (t === 'text/html' ? SIG_HTML : ''), files: [] } })
     await userEvent.click(screen.getByRole('button', { name: /save and check sender/i }))
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/sender'))).toBe(true))
-    expect(posts().find((c) => c.url.endsWith('/outreach/bulk/sender'))!.body).toEqual({ fromEmail: 'sales@altiusnxt.com', ccEmails: ['a@altiusnxt.com', 'b@altiusnxt.com'], signature: 'Manoj' })
+    const saved = posts().find((c) => c.url.endsWith('/outreach/bulk/sender'))!.body!
+    expect(saved).toMatchObject({ fromEmail: 'sales@altiusnxt.com', ccEmails: ['a@altiusnxt.com', 'b@altiusnxt.com'] })
+    const box = document.createElement('div')
+    box.innerHTML = String(saved.signatureHtml)
+    expect(box.querySelectorAll('table td')).toHaveLength(2)
+    expect(box.querySelector('img')!.getAttribute('src')).toBe('https://ci3.googleusercontent.com/mail-sig/logo')
+    expect(box.querySelector('td + td')!.getAttribute('style')).toBe('border-left:1px solid #555555;padding-left:15px')
+    expect(box.querySelector('a')!.getAttribute('href')).toBe('tel:+13134869697')
     expect(await screen.findByText('Not authorized')).toBeInTheDocument()
     expect(screen.getByText(/DMARC policy of "reject"/)).toBeInTheDocument()
+  })
+
+  it('shows the saved signature as it will look in the email — logo and layout', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await screen.findByText('Authorized')
+    const view = document.querySelector('.bulk-sig-view')!
+    expect(view.querySelector('img')!.getAttribute('src')).toBe('https://ci3.googleusercontent.com/mail-sig/logo')
+    expect(within(view as HTMLElement).getByText('Digital Commerce Lead', { exact: false })).toBeInTheDocument()
+  })
+
+  it('a pasted signature never brings code into the page', async () => {
+    stub({ sender: { ...SENDER_OK, fromEmail: null, check: null, authorized: false, problem: 'Set the From email for bulk emails.' } })
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /set sender/i }))
+    const box = screen.getByRole('textbox', { name: 'Signature' })
+    box.innerHTML = ''
+    fireEvent.paste(box, { clipboardData: { getData: (t: string) => (t === 'text/html' ? '<p onclick="steal()">Manoj</p><script>alert(1)</script><img src="x" onerror="alert(1)">' : ''), files: [] } })
+    expect(box.innerHTML).toContain('Manoj')
+    expect(box.innerHTML).not.toMatch(/onclick|script|onerror/)
   })
 
   it('cannot start while the From is not authorized, and says why', async () => {

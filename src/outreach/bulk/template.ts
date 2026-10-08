@@ -10,7 +10,8 @@
 // Each line of the approved text is one paragraph; paragraphs are separated
 // by a blank line in the email, which changes the layout, never the words.
 // Nothing else is added — no footer, no AI text — except the signature the
-// user set for the sender, under the approved text (2026-10-08).
+// user set for the sender, under the approved text, exactly as they pasted it
+// (signature.ts) (2026-10-08).
 
 export interface BulkTemplate {
   key: string
@@ -89,7 +90,15 @@ export function cleanSignature(s: string | null | undefined): string {
  * The email exactly as it is sent: the approved template with its two
  * placeholders filled and, under it, the sender's signature if one is set.
  */
-export function composeBulkEmail(input: { template: BulkTemplate; firstName: string | null; companyName: string | null; signature?: string | null }): ComposedBulkEmail {
+export function composeBulkEmail(input: {
+  template: BulkTemplate
+  firstName: string | null
+  companyName: string | null
+  /** The signature as plain text (the text part of the email). */
+  signature?: string | null
+  /** The signature as pasted (already cleaned) — used as is in the HTML part. */
+  signatureHtml?: string | null
+}): ComposedBulkEmail {
   const subject = fillTemplate(input.template.subject, input)
   const body = fillTemplate(input.template.body, input)
   const paragraphs = body.text.split('\n').map((p) => p.trim()).filter(Boolean)
@@ -105,7 +114,11 @@ export function composeBulkEmail(input: { template: BulkTemplate; firstName: str
   const html = [
     '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222">',
     ...paragraphs.map((p) => `<p style="margin:0 0 12px">${para(p)}</p>`),
-    ...(signature ? [`<p style="margin:0 0 12px">${signature.split('\n').map(escapeHtml).join('<br>')}</p>`] : []),
+    ...(input.signatureHtml?.trim()
+      ? [`<div>${input.signatureHtml}</div>`]
+      : signature
+        ? [`<p style="margin:0 0 12px">${signature.split('\n').map(escapeHtml).join('<br>')}</p>`]
+        : []),
     '</div>',
   ].join('')
 

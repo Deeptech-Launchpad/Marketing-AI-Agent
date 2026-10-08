@@ -5,6 +5,7 @@ import { useAsync, usePolling } from '../../lib/hooks'
 import { Button, Chip, Panel, Unset } from '../../components/ui/primitives'
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/states'
 import { useBulkCall as useCall } from './useBulkCall'
+import { SignatureEditor, SignatureView, safeHtml, textToHtml } from './SignatureEditor'
 import './bulk.css'
 
 // BULK EMAIL (2026-10-08) — simple and standalone:
@@ -32,6 +33,8 @@ interface SenderView {
   fromEmail: string | null
   ccEmails: string[]
   signature: string
+  signatureHtml?: string
+  signatureRemoved?: string[]
   check: { authorized: boolean; reason: string; warning: string | null; checkedLocal: string } | null
   authorized: boolean
   problem: string | null
@@ -58,6 +61,7 @@ interface ReviewRow {
   rows: number[]
   subject: string | null
   text: string | null
+  html?: string | null
   status: 'ready' | 'skipped'
   reason: string | null
   scheduledLocal: string | null
@@ -180,17 +184,17 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
   const [editing, setEditing] = useState(false)
   const [from, setFrom] = useState('')
   const [cc, setCc] = useState('')
-  const [signature, setSignature] = useState('')
+  const [signatureHtml, setSignatureHtml] = useState('')
 
   const edit = () => {
     setFrom(sender?.fromEmail ?? '')
     setCc(sender?.ccEmails.join(', ') ?? '')
-    setSignature(sender?.signature ?? '')
+    setSignatureHtml(sender?.signatureHtml || textToHtml(sender?.signature ?? ''))
     setEditing(true)
   }
   const save = () =>
     void call.run('save', async () => {
-      const r = await api.post('/outreach/bulk/sender', { fromEmail: from.trim(), ccEmails: splitEmails(cc), signature })
+      const r = await api.post('/outreach/bulk/sender', { fromEmail: from.trim(), ccEmails: splitEmails(cc), signatureHtml })
       if (isSenderView(r)) setSaved(r)
       setEditing(false)
     })
@@ -238,9 +242,9 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
             </label>
           </div>
           <label style={{ display: 'block', marginTop: 'var(--s2)' }}>
-            <span className="field-label">Signature (optional) — shown under the approved email</span>
-            <textarea className="otr-input" aria-label="Signature" rows={4} maxLength={1000} value={signature} onChange={(e) => setSignature(e.target.value)} />
+            <span className="field-label">Signature (optional) — paste it from your email; it is used exactly as it looks here</span>
           </label>
+          <SignatureEditor initialHtml={signatureHtml} onChange={setSignatureHtml} />
           <p className="note">
             Saving checks that the server&rsquo;s sending account may genuinely send as this From address. For a Gmail account, one check message is sent to that
             account itself — never to a customer. This can take up to 30 seconds.
@@ -270,9 +274,16 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
             </li>
             <li>
               <span className="field-label">Signature</span>{' '}
-              {sender.signature ? <pre className="bulk-body bulk-sig">{sender.signature}</pre> : <span className="cell-dim">none</span>}
+              {sender.signatureHtml || sender.signature ? (
+                <SignatureView html={sender.signatureHtml || textToHtml(sender.signature)} />
+              ) : (
+                <span className="cell-dim">none</span>
+              )}
             </li>
           </ul>
+          {sender.signatureRemoved && sender.signatureRemoved.length > 0 && (
+            <p className="note">Taken out of the pasted signature, because it cannot be sent safely in an email: {sender.signatureRemoved.join('; ')}.</p>
+          )}
           {sender.problem && <p className="otr-warn">{sender.problem}</p>}
           {sender.authorized && sender.check && (
             <p className="cell-dim">
@@ -604,7 +615,11 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   <p>
                     <span className="field-label">Subject</span> {preview.subject}
                   </p>
-                  <pre className="bulk-body">{preview.text}</pre>
+                  {preview.html ? (
+                    <div className="bulk-email-html" dangerouslySetInnerHTML={{ __html: safeHtml(preview.html) }} />
+                  ) : (
+                    <pre className="bulk-body">{preview.text}</pre>
+                  )}
                 </article>
               )}
             </>
