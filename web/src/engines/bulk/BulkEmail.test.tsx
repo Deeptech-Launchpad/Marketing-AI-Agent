@@ -168,6 +168,34 @@ describe('a new bulk email', () => {
   })
 })
 
+// 2026-10-08: "Next: schedule" was greyed out with no word of why — and
+// blocked Review whenever no mailbox was configured, though the screen said
+// review was possible.
+describe('before a sending mailbox is configured', () => {
+  const NO_MAILBOX = { enabled: false, mailboxConfigured: false, senders: [] as string[], reason: 'No sending mailbox is configured on the server.', maxPerDay: 200 }
+
+  it('says what is missing, and goes on to schedule and review once the postal address is in', async () => {
+    stub({ sending: NO_MAILBOX })
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /new bulk email/i }))
+    await userEvent.upload(screen.getByLabelText(/excel file/i), new File(['PK'], 'sample test.xlsx'))
+    await userEvent.click(await screen.findByRole('button', { name: /next: sender/i }))
+    const next = screen.getByRole('button', { name: /next: schedule/i })
+    expect(next).toBeDisabled()
+    expect(screen.getByText(/enter the postal address to continue/i)).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText(/postal address/i), '1 Main St, Indianapolis, IN 46204')
+    expect(next).toBeEnabled()
+    expect(screen.getByText(/you can schedule and review now/i)).toBeInTheDocument()
+    await userEvent.click(next)
+    await userEvent.click(screen.getByRole('button', { name: /next: review/i }))
+    expect(await screen.findByText(/emails will be sent/i)).toBeInTheDocument()
+    expect(posts().find((c) => c.url.endsWith('/review'))!.body).toMatchObject({ fromEmail: '' })
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed this list/i }))
+    expect(screen.getByRole('button', { name: /approve and start sending/i })).toBeDisabled()
+  })
+})
+
 describe('a bulk email that has run', () => {
   it('says the sequence is completed, with the final summary, and offers unsubscribe', async () => {
     stub()

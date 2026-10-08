@@ -59,7 +59,7 @@ interface Review {
   rows: ReviewRow[]
   noAddress: Array<{ row: number; companyName: string; reason: string }>
   schedule: { timezone: string; startLocal: string; firstLocal: string | null; estimatedCompletionLocal: string | null; intervalMinutes: number; dailyCap: number }
-  from: { email: string; name: string | null }
+  from: { email: string | null; name: string | null }
   sending: SendingStatus
 }
 interface CampaignRow {
@@ -493,10 +493,19 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
             <Button variant="quiet" onClick={() => setStep('upload')}>
               Back
             </Button>
-            <Button variant="primary" disabled={!chosenFrom || ccBad.length > 0 || !postal.trim()} onClick={() => setStep('schedule')}>
+            <Button variant="primary" disabled={ccBad.length > 0 || !postal.trim()} onClick={() => setStep('schedule')}>
               Next: schedule
             </Button>
           </div>
+          {/* Why the button is greyed out, in words — it used to be silent. */}
+          {(!postal.trim() || ccBad.length > 0) && (
+            <p className="otr-warn" role="status">
+              {!postal.trim() ? 'Enter the postal address to continue — US law requires it in the opt-out line.' : 'Fix the CC address to continue.'}
+            </p>
+          )}
+          {!chosenFrom && postal.trim() && (
+            <p className="note">You can schedule and review now. Starting needs a sending mailbox configured on the server.</p>
+          )}
         </>
       )}
 
@@ -599,7 +608,11 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                 <div>
                   <dt>From</dt>
                   <dd>
-                    {review.from.name ? `${review.from.name} <${review.from.email}>` : review.from.email}
+                    {review.from.email
+                      ? review.from.name
+                        ? `${review.from.name} <${review.from.email}>`
+                        : review.from.email
+                      : 'No sending mailbox configured on the server yet'}
                     {ccList.length > 0 ? ` · CC on every email: ${ccList.join(', ')}` : ''}
                   </dd>
                 </div>
@@ -664,7 +677,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               <label className="otr-check">
                 <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
                 <span>
-                  I reviewed this list and approve sending {review.counts.validEmails} emails from {review.from.email} on this schedule.
+                  I reviewed this list and approve sending {review.counts.validEmails} emails from {review.from.email ?? 'the configured mailbox'} on this schedule.
                 </span>
               </label>
               {!canApprove && <p className="note">Starting a bulk email needs an approver or an administrator.</p>}
@@ -678,7 +691,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
             <Button
               variant="primary"
               icon={Send}
-              disabled={!review || review.counts.validEmails === 0 || !confirmed || !canApprove || Boolean(review.sending.reason)}
+              disabled={!review || review.counts.validEmails === 0 || !confirmed || !canApprove || Boolean(review.sending.reason) || !review.from.email}
               busy={call.busy === 'start'}
               onClick={start}
             >

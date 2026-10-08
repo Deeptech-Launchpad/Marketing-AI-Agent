@@ -151,8 +151,10 @@ function checkedSetup(s: BulkSetup) {
     if (!e) throw new BadRequestError(`"${raw}" is not an email address.`)
     if (!ccEmails.includes(e)) ccEmails.push(e)
   }
-  const fromEmail = strictEmail(s.fromEmail)
-  if (!fromEmail) throw new BadRequestError('Choose the From / sender email.')
+  // Review may run before a mailbox is configured ("upload and review, but not
+  // start"); Start requires one and checks it against the server's list.
+  const fromEmail = s.fromEmail?.trim() ? strictEmail(s.fromEmail) : null
+  if (s.fromEmail?.trim() && !fromEmail) throw new BadRequestError(`"${s.fromEmail}" is not an email address.`)
   const window: SendWindow = { tz: s.timezone, days, startMinute: sendStartMinute, endMinute: sendEndMinute }
   return { template, start, window, intervalMinutes, dailyCap, ccEmails, fromEmail, sendStartMinute, sendEndMinute, days }
 }
@@ -270,7 +272,9 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   if (s.confirm !== true) throw new BadRequestError('Tick the confirmation that you reviewed every email in this send.')
   const sending = bulkSendingStatus()
   if (sending.reason) throw new ConflictError(sending.reason)
-  const setup = checkedSetup(s)
+  const checked = checkedSetup(s)
+  if (!checked.fromEmail) throw new BadRequestError('Choose the From / sender email.')
+  const setup = { ...checked, fromEmail: checked.fromEmail }
   if (!sending.senders.includes(setup.fromEmail)) throw new BadRequestError(`${setup.fromEmail} is not a configured sending address. Choose one of: ${sending.senders.join(', ')}.`)
   if (!s.postalAddress.trim()) throw new BadRequestError('Enter the postal address for the opt-out footer — US law requires it in commercial email.')
 

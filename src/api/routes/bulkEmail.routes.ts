@@ -35,7 +35,8 @@ const Setup = z
   .object({
     ...File,
     templateKey: z.string().min(1).max(60),
-    fromEmail: z.string().min(3).max(254),
+    // Empty until a sending mailbox is configured; Start requires it.
+    fromEmail: z.string().max(254),
     fromName: z.string().max(80).nullable().optional(),
     ccEmails: z.array(z.string().max(254)).max(10).optional(),
     signature: z.string().max(1000),

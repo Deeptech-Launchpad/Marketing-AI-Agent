@@ -263,6 +263,14 @@ describe('review, start, and sending one at a time', () => {
     expect(store.bulkEmailCampaign).toHaveLength(0)
   })
 
+  it('reviews before any sending mailbox is chosen, but will not start without one', async () => {
+    const r = await svc.reviewBulk(actor, await setup({ fromEmail: '' }), BEFORE)
+    expect(r.counts.validEmails).toBe(3)
+    expect(r.from.email).toBeNull()
+    await expect(svc.startBulk(actor, { ...(await setup({ fromEmail: '' })), confirm: true }, BEFORE)).rejects.toThrow(/Choose the From/)
+    expect(store.bulkEmailCampaign).toHaveLength(0)
+  })
+
   it('will not start without the confirmation, or from an address the server does not send as', async () => {
     await expect(svc.startBulk(actor, { ...(await setup()), confirm: false }, BEFORE)).rejects.toThrow(/Tick the confirmation/)
     await expect(svc.startBulk(actor, { ...(await setup({ fromEmail: 'dtlpmanikandan@gmail.com' })), confirm: true }, BEFORE)).rejects.toThrow(/not a configured sending address/)
