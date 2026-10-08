@@ -448,13 +448,31 @@ export const BULK_EMAIL: ManualSection = {
     },
     {
       kind: 'text',
-      text: 'The email is the approved template and nothing else. Only [First Name] and [Company Name] are filled in from the Excel file — no AI text, signature or footer is added. The emails are sent from the company mailbox set up on the server.',
+      text: 'The email is the approved template. Only [First Name] and [Company Name] are filled in from the Excel file, and your signature (if you set one) goes under it — no AI text or footer is added.',
     },
 
     { kind: 'heading', text: 'Why we use it' },
     {
       kind: 'text',
       text: 'To reach a long list of contacts without preparing each email by hand, while still sending them one at a time, a few minutes apart, so they arrive like ordinary emails and not all at once.',
+    },
+
+    { kind: 'heading', text: 'Before the first send — the Sender' },
+    {
+      kind: 'text',
+      text: 'At the top of the Bulk email page, "Set sender" (approvers and administrators) holds three things: the From email customers see, addresses copied on every email, and your signature. Replies and unsubscribe requests go to the From email.',
+    },
+    {
+      kind: 'terms',
+      items: [
+        { term: 'Authorized', meaning: 'The server checked that its sending account may genuinely send as this From address. Only then can a bulk email start.' },
+        {
+          term: 'Not authorized',
+          meaning:
+            'The reason is shown, and nothing is sent from that address. For example, a company domain with a strict anti-spoofing (DMARC) policy, such as altiusnxt.com, can only be sent as by its own mailbox — so the server needs that mailbox as its sending account. For a Gmail account, the From must be a confirmed "Send mail as" address (Gmail → Settings → Accounts).',
+        },
+        { term: 'Check sender', meaning: 'Checks again, for example after you added the "Send mail as" address. A Gmail check sends one message to the sending account itself, never to a customer.' },
+      ],
     },
 
     { kind: 'heading', text: 'Step 1 — Upload the Excel file' },
@@ -497,7 +515,7 @@ export const BULK_EMAIL: ManualSection = {
     {
       kind: 'steps',
       items: [
-        'Check the list of sending times and the time of the last email. If you change the date, time or minutes, click "Show the sending times" again.',
+        'Check the list of sending times, the time of the last email, and the From address. If you change the date, time or minutes, click "Show the sending times" again.',
         'Tick the confirmation and click "Approve and start sending". This needs an approver or an administrator.',
       ],
     },
@@ -507,7 +525,7 @@ export const BULK_EMAIL: ManualSection = {
       kind: 'terms',
       items: [
         { term: 'Scheduled / Sending / Sent / Failed / Skipped', meaning: 'Where each email is. A failed email shows the reason; the others carry on.' },
-        { term: 'Pause / Resume', meaning: 'Pause stops sending. Resume carries on from now, still the same minutes apart.' },
+        { term: 'Pause / Resume', meaning: 'Pause stops sending. Resume carries on from now, still the same minutes apart. If the From address stops being authorized, the send pauses itself and says why.' },
         { term: 'Cancel unsent', meaning: 'Stops the send; emails not yet sent are skipped.' },
         { term: 'Unsubscribe', meaning: 'When someone replies "unsubscribe", click this beside them. They are never emailed again.' },
         { term: 'Bulk sequence completed', meaning: 'Shown when every email has been processed, with the totals sent, failed and skipped.' },

@@ -5,7 +5,10 @@ import {
   bulkSettings,
   bulkView,
   listBulk,
+  recheckBulkSender,
   reviewBulk,
+  saveBulkSender,
+  senderView,
   setBulkState,
   startBulk,
   unsubscribeRecipient,
@@ -35,8 +38,6 @@ const Setup = z
   .object({
     ...File,
     templateKey: z.string().min(1).max(60),
-    // Empty until a sending mailbox is configured; with one configured, it is used.
-    fromEmail: z.string().max(254).optional(),
     // When sending starts, in Indian Standard Time, and the gap between emails.
     startDate: z.string().max(10),
     startTime: z.string().max(5),
@@ -48,8 +49,43 @@ const Setup = z
 bulkEmailRoutes.get(
   '/settings',
   requirePermission('view'),
-  asyncHandler(async (_req, res) => {
-    res.json(bulkSettings())
+  asyncHandler(async (req, res) => {
+    res.json(await bulkSettings(req.principal!.tenantId))
+  }),
+)
+
+// The sender: the From the customer sees, CC on every email, and the
+// signature. Saving checks the From against the server's SMTP account.
+const Sender = z
+  .object({
+    fromEmail: z.string().min(3).max(254),
+    ccEmails: z.array(z.string().max(254)).max(10),
+    signature: z.string().max(1000),
+  })
+  .strict()
+
+bulkEmailRoutes.get(
+  '/sender',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    res.json(await senderView(req.principal!.tenantId))
+  }),
+)
+
+bulkEmailRoutes.post(
+  '/sender',
+  requirePermission('approve'),
+  validateBody(Sender),
+  asyncHandler(async (req, res) => {
+    res.json(await saveBulkSender(actorOf(req), req.body as z.infer<typeof Sender>))
+  }),
+)
+
+bulkEmailRoutes.post(
+  '/sender/check',
+  requirePermission('approve'),
+  asyncHandler(async (req, res) => {
+    res.json(await recheckBulkSender(actorOf(req)))
   }),
 )
 

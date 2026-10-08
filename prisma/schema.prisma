@@ -2804,6 +2804,9 @@ model BulkEmailCampaign {
   name     String
   // running | paused | completed | cancelled
   status   String @default("running")
+  // Why it was paused by the sender (for example: the From address is no
+  // longer authorized); null when a person paused it or it is running.
+  statusReason String?
 
   // The approved template, as it was when the send was approved.
   templateKey String

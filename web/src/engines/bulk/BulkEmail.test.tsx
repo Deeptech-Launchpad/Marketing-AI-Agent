@@ -18,7 +18,30 @@ interface Call { url: string; method: string; body: Record<string, unknown> | nu
 let calls: Call[] = []
 const posts = () => calls.filter((c) => c.method === 'POST')
 
-const SENDING: { enabled: boolean; mailboxConfigured: boolean; senders: string[]; reason: string | null } = { enabled: true, mailboxConfigured: true, senders: ['manoj@altiusnxt.com'], reason: null }
+const SENDING: { enabled: boolean; mailboxConfigured: boolean; account: { email: string; source: 'bulk' | 'system' } | null; reason: string | null } = {
+  enabled: true,
+  mailboxConfigured: true,
+  account: { email: 'dtlpmanikandan@gmail.com', source: 'system' },
+  reason: null,
+}
+type Sender = { fromEmail: string | null; ccEmails: string[]; signature: string; check: { authorized: boolean; reason: string; warning: string | null; checkedLocal: string } | null; authorized: boolean; problem: string | null; account: typeof SENDING.account }
+const SENDER_OK: Sender = {
+  fromEmail: 'sales@example.org',
+  ccEmails: ['team@example.org'],
+  signature: 'Manoj\nAltiusNxt',
+  check: { authorized: true, reason: 'Checked: Gmail sends as sales@example.org.', warning: null, checkedLocal: 'Thu, Oct 8, 2026, 11:00 AM IST' },
+  authorized: true,
+  problem: null,
+  account: SENDING.account,
+}
+const DMARC = 'altiusnxt.com publishes a DMARC policy of "reject": receiving mail servers reject email that says it is from @altiusnxt.com unless altiusnxt.com’s own mail servers sent it.'
+const SENDER_REFUSED: Sender = {
+  ...SENDER_OK,
+  fromEmail: 'sales@altiusnxt.com',
+  check: { authorized: false, reason: DMARC, warning: null, checkedLocal: 'Thu, Oct 8, 2026, 11:00 AM IST' },
+  authorized: false,
+  problem: DMARC,
+}
 const SETTINGS = {
   sending: SENDING,
   templates: [{ key: 'static_site_v1', label: 'Static Site', subject: 'Are AI tools recommending [Company Name]?', body: '[First Name],\nManoj here, from AltiusNxt.', placeholders: ['[First Name]', '[Company Name]'] }],
@@ -44,11 +67,12 @@ const REVIEW = {
   ],
   noAddress: ANALYSIS.noAddress,
   schedule: { timezone: 'Asia/Kolkata', startLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', firstLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', estimatedCompletionLocal: 'Sat, Oct 10, 2026, 10:05 AM IST', intervalMinutes: 5 },
-  from: { email: 'manoj@altiusnxt.com' },
+  from: { email: 'sales@example.org' },
+  sender: SENDER_OK,
   sending: SENDING,
 }
 const DETAIL = {
-  campaign: { id: 'bk1', name: 'leads — 2026-10-10', status: 'completed', templateKey: 'static_site_v1', fromEmail: 'manoj@altiusnxt.com', startLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', intervalMinutes: 5, sourceFileName: 'leads.xlsx', createdAt: '2026-10-09T12:00:00Z', completedAt: '2026-10-10T04:40:00Z', completedLocal: 'Sat, Oct 10, 2026, 10:10 AM IST' },
+  campaign: { id: 'bk1', name: 'leads — 2026-10-10', status: 'completed', statusReason: null, templateKey: 'static_site_v1', fromEmail: 'sales@example.org', startLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', intervalMinutes: 5, sourceFileName: 'leads.xlsx', createdAt: '2026-10-09T12:00:00Z', completedAt: '2026-10-10T04:40:00Z', completedLocal: 'Sat, Oct 10, 2026, 10:10 AM IST' },
   counts: { scheduled: 0, sending: 0, sent: 2, failed: 1, skipped: 1, total: 4 },
   recipients: [
     { id: 'r1', companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], subject: 'Are AI tools recommending Thermohvac?', body: TEXT, status: 'sent', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', sentLocal: 'Sat, Oct 10, 2026, 10:00 AM IST' },
@@ -57,7 +81,7 @@ const DETAIL = {
   sending: SENDING,
 }
 
-function stub(opts: { sending?: typeof SENDING } = {}) {
+function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const u = String(url)
@@ -65,8 +89,12 @@ function stub(opts: { sending?: typeof SENDING } = {}) {
     calls.push({ url: u, method, body: init.body ? JSON.parse(String(init.body)) : null })
     const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
     const sending = opts.sending ?? SENDING
+    const sender = opts.sender ?? SENDER_OK
+    if (method === 'POST' && u.endsWith('/outreach/bulk/sender')) return json(opts.saved ?? sender)
+    if (method === 'POST' && u.endsWith('/outreach/bulk/sender/check')) return json(sender)
+    if (u.endsWith('/outreach/bulk/sender')) return json(sender)
     if (method === 'POST' && u.endsWith('/outreach/bulk/analyze')) return json(ANALYSIS)
-    if (method === 'POST' && u.endsWith('/outreach/bulk/review')) return json({ ...REVIEW, sending })
+    if (method === 'POST' && u.endsWith('/outreach/bulk/review')) return json({ ...REVIEW, sender, sending })
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
     if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending })
@@ -124,7 +152,7 @@ describe('step 1: upload Excel', () => {
       '2. Review emails',
       '3. Date, time and start',
     ])
-    expect(document.body.textContent).not.toMatch(/signature|postal address|time zone|sending hours|daily limit|Indianapolis|select compan/i)
+    expect(document.body.textContent).not.toMatch(/postal address|time zone|sending hours|daily limit|Indianapolis|select compan/i)
   })
 })
 
@@ -170,16 +198,58 @@ describe('step 3: date, time (IST) and minutes between emails', () => {
     await userEvent.click(start)
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
     const body = posts().find((c) => c.url.endsWith('/start'))!.body!
-    expect(body).toMatchObject({ confirm: true, fromEmail: 'manoj@altiusnxt.com', startTime: '10:00', intervalMinutes: 5, templateKey: 'static_site_v1' })
-    expect(Object.keys(body).sort()).toEqual(['allowWebmail', 'confirm', 'fileBase64', 'fileName', 'fromEmail', 'intervalMinutes', 'startDate', 'startTime', 'templateKey'])
+    expect(body).toMatchObject({ confirm: true, startTime: '10:00', intervalMinutes: 5, templateKey: 'static_site_v1' })
+    // The From is the checked sender on the server — the screen sends no From of its own.
+    expect(Object.keys(body).sort()).toEqual(['allowWebmail', 'confirm', 'fileBase64', 'fileName', 'intervalMinutes', 'startDate', 'startTime', 'templateKey'])
+    expect(screen.queryByText(/dtlpmanikandan/)).not.toBeInTheDocument()
   })
 
   it('cannot start while no sending mailbox is configured, and says why', async () => {
-    stub({ sending: { enabled: false, mailboxConfigured: false, senders: [], reason: 'No sending mailbox is configured on the server.' } })
+    stub({ sending: { enabled: false, mailboxConfigured: false, account: null, reason: 'No sending mailbox is configured on the server.' } })
     await toSchedule()
     await userEvent.click(await screen.findByRole('checkbox', { name: /I reviewed these/i }))
     expect(screen.getByRole('button', { name: /approve and start sending/i })).toBeDisabled()
     expect(screen.getByText(/no sending mailbox is configured on the server\./i)).toBeInTheDocument()
+  })
+})
+
+describe('the sender: From, CC and signature', () => {
+  it('shows the From customers see, the CC and signature, and that it is authorized', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    expect(await screen.findByText('Authorized')).toBeInTheDocument()
+    expect(screen.getByText('sales@example.org')).toBeInTheDocument()
+    expect(screen.getByText('team@example.org')).toBeInTheDocument()
+    expect(screen.getByText(/carried by the server’s SMTP account dtlpmanikandan@gmail.com \(the system account\) — customers see only the From above/i)).toBeInTheDocument()
+  })
+
+  it('saves the From, CC and signature, and shows the check’s answer — here, refused, with the reason', async () => {
+    stub({ sender: { ...SENDER_OK, fromEmail: null, ccEmails: [], signature: '', check: null, authorized: false, problem: 'Set the From email for bulk emails.' }, saved: SENDER_REFUSED })
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /set sender/i }))
+    await userEvent.type(screen.getByLabelText('From email'), 'sales@altiusnxt.com')
+    await userEvent.type(screen.getByLabelText('CC emails'), 'a@altiusnxt.com, b@altiusnxt.com')
+    await userEvent.type(screen.getByLabelText('Signature'), 'Manoj')
+    await userEvent.click(screen.getByRole('button', { name: /save and check sender/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/sender'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/outreach/bulk/sender'))!.body).toEqual({ fromEmail: 'sales@altiusnxt.com', ccEmails: ['a@altiusnxt.com', 'b@altiusnxt.com'], signature: 'Manoj' })
+    expect(await screen.findByText('Not authorized')).toBeInTheDocument()
+    expect(screen.getByText(/DMARC policy of "reject"/)).toBeInTheDocument()
+  })
+
+  it('cannot start while the From is not authorized, and says why', async () => {
+    stub({ sender: SENDER_REFUSED })
+    await toSchedule()
+    await userEvent.click(await screen.findByRole('checkbox', { name: /I reviewed these/i }))
+    expect(screen.getByRole('button', { name: /approve and start sending/i })).toBeDisabled()
+    expect(screen.getAllByText(/DMARC policy of "reject"/).length).toBeGreaterThan(0)
+  })
+
+  it('only someone who can approve can change the sender', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove={false} />)
+    await screen.findByText('Authorized')
+    expect(screen.queryByRole('button', { name: /edit sender/i })).not.toBeInTheDocument()
   })
 })
 

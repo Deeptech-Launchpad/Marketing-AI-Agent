@@ -7,8 +7,9 @@ import { checkSuppression } from '../suppression.js'
 import { readSpreadsheet } from './excel.js'
 import { extractContacts, firstNameOf, recipientsOf, strictEmail } from './extract.js'
 import { fmtIst, IST, istToUtc, planSequential } from './schedule.js'
-import { bulkTemplate, composeBulkEmail, STATIC_SITE, type BulkTemplate } from './template.js'
-import { bulkSender, bulkSendingStatus } from './transport.js'
+import { checkSender, type SenderCheck } from './senders.js'
+import { bulkTemplate, cleanSignature, composeBulkEmail, STATIC_SITE, type BulkTemplate } from './template.js'
+import { bulkSender, bulkSendingStatus, bulkTransportAccount } from './transport.js'
 
 // BULK EMAIL (2026-10-08) — a simple, standalone workflow:
 //
@@ -18,10 +19,17 @@ import { bulkSender, bulkSendingStatus } from './transport.js'
 // Upload and Review write nothing. Start (the approve permission, with a
 // confirmation) stores the send and one row per company: the exact email it
 // receives — the approved template with only [First Name] and [Company Name]
-// filled — and its time. The worker then sends them ONE AT A TIME from the
-// mailbox configured on the server: email 1 at the start time, then one every
-// N minutes. Each is re-checked against the opt-out list just before it goes;
+// filled, and the sender's signature under it — and its time. The worker then
+// sends them ONE AT A TIME: email 1 at the start time, then one every N
+// minutes. Each is re-checked against the opt-out list just before it goes;
 // a failure is recorded and the rest carry on.
+//
+// The From the customer sees is the From email set on the Bulk email screen,
+// carried by the SMTP account configured on the server. It is only used while
+// the sender check (senders.ts) shows that account may genuinely send as it —
+// at Start, on Resume, and again before sending once the last check is a day
+// old or the account has changed. Otherwise nothing is sent and the send is
+// paused with the reason.
 
 export interface Actor {
   tenantId: string
@@ -50,14 +58,159 @@ async function record(actor: { tenantId: string; crmUserId: string; requestId?: 
 
 // ── Settings ───────────────────────────────────────────────────────────────
 
-export function bulkSettings() {
+export async function bulkSettings(tenantId: string) {
   const t = STATIC_SITE
   return {
     sending: bulkSendingStatus(),
+    sender: await senderView(tenantId),
     templates: [{ key: t.key, label: t.label, subject: t.subject, body: t.body, placeholders: ['[First Name]', '[Company Name]'] }],
     defaults: { startTime: '10:00', intervalMinutes: 5, timezone: IST },
     maxRecipients: MAX_RECIPIENTS,
   }
+}
+
+// ── The sender: From, CC and signature ─────────────────────────────────────
+
+const SENDER_KEY = 'bulkSender'
+const CHECKS_KEY = 'bulkSenderChecks'
+/** A check older than this is made again before the next email goes. */
+const RECHECK_MS = 24 * 3_600_000
+const MAX_CC = 10
+
+export interface BulkSenderProfile {
+  fromEmail: string
+  ccEmails: string[]
+  signature: string
+  updatedAt: string | null
+  updatedByCrmUserId: string | null
+}
+
+type Settings = Record<string, unknown>
+
+async function tenantSettings(tenantId: string): Promise<Settings> {
+  const t = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { settings: true } })
+  return (t?.settings as Settings | null) ?? {}
+}
+
+async function patchSettings(tenantId: string, patch: Settings) {
+  const current = await tenantSettings(tenantId)
+  await prisma.tenant.update({ where: { id: tenantId }, data: { settings: { ...current, ...patch } as never } })
+}
+
+function profileOf(settings: Settings): BulkSenderProfile {
+  const raw = (settings[SENDER_KEY] ?? {}) as Partial<BulkSenderProfile>
+  return {
+    fromEmail: typeof raw.fromEmail === 'string' ? raw.fromEmail : '',
+    ccEmails: Array.isArray(raw.ccEmails) ? raw.ccEmails.filter((x): x is string => typeof x === 'string') : [],
+    signature: typeof raw.signature === 'string' ? raw.signature : '',
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+    updatedByCrmUserId: typeof raw.updatedByCrmUserId === 'string' ? raw.updatedByCrmUserId : null,
+  }
+}
+
+function checksOf(settings: Settings): Record<string, SenderCheck> {
+  const raw = settings[CHECKS_KEY]
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, SenderCheck>) : {}
+}
+
+/** The stored check of this From — only if it was made with the SMTP account configured now. */
+function currentCheck(settings: Settings, fromEmail: string): SenderCheck | null {
+  const account = bulkTransportAccount()
+  const c = checksOf(settings)[fromEmail.toLowerCase()]
+  return c && account && c.accountEmail === account.user.toLowerCase() ? c : null
+}
+
+async function storeCheck(tenantId: string, check: SenderCheck) {
+  const settings = await tenantSettings(tenantId)
+  const all = { ...checksOf(settings), [check.fromEmail.toLowerCase()]: check }
+  // Only the latest few addresses are kept.
+  const kept = Object.fromEntries(Object.entries(all).sort((a, b) => b[1].checkedAt.localeCompare(a[1].checkedAt)).slice(0, 20))
+  await patchSettings(tenantId, { [CHECKS_KEY]: kept })
+}
+
+async function auditSender(actor: { tenantId: string; crmUserId: string; requestId?: string }, action: string, check: SenderCheck) {
+  await audit({
+    tenantId: actor.tenantId,
+    actorType: actor.crmUserId === 'bulk-sender' ? 'system' : 'user',
+    actorCrmUserId: actor.crmUserId,
+    runId: null,
+    action: `outreach.bulk_email.${action}`,
+    resourceType: 'BulkEmailSender',
+    resourceId: check.fromEmail,
+    dataClass: 'internal',
+    summary: `Bulk email sender ${check.fromEmail}: ${check.authorized ? 'authorized' : 'NOT authorized'} — ${check.reason}`,
+    metadata: { fromEmail: check.fromEmail, accountEmail: check.accountEmail, authorized: check.authorized, method: check.method },
+    requestId: actor.requestId ?? null,
+  })
+}
+
+/**
+ * Whether this From may be used now. The stored check is used while it is
+ * fresh and was made with today's account; otherwise (or when `fresh`) the
+ * check is made again and stored.
+ */
+async function authorizeFrom(actor: { tenantId: string; crmUserId: string; requestId?: string }, fromEmail: string, now: Date, fresh: boolean): Promise<SenderCheck> {
+  const stored = fresh ? null : currentCheck(await tenantSettings(actor.tenantId), fromEmail)
+  if (stored && now.getTime() - Date.parse(stored.checkedAt) < RECHECK_MS) return stored
+  const check = await checkSender(fromEmail, bulkTransportAccount(), now)
+  await storeCheck(actor.tenantId, check)
+  await auditSender(actor, 'sender_checked', check)
+  return check
+}
+
+/** The sender as the screen shows it, and whether bulk emails can go from it. */
+export async function senderView(tenantId: string) {
+  const settings = await tenantSettings(tenantId)
+  const profile = profileOf(settings)
+  const sending = bulkSendingStatus()
+  const check = profile.fromEmail ? currentCheck(settings, profile.fromEmail) : null
+  const stale = profile.fromEmail && !check ? checksOf(settings)[profile.fromEmail.toLowerCase()] ?? null : null
+  const problem = !profile.fromEmail
+    ? 'Set the From email for bulk emails.'
+    : !sending.account
+      ? 'No SMTP account is configured on the server, so the From email cannot be checked.'
+      : !check
+        ? stale
+          ? `The server's sending account changed since ${profile.fromEmail} was checked — check it again.`
+          : `${profile.fromEmail} has not been checked yet — click "Check sender".`
+        : check.authorized
+          ? null
+          : check.reason
+  return {
+    fromEmail: profile.fromEmail || null,
+    ccEmails: profile.ccEmails,
+    signature: profile.signature,
+    updatedAt: profile.updatedAt,
+    check: check ? { authorized: check.authorized, reason: check.reason, warning: check.warning, checkedAt: check.checkedAt, checkedLocal: fmtIst(new Date(check.checkedAt)) } : null,
+    authorized: problem === null,
+    problem,
+    account: sending.account,
+  }
+}
+
+/** Saves the From, CC and signature, and checks the From straight away. */
+export async function saveBulkSender(actor: Actor, input: { fromEmail: string; ccEmails: string[]; signature: string }, now = new Date()) {
+  const fromEmail = strictEmail(input.fromEmail)
+  if (!fromEmail) throw new BadRequestError(`"${input.fromEmail}" is not a valid From email address.`)
+  const ccEmails: string[] = []
+  for (const raw of input.ccEmails.map((c) => c.trim()).filter(Boolean)) {
+    const cc = strictEmail(raw)
+    if (!cc) throw new BadRequestError(`CC "${raw}" is not a valid email address.`)
+    if (!ccEmails.includes(cc)) ccEmails.push(cc)
+  }
+  if (ccEmails.length > MAX_CC) throw new BadRequestError(`At most ${MAX_CC} CC addresses.`)
+  const profile: BulkSenderProfile = { fromEmail, ccEmails, signature: cleanSignature(input.signature), updatedAt: now.toISOString(), updatedByCrmUserId: actor.crmUserId }
+  await patchSettings(actor.tenantId, { [SENDER_KEY]: profile })
+  await authorizeFrom(actor, fromEmail, now, true)
+  return senderView(actor.tenantId)
+}
+
+/** Checks the saved From again (for example after adding it as a "Send mail as" address). */
+export async function recheckBulkSender(actor: Actor, now = new Date()) {
+  const profile = profileOf(await tenantSettings(actor.tenantId))
+  if (!profile.fromEmail) throw new BadRequestError('Set the From email first.')
+  await authorizeFrom(actor, profile.fromEmail, now, true)
+  return senderView(actor.tenantId)
 }
 
 // ── Upload ─────────────────────────────────────────────────────────────────
@@ -84,8 +237,6 @@ export interface BulkSetup {
   fileBase64: string
   fileName?: string
   templateKey: string
-  /** Empty until a sending mailbox is configured; Start requires it. */
-  fromEmail?: string
   /** Start date and time, in IST. */
   startDate: string
   startTime: string
@@ -118,14 +269,14 @@ function checkedSetup(s: BulkSetup) {
   if (!start) throw new BadRequestError('Choose the date and the time sending starts.')
   const intervalMinutes = Math.round(Number(s.intervalMinutes))
   if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 240) throw new BadRequestError('Minutes between emails must be 1 to 240.')
-  const fromEmail = s.fromEmail?.trim() ? strictEmail(s.fromEmail) : null
-  if (s.fromEmail?.trim() && !fromEmail) throw new BadRequestError(`"${s.fromEmail}" is not an email address.`)
-  return { template, start, intervalMinutes, fromEmail }
+  return { template, start, intervalMinutes }
 }
 
 /** Every company's email, its time and its status — exactly what Start would store. Nothing is written. */
 export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const setup = checkedSetup(s)
+  const profile = profileOf(await tenantSettings(actor.tenantId))
+  const signature = cleanSignature(profile.signature)
   const upload = await analyzeUpload({ fileBase64: s.fileBase64, fileName: s.fileName, allowWebmail: s.allowWebmail })
   if (upload.companies.length > MAX_RECIPIENTS) throw new BadRequestError(`At most ${MAX_RECIPIENTS} companies per upload.`)
 
@@ -180,7 +331,9 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
       const s2 = await checkSuppression({ tenantId: actor.tenantId, crmCompanyId: `bulk:${c.key}`, companyName: '', companyDomain: null, destination: p.email, channel: 'email', openDealCheck: 'skip' })
       if (!s2.suppressed && p.email !== to.email) ccOk.push(p.email)
     }
-    const email = composeBulkEmail({ template: setup.template, firstName: firstNameOf(to.name), companyName: c.companyName })
+    // The sender's CC addresses are copied on every email too.
+    for (const extra of profile.ccEmails) if (!ccOk.includes(extra) && extra !== to.email) ccOk.push(extra)
+    const email = composeBulkEmail({ template: setup.template, firstName: firstNameOf(to.name), companyName: c.companyName, signature })
     if (email.unfilled.length) {
       skip(`Could not fill ${email.unfilled.join(', ')}.`)
       continue
@@ -218,7 +371,8 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
       estimatedCompletionAt: last?.toISOString() ?? null,
       intervalMinutes: setup.intervalMinutes,
     },
-    from: { email: setup.fromEmail },
+    from: { email: profile.fromEmail || null },
+    sender: await senderView(actor.tenantId),
     sending: bulkSendingStatus(),
   }
 }
@@ -230,10 +384,12 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   const sending = bulkSendingStatus()
   if (sending.reason) throw new ConflictError(sending.reason)
   const checked = checkedSetup(s)
-  // The configured mailbox; with only one, it is used without asking.
-  const fromEmail = checked.fromEmail ?? (sending.senders.length === 1 ? sending.senders[0]! : null)
-  if (!fromEmail) throw new BadRequestError('Choose the From / sender email.')
-  if (!sending.senders.includes(fromEmail)) throw new BadRequestError(`${fromEmail} is not a configured sending address. Choose one of: ${sending.senders.join(', ')}.`)
+  const profile = profileOf(await tenantSettings(actor.tenantId))
+  const fromEmail = profile.fromEmail
+  if (!fromEmail) throw new BadRequestError('Set the From email for bulk emails first (Sender, on the Bulk email page).')
+  // Checked again now, with the account configured now: never sent on an old answer.
+  const auth = await authorizeFrom(actor, fromEmail, now, true)
+  if (!auth.authorized) throw new ConflictError(`Not started — ${fromEmail} is not authorized for this sending account. ${auth.reason}`)
 
   const review = await reviewBulk(actor, s, now)
   const ready = review.rows.filter((r) => r.status === 'ready')
@@ -242,7 +398,7 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   const id = newId()
   const name = (s.name ?? '').trim().slice(0, 120) || `${s.fileName?.replace(/\.xlsx$/i, '') || 'Bulk email'} — ${fmtIst(now).replace(/, \d{1,2}:\d{2} [AP]M IST$/, '')}`
   // The columns kept from the first version (sending hours, days, daily limit,
-  // signature, footer) are stored as "none": every day, all day, no limit.
+  // footer) are stored as "none": every day, all day, no limit.
   await prisma.bulkEmailCampaign.create({
     data: {
       id,
@@ -254,8 +410,8 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       body: checked.template.body,
       fromEmail,
       fromName: null,
-      ccEmails: [] as never,
-      signature: '',
+      ccEmails: profile.ccEmails as never,
+      signature: cleanSignature(profile.signature),
       postalAddress: '',
       sourceFileName: s.fileName ?? null,
       timezone: IST,
@@ -315,8 +471,10 @@ function campaignRow(c: Campaign) {
     id: c.id,
     name: c.name,
     status: c.status,
+    statusReason: c.statusReason,
     templateKey: c.templateKey,
     fromEmail: c.fromEmail,
+    ccEmails: (c.ccEmails as string[]) ?? [],
     startLocal: fmtIst(c.startAt),
     intervalMinutes: c.intervalMinutes,
     sourceFileName: c.sourceFileName,
@@ -366,16 +524,18 @@ export async function setBulkState(actor: Actor, id: string, to: 'pause' | 'resu
   if (!c) throw new NotFoundError('Bulk send not found.')
   if (c.status === 'completed' || c.status === 'cancelled') throw new ConflictError(`This bulk send is already ${c.status}.`)
   if (to === 'pause') {
-    await prisma.bulkEmailCampaign.update({ where: { id }, data: { status: 'paused' } })
+    await prisma.bulkEmailCampaign.update({ where: { id }, data: { status: 'paused', statusReason: null } })
     await record(actor, id, 'paused', `Bulk email "${c.name}" paused — nothing more is sent until it is resumed`)
     return { id, status: 'paused' }
   }
   if (to === 'resume') {
+    const auth = await authorizeFrom(actor, c.fromEmail, now, true)
+    if (!auth.authorized) throw new ConflictError(`Not resumed — ${c.fromEmail} is not authorized for this sending account. ${auth.reason}`)
     // The rest are re-timed from now, so a long pause never ends in a burst.
     const remaining = await prisma.bulkEmailRecipient.findMany({ where: { campaignId: id, status: 'scheduled' }, orderBy: { position: 'asc' }, select: { id: true } })
     const slots = planSequential(now, remaining.length, c.intervalMinutes)
     for (const [i, r] of remaining.entries()) await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { scheduledAt: slots[i] } })
-    await prisma.bulkEmailCampaign.update({ where: { id }, data: { status: 'running' } })
+    await prisma.bulkEmailCampaign.update({ where: { id }, data: { status: 'running', statusReason: null } })
     await record(actor, id, 'resumed', `Bulk email "${c.name}" resumed — ${remaining.length} emails re-timed from now`)
     return { id, status: 'running' }
   }
@@ -425,6 +585,15 @@ export async function dispatchBulkEmails(now = new Date()): Promise<{ sent: numb
       if (spaced) {
         const next = await prisma.bulkEmailRecipient.findFirst({ where: { campaignId: c.id, status: 'scheduled', scheduledAt: { lte: now } }, orderBy: [{ scheduledAt: 'asc' }, { position: 'asc' }] })
         if (next) {
+          const system = { tenantId: c.tenantId, crmUserId: 'bulk-sender' }
+          const auth = await authorizeFrom(system, c.fromEmail, now, false)
+          if (!auth.authorized) {
+            // Nothing goes from an address this account may not send as.
+            const statusReason = `Paused — ${c.fromEmail} is not authorized for the sending account: ${auth.reason}`
+            await prisma.bulkEmailCampaign.update({ where: { id: c.id }, data: { status: 'paused', statusReason } })
+            await record(system, c.id, 'paused', `Bulk email "${c.name}" paused: the From address is not authorized`, { reason: auth.reason })
+            continue
+          }
           const outcome = await sendOne(c, next, now)
           if (outcome === 'sent') sent++
           if (outcome === 'failed') failed++
@@ -464,7 +633,7 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
     return 'skipped'
   }
   const template: BulkTemplate = bulkTemplate(c.templateKey) ?? STATIC_SITE
-  const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName })
+  const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName, signature: c.signature })
   // What goes is what was reviewed: the stored text. The HTML part is the same
   // words, laid out, and is only used when it matches.
   const html = email.text === r.body ? email.html : `<pre style="font-family:Arial,Helvetica,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`

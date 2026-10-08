@@ -16,6 +16,7 @@ type Row = Record<string, unknown>
 const store: Record<string, Row[]> = {}
 const reset = () => {
   for (const k of ['bulkEmailCampaign', 'bulkEmailRecipient', 'suppressionEntry', 'auditEvent']) store[k] = []
+  store.tenant = [{ id: 't1', settings: null }]
 }
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([k, v]) => {
@@ -44,6 +45,7 @@ const sortBy = (rows: Row[], orderBy?: Row | Row[]) => {
   })
 }
 const model = (table: string) => ({
+  findUnique: vi.fn(async (a: Row = {}) => store[table]!.find((x) => matches(x, a.where as Row)) ?? null),
   findFirst: vi.fn(async (a: Row = {}) => sortBy(store[table]!.filter((x) => matches(x, a.where as Row)), a.orderBy as Row)[0] ?? null),
   findMany: vi.fn(async (a: Row = {}) => sortBy(store[table]!.filter((x) => matches(x, a.where as Row)), a.orderBy as Row)),
   count: vi.fn(async (a: Row = {}) => store[table]!.filter((x) => matches(x, a.where as Row)).length),
@@ -88,9 +90,15 @@ const env = {
   BULK_SMTP_SECURE: false,
   BULK_SMTP_USER: 'manoj@altiusnxt.test',
   BULK_SMTP_PASS: 'x',
-  BULK_FROM_ADDRESSES: 'manoj@altiusnxt.test',
+  // The system account (login codes) — used only when BULK_SMTP_* is empty.
+  SMTP_HOST: '',
+  SMTP_PORT: 587,
+  SMTP_SECURE: false,
+  SMTP_USER: '',
+  SMTP_PASS: '',
   OUTREACH_COOLDOWN_DAYS: 30,
 }
+const BULK_ACCOUNT = { BULK_SMTP_HOST: env.BULK_SMTP_HOST, BULK_SMTP_USER: env.BULK_SMTP_USER, BULK_SMTP_PASS: env.BULK_SMTP_PASS }
 vi.mock('../../src/config/env.js', () => ({ env }))
 const quiet = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 vi.mock('../../src/platform/logger.js', () => ({ logger: { ...quiet, child: () => quiet } }))
@@ -104,7 +112,14 @@ const { composeBulkEmail, STATIC_SITE } = await import('../../src/outreach/bulk/
 const { extractContacts, workAddress, firstNameOf, recipientsOf } = await import('../../src/outreach/bulk/extract.js')
 const { istToUtc, planSequential, fmtIst } = await import('../../src/outreach/bulk/schedule.js')
 const svc = await import('../../src/outreach/bulk/service.js')
-const { setBulkSenderForTests } = await import('../../src/outreach/bulk/transport.js')
+const { setBulkSenderForTests, bulkTransportAccount, bulkMailOptions } = await import('../../src/outreach/bulk/transport.js')
+const { checkSender, parseDmarc, setSenderCheckDepsForTests } = await import('../../src/outreach/bulk/senders.js')
+
+// The sender check, without DNS or a mailbox: each test says what they answer.
+const dmarcCalls: string[] = []
+const probeCalls: string[] = []
+let dmarcAnswer: { policy: 'none' | 'quarantine' | 'reject' | null; error: string | null } = { policy: null, error: null }
+let probeAnswer: { deliveredFrom: string | null } | { error: string } = { error: 'no probe in this test' }
 
 const actor = { tenantId: 't1', crmUserId: 'u1' }
 
@@ -120,7 +135,20 @@ beforeEach(() => {
   reset()
   suppressed.clear()
   setBulkSenderForTests(null)
+  Object.assign(env, BULK_ACCOUNT, { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '' })
+  dmarcCalls.length = 0
+  probeCalls.length = 0
+  dmarcAnswer = { policy: null, error: null }
+  probeAnswer = { error: 'no probe in this test' }
+  setSenderCheckDepsForTests({
+    dmarc: async (d) => (dmarcCalls.push(d), dmarcAnswer),
+    probe: async (_a, from) => (probeCalls.push(from), probeAnswer),
+  })
 })
+
+/** The From, CC and signature set on the screen (the account itself: authorized without a probe). */
+const setSender = (over: Partial<{ fromEmail: string; ccEmails: string[]; signature: string }> = {}) =>
+  svc.saveBulkSender(actor, { fromEmail: 'manoj@altiusnxt.test', ccEmails: [], signature: '', ...over }, new Date('2026-10-09T11:00:00Z'))
 
 describe('the approved template, and nothing else', () => {
   it('changes nothing but [First Name] and [Company Name], and adds no signature, footer or other text', () => {
@@ -223,7 +251,6 @@ describe('review, start, and sending one at a time', () => {
     ]),
     fileName: 'Indianapolis - Static Leads.xlsx',
     templateKey: 'static_site_v1',
-    fromEmail: 'manoj@altiusnxt.test',
     startDate: '2026-10-10',
     startTime: '10:00',
     intervalMinutes: 5,
@@ -244,18 +271,26 @@ describe('review, start, and sending one at a time', () => {
     expect(store.bulkEmailCampaign).toHaveLength(0)
   })
 
-  it('reviews before any sending mailbox is chosen; Start uses the one configured mailbox', async () => {
-    const r = await svc.reviewBulk(actor, await setup({ fromEmail: '' }), BEFORE)
+  it('reviews before any From is set — but Start needs one, and never falls back to the sending account', async () => {
+    const r = await svc.reviewBulk(actor, await setup(), BEFORE)
     expect(r.counts.validEmails).toBe(3)
     expect(r.from.email).toBeNull()
-    const { scheduled } = await svc.startBulk(actor, { ...(await setup({ fromEmail: '' })), confirm: true }, BEFORE)
+    expect(r.sender.problem).toBe('Set the From email for bulk emails.')
+    await expect(svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)).rejects.toThrow(/Set the From email/)
+    expect(store.bulkEmailCampaign).toHaveLength(0)
+
+    await setSender()
+    const { scheduled } = await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
     expect(scheduled).toBe(3)
     expect(store.bulkEmailCampaign![0]).toMatchObject({ fromEmail: 'manoj@altiusnxt.test', timezone: 'Asia/Kolkata', intervalMinutes: 5 })
   })
 
-  it('will not start without the confirmation, or from an address the server does not send as', async () => {
+  it('will not start without the confirmation, or from a From the account may not send as', async () => {
+    await setSender()
     await expect(svc.startBulk(actor, { ...(await setup()), confirm: false }, BEFORE)).rejects.toThrow(/Tick the confirmation/)
-    await expect(svc.startBulk(actor, { ...(await setup({ fromEmail: 'dtlpmanikandan@gmail.com' })), confirm: true }, BEFORE)).rejects.toThrow(/not a configured sending address/)
+    // Another address on a server whose send-as permission cannot be read.
+    await setSender({ fromEmail: 'sales@altiusnxt.test' })
+    await expect(svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)).rejects.toThrow(/Not started — sales@altiusnxt.test is not authorized/)
     expect(store.bulkEmailCampaign).toHaveLength(0)
   })
 
@@ -268,6 +303,7 @@ describe('review, start, and sending one at a time', () => {
         return { messageId: `m${sent.length}` }
       },
     })
+    await setSender()
     const { campaignId, scheduled } = await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
     expect(scheduled).toBe(3)
 
@@ -294,6 +330,7 @@ describe('review, start, and sending one at a time', () => {
   it('skips anyone who opted out before their email went', async () => {
     const sent: string[] = []
     setBulkSenderForTests({ send: async (e) => (sent.push(e.to), { messageId: 'm' }) })
+    await setSender()
     await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
     suppressed.add('mstellick@thermohvac.com')
     await svc.dispatchBulkEmails(at('10:00'))
@@ -304,6 +341,7 @@ describe('review, start, and sending one at a time', () => {
   it('sends nothing at all while bulk sending is switched off', async () => {
     const sent: string[] = []
     setBulkSenderForTests({ send: async (e) => (sent.push(e.to), { messageId: 'm' }) })
+    await setSender()
     await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
     env.BULK_EMAIL_ENABLED = false
     try {
@@ -312,6 +350,168 @@ describe('review, start, and sending one at a time', () => {
     } finally {
       env.BULK_EMAIL_ENABLED = true
     }
+  })
+})
+
+// THE SENDER (2026-10-08): the From the customer sees is the one the user
+// set, carried by the server's SMTP account — and only when that account may
+// genuinely send as it. dtlpmanikandan@gmail.com (the system account) is never
+// the From unless the user typed exactly that.
+describe('the sender: may this account send as the chosen From?', () => {
+  const SYSTEM = { host: 'smtp.gmail.com', port: 587, secure: false, user: 'dtlpmanikandan@gmail.com', pass: 'x', source: 'system' as const }
+  const NOW = new Date('2026-10-09T11:00:00Z')
+
+  it('the account’s own address: yes — no lookup, no check message', async () => {
+    const c = await checkSender('DTLPmanikandan@gmail.com', SYSTEM, NOW)
+    expect(c).toMatchObject({ authorized: true, method: 'is_account', fromEmail: 'dtlpmanikandan@gmail.com' })
+    expect(dmarcCalls).toEqual([])
+    expect(probeCalls).toEqual([])
+  })
+
+  it('sales@altiusnxt.com through a gmail.com account: refused — altiusnxt.com publishes DMARC p=reject', async () => {
+    dmarcAnswer = { policy: 'reject', error: null }
+    const c = await checkSender('sales@altiusnxt.com', SYSTEM, NOW)
+    expect(c.authorized).toBe(false)
+    expect(c.reason).toMatch(/altiusnxt.com publishes a DMARC policy of "reject"/)
+    expect(c.reason).toMatch(/must be a mailbox on altiusnxt.com/)
+    expect(dmarcCalls).toEqual(['altiusnxt.com'])
+    expect(probeCalls).toEqual([]) // not even a check message
+  })
+
+  it('refuses when the DMARC policy cannot be read — a failed lookup never passes', async () => {
+    dmarcAnswer = { policy: null, error: 'ETIMEOUT' }
+    const c = await checkSender('sales@example.org', SYSTEM, NOW)
+    expect(c.authorized).toBe(false)
+    expect(c.reason).toMatch(/could not be read \(ETIMEOUT\)/)
+  })
+
+  it('Gmail changed the From to the account: refused, with what to do', async () => {
+    probeAnswer = { deliveredFrom: 'dtlpmanikandan@gmail.com' }
+    const c = await checkSender('sales@example.org', SYSTEM, NOW)
+    expect(probeCalls).toEqual(['sales@example.org'])
+    expect(c.authorized).toBe(false)
+    expect(c.reason).toMatch(/changed the From to dtlpmanikandan@gmail.com/)
+    expect(c.reason).toMatch(/Send mail as/)
+  })
+
+  it('Gmail kept the From (a verified "Send mail as" address): yes', async () => {
+    probeAnswer = { deliveredFrom: 'sales@example.org' }
+    const c = await checkSender('sales@example.org', SYSTEM, NOW)
+    expect(c).toMatchObject({ authorized: true, method: 'gmail_send_as' })
+    expect(c.warning).toMatch(/via gmail.com/)
+  })
+
+  it('refuses when the check message cannot be read back', async () => {
+    probeAnswer = { error: 'the mailbox could not be read over IMAP (Invalid credentials)' }
+    const c = await checkSender('sales@example.org', SYSTEM, NOW)
+    expect(c.authorized).toBe(false)
+    expect(c.reason).toMatch(/could not complete/)
+  })
+
+  it('another mail server: only the account’s own address can be the From', async () => {
+    const c = await checkSender('sales@altiusnxt.test', { ...SYSTEM, host: 'smtp.example.test', user: 'manoj@altiusnxt.test' }, NOW)
+    expect(c.authorized).toBe(false)
+    expect(c.reason).toMatch(/cannot be checked automatically/)
+  })
+
+  it('reads DMARC policies', () => {
+    expect(parseDmarc([['v=DMARC1; p=reject; rua=mailto:admin@altiussolution.com; pct=100; adkim=s; aspf=s']], false)).toEqual({ policy: 'reject', error: null })
+    expect(parseDmarc([['v=DMARC1; p=quarantine; pct=0']], false)).toEqual({ policy: 'none', error: null })
+    expect(parseDmarc([['v=DMARC1; p=none; sp=reject']], true)).toEqual({ policy: 'reject', error: null })
+    expect(parseDmarc([['v=spf1 include:_spf.google.com ~all']], false)).toBeNull()
+  })
+
+  it('uses the system SMTP account when no bulk account is configured', () => {
+    Object.assign(env, { BULK_SMTP_HOST: '', BULK_SMTP_USER: '', BULK_SMTP_PASS: '', SMTP_HOST: 'smtp.gmail.com', SMTP_USER: 'dtlpmanikandan@gmail.com', SMTP_PASS: 'x' })
+    expect(bulkTransportAccount()).toMatchObject({ user: 'dtlpmanikandan@gmail.com', source: 'system' })
+  })
+
+  it('the customer sees the chosen From; replies and unsubscribes go to it; the envelope is the account’s', () => {
+    const o = bulkMailOptions(SYSTEM, { fromEmail: 'sales@example.org', fromName: null, to: 'buyer@acme.test', cc: ['cc@acme.test'], subject: 'S', text: 't', html: 'h' })
+    expect(o).toMatchObject({ from: 'sales@example.org', replyTo: 'sales@example.org', to: 'buyer@acme.test', cc: ['cc@acme.test'] })
+    expect(o.headers['List-Unsubscribe']).toBe('<mailto:sales@example.org?subject=unsubscribe>')
+    expect(o.envelope).toEqual({ from: 'dtlpmanikandan@gmail.com', to: ['buyer@acme.test', 'cc@acme.test'] })
+    expect(JSON.stringify({ from: o.from, replyTo: o.replyTo, headers: o.headers })).not.toMatch(/dtlpmanikandan|Manikandan/i)
+  })
+})
+
+describe('the sender on a bulk send: From, CC and signature', () => {
+  const setup = async () => ({
+    fileBase64: await xlsx([HEADER, ['Thermohvac', 'u', 'Maddie Stellick', 'Owner', 'mstellick@thermohvac.com', 'Mike Murray', 'GM', 'mmurray@thermohvac.com', ''], ['Babsco', 'u', 'Steve Kile', 'Owner', 'skile@babsco.com', '', '', '', '']]),
+    fileName: 'leads.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-10',
+    startTime: '10:00',
+    intervalMinutes: 5,
+  })
+  const BEFORE = new Date('2026-10-09T12:00:00Z')
+  const at = (hhmm: string) => istToUtc('2026-10-10', hhmm)!
+  const GMAIL_SYSTEM = { BULK_SMTP_HOST: '', BULK_SMTP_USER: '', BULK_SMTP_PASS: '', SMTP_HOST: 'smtp.gmail.com', SMTP_USER: 'dtlpmanikandan@gmail.com', SMTP_PASS: 'x' }
+
+  it('the email carries the CC on every email and the signature under the approved text, sent from the chosen From', async () => {
+    Object.assign(env, GMAIL_SYSTEM)
+    probeAnswer = { deliveredFrom: 'sales@example.org' }
+    const view = await setSender({ fromEmail: 'sales@example.org', ccEmails: ['team@example.org'], signature: 'Manoj\nAltiusNxt' })
+    expect(view).toMatchObject({ fromEmail: 'sales@example.org', authorized: true, problem: null, account: { email: 'dtlpmanikandan@gmail.com', source: 'system' } })
+
+    const r = await svc.reviewBulk(actor, await setup(), BEFORE)
+    const thermo = r.rows.find((x) => x.companyName === 'Thermohvac')!
+    expect(thermo.ccEmails).toEqual(['mmurray@thermohvac.com', 'team@example.org'])
+    expect(thermo.text!.endsWith('Would you like me to send it?\n\nManoj\nAltiusNxt')).toBe(true)
+
+    const sent: Array<{ from: string; cc: string[]; text: string; html: string }> = []
+    setBulkSenderForTests({ send: async (e) => (sent.push({ from: e.fromEmail, cc: e.cc, text: e.text, html: e.html }), { messageId: 'm' }) })
+    await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ fromEmail: 'sales@example.org', ccEmails: ['team@example.org'], signature: 'Manoj\nAltiusNxt' })
+    await svc.dispatchBulkEmails(at('10:00'))
+    expect(sent[0]).toMatchObject({ from: 'sales@example.org', cc: ['mmurray@thermohvac.com', 'team@example.org'] })
+    expect(sent[0]!.text.endsWith('\n\nManoj\nAltiusNxt')).toBe(true)
+    expect(sent[0]!.html).toContain('<p style="margin:0 0 12px">Manoj<br>AltiusNxt</p>')
+  })
+
+  it('cannot even start from sales@altiusnxt.com through the gmail.com system account', async () => {
+    Object.assign(env, GMAIL_SYSTEM)
+    dmarcAnswer = { policy: 'reject', error: null }
+    const view = await setSender({ fromEmail: 'sales@altiusnxt.com' })
+    expect(view.authorized).toBe(false)
+    expect(view.problem).toMatch(/DMARC policy of "reject"/)
+    await expect(svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)).rejects.toThrow(/Not started — sales@altiusnxt.com is not authorized/)
+    expect(store.bulkEmailCampaign).toHaveLength(0)
+  })
+
+  it('pauses — and sends nothing — when the From stops being authorized during a send', async () => {
+    Object.assign(env, GMAIL_SYSTEM)
+    probeAnswer = { deliveredFrom: 'sales@example.org' }
+    await setSender({ fromEmail: 'sales@example.org' })
+    const sent: string[] = []
+    setBulkSenderForTests({ send: async (e) => (sent.push(e.to), { messageId: 'm' }) })
+    const { campaignId } = await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
+
+    // A day later the check is made again — and the "Send mail as" address is gone.
+    probeAnswer = { deliveredFrom: 'dtlpmanikandan@gmail.com' }
+    await svc.dispatchBulkEmails(new Date(at('10:00').getTime() + 26 * 3_600_000))
+    expect(sent).toEqual([])
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.campaign.status).toBe('paused')
+    expect(view.campaign.statusReason).toMatch(/not authorized.*changed the From to dtlpmanikandan@gmail.com/)
+    expect(view.counts.scheduled).toBe(2)
+    await expect(svc.setBulkState(actor, campaignId, 'resume')).rejects.toThrow(/Not resumed/)
+  })
+
+  it('pauses when the server’s sending account changes, until the From is checked with the new one', async () => {
+    await setSender()
+    const sent: string[] = []
+    setBulkSenderForTests({ send: async (e) => (sent.push(e.to), { messageId: 'm' }) })
+    const { campaignId } = await svc.startBulk(actor, { ...(await setup()), confirm: true }, BEFORE)
+    Object.assign(env, { BULK_SMTP_USER: 'other@altiusnxt.test' })
+    await svc.dispatchBulkEmails(at('10:00'))
+    expect(sent).toEqual([])
+    expect((await svc.bulkView('t1', campaignId)).campaign.status).toBe('paused')
+  })
+
+  it('rejects an invalid From or CC address', async () => {
+    await expect(setSender({ fromEmail: 'not an email' })).rejects.toThrow(/not a valid From email/)
+    await expect(setSender({ ccEmails: ['ok@example.org', 'bad address'] })).rejects.toThrow(/CC "bad address"/)
   })
 })
 

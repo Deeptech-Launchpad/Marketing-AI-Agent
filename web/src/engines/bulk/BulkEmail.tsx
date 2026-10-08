@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ArrowLeft, CheckCircle2, FileSpreadsheet, Pause, Play, Plus, Send, Square, UserX } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, FileSpreadsheet, Mail, Pause, Play, Plus, RefreshCw, Send, Square, UserX } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync, usePolling } from '../../lib/hooks'
 import { Button, Chip, Panel, Unset } from '../../components/ui/primitives'
@@ -13,17 +13,31 @@ import './bulk.css'
 //   between emails (IST) → approve → start sending
 //
 // The email is the approved template only, with [First Name] and [Company
-// Name] filled from the Excel file. The platform sends the emails one after
-// another from the mailbox configured on the server: email 1 at the start
-// time, then one every N minutes, until the list is done. It shares no code
-// with One company or Several companies.
+// Name] filled from the Excel file, and the sender's signature under it. The
+// platform sends the emails one after another: email 1 at the start time, then
+// one every N minutes, until the list is done. It shares no code with One
+// company or Several companies.
+//
+// The Sender (From, CC, signature) is set here. The From is what customers
+// see; it is only used once the server has checked that its SMTP account may
+// genuinely send as it.
 
 interface SendingStatus {
   enabled: boolean
   mailboxConfigured: boolean
-  senders: string[]
+  account: { email: string; source: 'bulk' | 'system' } | null
   reason: string | null
 }
+interface SenderView {
+  fromEmail: string | null
+  ccEmails: string[]
+  signature: string
+  check: { authorized: boolean; reason: string; warning: string | null; checkedLocal: string } | null
+  authorized: boolean
+  problem: string | null
+  account: { email: string; source: 'bulk' | 'system' } | null
+}
+const isSenderView = (v: unknown): v is SenderView => Boolean(v && typeof v === 'object' && 'authorized' in v && 'ccEmails' in v)
 interface Settings {
   sending: SendingStatus
   templates: Array<{ key: string; label: string; subject: string; body: string; placeholders: string[] }>
@@ -53,12 +67,14 @@ interface Review {
   rows: ReviewRow[]
   noAddress: Array<{ row: number; companyName: string; reason: string }>
   schedule: { firstLocal: string | null; estimatedCompletionLocal: string | null; intervalMinutes: number }
+  sender: SenderView
   sending: SendingStatus
 }
 interface CampaignRow {
   id: string
   name: string
   status: string
+  statusReason?: string | null
   fromEmail: string
   startLocal: string
   intervalMinutes: number
@@ -133,7 +149,151 @@ export function BulkEmail({ canOperate, canApprove }: { canOperate: boolean; can
     )
   }
   if (openId) return <BulkDetail id={openId} canOperate={canOperate} onBack={() => setOpenId(null)} />
-  return <BulkList canOperate={canOperate} onOpen={setOpenId} onNew={() => setCreating(true)} />
+  return (
+    <>
+      <SenderPanel canApprove={canApprove} />
+      <BulkList canOperate={canOperate} onOpen={setOpenId} onNew={() => setCreating(true)} />
+    </>
+  )
+}
+
+/** "a@x.com, b@x.com" → ["a@x.com", "b@x.com"]. */
+const splitEmails = (s: string) =>
+  s
+    .split(/[,;\s]+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+
+function SenderStatus({ sender }: { sender: SenderView }) {
+  if (!sender.fromEmail) return <Chip tone="warn">Not set</Chip>
+  if (sender.authorized) return <Chip tone="ok">Authorized</Chip>
+  if (!sender.check) return <Chip tone="warn">Not checked</Chip>
+  return <Chip tone="danger">Not authorized</Chip>
+}
+
+/** The From the customer sees, CC on every email, the signature — and whether the server may send as that From. */
+function SenderPanel({ canApprove }: { canApprove: boolean }) {
+  const state = useAsync<unknown>((signal) => api.get('/outreach/bulk/sender', { signal }), [])
+  const [saved, setSaved] = useState<SenderView | null>(null)
+  const sender = saved ?? (isSenderView(state.data) ? state.data : null)
+  const call = useCall(() => undefined)
+  const [editing, setEditing] = useState(false)
+  const [from, setFrom] = useState('')
+  const [cc, setCc] = useState('')
+  const [signature, setSignature] = useState('')
+
+  const edit = () => {
+    setFrom(sender?.fromEmail ?? '')
+    setCc(sender?.ccEmails.join(', ') ?? '')
+    setSignature(sender?.signature ?? '')
+    setEditing(true)
+  }
+  const save = () =>
+    void call.run('save', async () => {
+      const r = await api.post('/outreach/bulk/sender', { fromEmail: from.trim(), ccEmails: splitEmails(cc), signature })
+      if (isSenderView(r)) setSaved(r)
+      setEditing(false)
+    })
+  const recheck = () =>
+    void call.run('check', async () => {
+      const r = await api.post('/outreach/bulk/sender/check', {})
+      if (isSenderView(r)) setSaved(r)
+    })
+
+  return (
+    <Panel
+      title="Sender"
+      subtitle="The From address customers see, CC on every email, and your signature."
+      actions={
+        canApprove &&
+        sender &&
+        !editing && (
+          <div className="row">
+            {sender.fromEmail && (
+              <Button size="sm" variant="quiet" icon={RefreshCw} busy={call.busy === 'check'} onClick={recheck}>
+                Check sender
+              </Button>
+            )}
+            <Button size="sm" icon={Mail} onClick={edit}>
+              {sender.fromEmail ? 'Edit sender' : 'Set sender'}
+            </Button>
+          </div>
+        )
+      }
+    >
+      {state.loading && !sender ? (
+        <Unset what="Loading…" />
+      ) : state.error && !sender ? (
+        <ErrorState error={state.error} what="The sender could not be read" onRetry={state.refresh} />
+      ) : !sender ? null : editing ? (
+        <>
+          <div className="otr-grid">
+            <label>
+              <span className="field-label">From email</span>
+              <input className="otr-input" type="email" aria-label="From email" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="sales@yourcompany.com" />
+            </label>
+            <label>
+              <span className="field-label">CC on every email (optional)</span>
+              <input className="otr-input" aria-label="CC emails" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="colleague@yourcompany.com" />
+            </label>
+          </div>
+          <label style={{ display: 'block', marginTop: 'var(--s2)' }}>
+            <span className="field-label">Signature (optional) — shown under the approved email</span>
+            <textarea className="otr-input" aria-label="Signature" rows={4} maxLength={1000} value={signature} onChange={(e) => setSignature(e.target.value)} />
+          </label>
+          <p className="note">
+            Saving checks that the server&rsquo;s sending account may genuinely send as this From address. For a Gmail account, one check message is sent to that
+            account itself — never to a customer. This can take up to 30 seconds.
+          </p>
+          {call.error && (
+            <p className="otr-err" role="alert">
+              {call.error}
+            </p>
+          )}
+          <div className="row">
+            <Button variant="quiet" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={!from.trim()} busy={call.busy === 'save'} onClick={save}>
+              Save and check sender
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <ul className="otr-list">
+            <li>
+              <span className="field-label">From</span> {sender.fromEmail ?? <span className="cell-dim">not set</span>} <SenderStatus sender={sender} />
+            </li>
+            <li>
+              <span className="field-label">CC</span> {sender.ccEmails.length ? sender.ccEmails.join(', ') : <span className="cell-dim">none</span>}
+            </li>
+            <li>
+              <span className="field-label">Signature</span>{' '}
+              {sender.signature ? <pre className="bulk-body bulk-sig">{sender.signature}</pre> : <span className="cell-dim">none</span>}
+            </li>
+          </ul>
+          {sender.problem && <p className="otr-warn">{sender.problem}</p>}
+          {sender.authorized && sender.check && (
+            <p className="cell-dim">
+              {sender.check.reason} Checked {sender.check.checkedLocal}.{sender.check.warning ? ` ${sender.check.warning}` : ''}
+            </p>
+          )}
+          {sender.account && (
+            <p className="cell-dim">
+              Carried by the server&rsquo;s SMTP account {sender.account.email}
+              {sender.account.source === 'system' ? ' (the system account)' : ''} — customers see only the From above.
+            </p>
+          )}
+          {call.error && (
+            <p className="otr-err" role="alert">
+              {call.error}
+            </p>
+          )}
+        </>
+      )}
+    </Panel>
+  )
 }
 
 function SendingNote({ sending }: { sending: SendingStatus | null }) {
@@ -189,6 +349,7 @@ function BulkList({ canOperate, onOpen, onNew }: { canOperate: boolean; onOpen: 
                 <td>
                   <Chip tone={CAMPAIGN_STATUS[c.status]?.tone ?? 'neutral'}>{CAMPAIGN_STATUS[c.status]?.word ?? c.status}</Chip>
                   {c.completedLocal && <div className="cell-dim">{c.completedLocal}</div>}
+                  {c.status === 'paused' && c.statusReason && <div className="cell-dim">Not authorized — see the send</div>}
                 </td>
                 <td className="tnum">{c.counts?.sent ?? 0}</td>
                 <td className="tnum">{c.counts?.scheduled ?? 0}</td>
@@ -219,7 +380,6 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   const settingsState = useAsync<unknown>((signal) => api.get('/outreach/bulk/settings', { signal }), [])
   const settings = settingsState.data as Settings | null
   const template = settings?.templates[0] ?? null
-  const sending = settings?.sending ?? null
 
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<{ name: string; base64: string } | null>(null)
@@ -235,11 +395,6 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   const [confirmed, setConfirmed] = useState(false)
   const call = useCall(() => undefined)
   const fileInput = useRef<HTMLInputElement>(null)
-
-  // The mailbox configured on the server. With several, the first is used
-  // unless another is chosen.
-  const [fromEmail, setFromEmail] = useState('')
-  const chosenFrom = fromEmail || sending?.senders[0] || ''
 
   const readFile = async (picked: { name: string; base64: string }, webmail: boolean) => {
     setAnalysis(null)
@@ -262,7 +417,6 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     fileName: file!.name,
     allowWebmail,
     templateKey: template?.key ?? 'static_site_v1',
-    fromEmail: chosenFrom,
     startDate,
     startTime,
     intervalMinutes: Number(interval),
@@ -508,18 +662,6 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               />
             </label>
           </div>
-          {sending && sending.senders.length > 1 && (
-            <label style={{ display: 'block', marginTop: 'var(--s2)' }}>
-              <span className="field-label">Send from</span>
-              <select className="otr-input" value={chosenFrom} onChange={(e) => setFromEmail(e.target.value)}>
-                {sending.senders.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           {!review ? (
             <div className="row" style={{ marginTop: 'var(--s3)' }}>
               <Button
@@ -542,7 +684,10 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   <strong>{review.counts.validEmails} emails</strong>, one every {review.schedule.intervalMinutes} minutes, from <strong>{review.schedule.firstLocal ?? '—'}</strong> until{' '}
                   <strong>{review.schedule.estimatedCompletionLocal ?? '—'}</strong>.
                 </li>
-                <li>From: {chosenFrom || 'no sending mailbox configured on the server yet'}</li>
+                <li>
+                  From: {review.sender.fromEmail ?? 'not set'} <SenderStatus sender={review.sender} />
+                  {review.sender.ccEmails.length > 0 && <span className="cell-dim"> · CC on every email: {review.sender.ccEmails.join(', ')}</span>}
+                </li>
               </ul>
               <div className="otr-scroll" style={{ maxHeight: 220, overflowY: 'auto' }}>
                 <table className="otr-table">
@@ -565,6 +710,11 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               </label>
               {!canApprove && <p className="note">Starting a bulk email needs an approver or an administrator.</p>}
               <SendingNote sending={review.sending} />
+              {!review.sending.reason && review.sender.problem && (
+                <p className="otr-warn">
+                  {review.sender.problem} Set or check the sender on the Bulk email page (Back, then Back to all bulk emails).
+                </p>
+              )}
               <div className="row" style={{ marginTop: 'var(--s3)' }}>
                 <Button variant="quiet" onClick={() => setStep('review')}>
                   Back
@@ -572,7 +722,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                 <Button
                   variant="primary"
                   icon={Send}
-                  disabled={review.counts.validEmails === 0 || !confirmed || !canApprove || Boolean(review.sending.reason) || !chosenFrom}
+                  disabled={review.counts.validEmails === 0 || !confirmed || !canApprove || Boolean(review.sending.reason) || !review.sender.authorized}
                   busy={call.busy === 'start'}
                   onClick={start}
                 >
@@ -638,6 +788,11 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
         </p>
       )}
       <SendingNote sending={data?.sending ?? null} />
+      {c.status === 'paused' && c.statusReason && (
+        <p className="otr-warn" role="alert">
+          {c.statusReason}
+        </p>
+      )}
       {call.error && (
         <p className="otr-err" role="alert">
           {call.error}

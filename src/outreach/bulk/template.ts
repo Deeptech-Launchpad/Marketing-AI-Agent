@@ -9,7 +9,8 @@
 //
 // Each line of the approved text is one paragraph; paragraphs are separated
 // by a blank line in the email, which changes the layout, never the words.
-// Nothing else is added to the email (2026-10-08): no signature, no footer.
+// Nothing else is added — no footer, no AI text — except the signature the
+// user set for the sender, under the approved text (2026-10-08).
 
 export interface BulkTemplate {
   key: string
@@ -71,15 +72,29 @@ export interface ComposedBulkEmail {
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+/** The user's signature as it is sent: its own line breaks, no control characters, at most 1000 characters. */
+export function cleanSignature(s: string | null | undefined): string {
+  return (s ?? '')
+    .replace(/\r\n?/g, '\n')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .join('\n')
+    .trim()
+    .slice(0, 1000)
+}
+
 /**
  * The email exactly as it is sent: the approved template with its two
- * placeholders filled, and nothing else.
+ * placeholders filled and, under it, the sender's signature if one is set.
  */
-export function composeBulkEmail(input: { template: BulkTemplate; firstName: string | null; companyName: string | null }): ComposedBulkEmail {
+export function composeBulkEmail(input: { template: BulkTemplate; firstName: string | null; companyName: string | null; signature?: string | null }): ComposedBulkEmail {
   const subject = fillTemplate(input.template.subject, input)
   const body = fillTemplate(input.template.body, input)
   const paragraphs = body.text.split('\n').map((p) => p.trim()).filter(Boolean)
-  const text = paragraphs.join('\n\n')
+  const signature = cleanSignature(input.signature)
+  const text = paragraphs.join('\n\n') + (signature ? `\n\n${signature}` : '')
 
   const para = (p: string) => {
     const safe = escapeHtml(p)
@@ -90,6 +105,7 @@ export function composeBulkEmail(input: { template: BulkTemplate; firstName: str
   const html = [
     '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222">',
     ...paragraphs.map((p) => `<p style="margin:0 0 12px">${para(p)}</p>`),
+    ...(signature ? [`<p style="margin:0 0 12px">${signature.split('\n').map(escapeHtml).join('<br>')}</p>`] : []),
     '</div>',
   ].join('')
 

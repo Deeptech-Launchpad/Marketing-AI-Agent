@@ -455,9 +455,11 @@ const schema = z.object({
   OUTREACH_TEST_DISPATCH_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
 
   // ── BULK EMAIL UPLOAD (2026-10-07) ─────────────────────────────────────
-  // A separate Outreach option that the PLATFORM sends, one email at a time,
-  // from a company mailbox. Its own SMTP account — never the login-code
-  // mailbox above — so it can only ever send as an address configured here.
+  // A separate Outreach option that the PLATFORM sends, one email at a time.
+  // The SMTP account that carries it: BULK_SMTP_* when set, otherwise the
+  // system SMTP_* account above. The From the customer sees is set on the
+  // Bulk email screen and is only used once the sender check shows this
+  // account may genuinely send as it (src/outreach/bulk/senders.ts).
   // Off until an administrator switches it on.
   BULK_EMAIL_ENABLED: bool.default('false'),
   BULK_SMTP_HOST: z.string().default(''),
@@ -465,9 +467,6 @@ const schema = z.object({
   BULK_SMTP_SECURE: bool.default('false'),
   BULK_SMTP_USER: z.string().default(''),
   BULK_SMTP_PASS: z.string().default(''),
-  // The From addresses this mailbox may send as, comma-separated. Empty means
-  // only BULK_SMTP_USER itself. The screen offers only these.
-  BULK_FROM_ADDRESSES: z.string().default(''),
 
 
   // ── Task #983: engagement tracking ──────────────────────────────────────
