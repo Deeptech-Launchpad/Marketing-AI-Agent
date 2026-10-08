@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react'
-import { ArrowLeft, CheckCircle2, FileSpreadsheet, Mail, Pause, Play, Plus, RefreshCw, Send, Square, UserX } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, FileSpreadsheet, Mail, Pause, Play, Plus, RefreshCw, Send, Square, User, UserX } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync, usePolling } from '../../lib/hooks'
 import { Button, Chip, Panel, Unset } from '../../components/ui/primitives'
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/states'
 import { useBulkCall as useCall } from './useBulkCall'
 import { SignatureEditor, SignatureView, safeHtml, textToHtml } from './SignatureEditor'
+import { SingleSend } from './SingleSend'
 import './bulk.css'
 
 // BULK EMAIL (2026-10-08) — simple and standalone:
@@ -62,6 +63,8 @@ interface ReviewRow {
   subject: string | null
   text: string | null
   html?: string | null
+  /** The approved version this person receives (1, 2 or 3). */
+  version?: number | null
   status: 'ready' | 'skipped'
   reason: string | null
   scheduledLocal: string | null
@@ -99,6 +102,7 @@ interface RecipientRow {
   reason: string | null
   scheduledLocal: string | null
   sentLocal: string | null
+  version?: number | null
 }
 
 const CAMPAIGN_STATUS: Record<string, { word: string; tone: 'ok' | 'warn' | 'info' | 'neutral' }> = {
@@ -140,6 +144,19 @@ function readAsBase64(file: File): Promise<string> {
 export function BulkEmail({ canOperate, canApprove }: { canOperate: boolean; canApprove: boolean }) {
   const [openId, setOpenId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [single, setSingle] = useState(false)
+  if (single) {
+    return (
+      <SingleSend
+        canApprove={canApprove}
+        onCancel={() => setSingle(false)}
+        onStarted={(id) => {
+          setSingle(false)
+          setOpenId(id)
+        }}
+      />
+    )
+  }
   if (creating) {
     return (
       <NewBulk
@@ -156,7 +173,7 @@ export function BulkEmail({ canOperate, canApprove }: { canOperate: boolean; can
   return (
     <>
       <SenderPanel canApprove={canApprove} />
-      <BulkList canOperate={canOperate} onOpen={setOpenId} onNew={() => setCreating(true)} />
+      <BulkList canOperate={canOperate} onOpen={setOpenId} onNew={() => setCreating(true)} onSingle={() => setSingle(true)} />
     </>
   )
 }
@@ -312,7 +329,7 @@ function SendingNote({ sending }: { sending: SendingStatus | null }) {
   return <p className="otr-warn">{sending.reason}</p>
 }
 
-function BulkList({ canOperate, onOpen, onNew }: { canOperate: boolean; onOpen: (id: string) => void; onNew: () => void }) {
+function BulkList({ canOperate, onOpen, onNew, onSingle }: { canOperate: boolean; onOpen: (id: string) => void; onNew: () => void; onSingle: () => void }) {
   const list = useAsync<unknown>((signal) => api.get('/outreach/bulk', { signal }), [])
   const data = list.data as { campaigns?: CampaignRow[]; sending?: SendingStatus } | null
   const rows = Array.isArray(data?.campaigns) ? data!.campaigns : []
@@ -323,9 +340,14 @@ function BulkList({ canOperate, onOpen, onNew }: { canOperate: boolean; onOpen: 
       subtitle="Upload an Excel list, review the emails, choose when to start — they go one after another."
       actions={
         canOperate && (
-          <Button size="sm" variant="primary" icon={Plus} onClick={onNew}>
-            New bulk email
-          </Button>
+          <div className="row">
+            <Button size="sm" icon={User} onClick={onSingle}>
+              Send to one person
+            </Button>
+            <Button size="sm" variant="primary" icon={Plus} onClick={onNew}>
+              New bulk email
+            </Button>
+          </div>
         )
       }
     >
@@ -451,7 +473,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   return (
     <Panel
       title="New bulk email"
-      subtitle={template ? `${template.label} — the approved email, with only [First Name] and [Company Name] filled in` : undefined}
+      subtitle={template ? 'Approved emails Version 1, 2 and 3, given in turn down the list — only [First Name] and [Company Name] filled in' : undefined}
       actions={
         <Button size="sm" variant="quiet" icon={ArrowLeft} onClick={onCancel}>
           Back
@@ -580,6 +602,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                     <tr>
                       <th>Company</th>
                       <th>Person</th>
+                      <th>Version</th>
                       <th>To</th>
                       <th>CC</th>
                       <th />
@@ -590,6 +613,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                       <tr key={r.position} aria-selected={r.position === previewPos}>
                         <td>{r.companyName}</td>
                         <td>{r.contactName ?? '—'}</td>
+                        <td>{r.version ? `Version ${r.version}` : '—'}</td>
                         <td>{r.toEmail ?? '—'}</td>
                         <td className="cell-dim">{r.ccEmails.join(', ') || '—'}</td>
                         <td>
@@ -613,7 +637,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                     {preview.ccEmails.length ? ` · CC: ${preview.ccEmails.join(', ')}` : ''}
                   </p>
                   <p>
-                    <span className="field-label">Subject</span> {preview.subject}
+                    {preview.version && <Chip tone="info">Version {preview.version}</Chip>} <span className="field-label">Subject</span> {preview.subject}
                   </p>
                   {preview.html ? (
                     <div className="bulk-email-html" dangerouslySetInnerHTML={{ __html: safeHtml(preview.html) }} />
@@ -837,7 +861,10 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
                 <tr key={r.id}>
                   <td>
                     {r.companyName}
-                    <div className="cell-dim">{r.contactName ?? ''}</div>
+                    <div className="cell-dim">
+                      {r.contactName ?? ''}
+                      {r.version ? ` · Version ${r.version}` : ''}
+                    </div>
                     {r.body && (
                       <details open={open === r.id} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open ? r.id : null)}>
                         <summary>Show the email</summary>

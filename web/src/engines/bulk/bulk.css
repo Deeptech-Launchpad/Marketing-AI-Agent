@@ -11,8 +11,8 @@
 .bulk-test { display: flex; gap: var(--s2); align-items: flex-start; font-size: var(--fs-sm); margin-top: var(--s2); }
 .bulk-sig { margin: var(--s1) 0 0; max-height: 140px; }
 
-/* The signature box and previews show the email's own look (white, Arial 14px), so what is seen here is what the email shows. */
-.bulk-sig-editor, .bulk-sig-view, .bulk-email-html { background: #fff; color: #222; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.5; border-radius: var(--r-sm); }
+/* The signature box and previews show the email's own look (white, Verdana 14px), so what is seen here is what the email shows. */
+.bulk-sig-editor, .bulk-sig-view, .bulk-email-html { background: #fff; color: #222; font-family: Verdana, Geneva, sans-serif; font-size: 14px; line-height: 1.5; border-radius: var(--r-sm); }
 .bulk-sig-editor { min-height: 120px; max-height: 420px; overflow: auto; padding: var(--s2); border: 1px solid var(--line); outline: none; }
 .bulk-sig-editor:focus { border-color: var(--accent); }
 .bulk-sig-view { padding: var(--s2); border: 1px solid var(--line); margin-top: var(--s1); max-height: 360px; overflow: auto; }

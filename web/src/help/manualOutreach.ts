@@ -448,7 +448,15 @@ export const BULK_EMAIL: ManualSection = {
     },
     {
       kind: 'text',
-      text: 'The email is the approved template. Only [First Name] and [Company Name] are filled in from the Excel file, and your signature (if you set one) goes under it — no AI text or footer is added.',
+      text: 'The email is the approved template. Only [First Name] and [Company Name] are filled in from the Excel file, and your signature (if you set one) goes under it, after a blank line — no AI text or footer is added.',
+    },
+    {
+      kind: 'text',
+      text: 'There are three approved versions. They are given in turn down the list: the first person gets Version 1, the second Version 2, the third Version 3, the fourth Version 1 again, and so on. Each person gets one version; the review shows which.',
+    },
+    {
+      kind: 'text',
+      text: 'To email just one person, click "Send to one person": type the first name, company and email, choose Version 1, 2 or 3, review the email, tick the confirmation and click "Approve and send". It goes within a minute, from the same sender, with the same checks.',
     },
 
     { kind: 'heading', text: 'Why we use it' },

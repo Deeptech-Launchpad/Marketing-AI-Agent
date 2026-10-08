@@ -7,10 +7,12 @@ import {
   listBulk,
   recheckBulkSender,
   reviewBulk,
+  reviewSingle,
   saveBulkSender,
   senderView,
   setBulkState,
   startBulk,
+  startSingle,
   unsubscribeRecipient,
   type Actor,
 } from '../../outreach/bulk/service.js'
@@ -122,6 +124,35 @@ bulkEmailRoutes.post(
   validateBody(Setup.extend({ confirm: z.boolean() }).strict()),
   asyncHandler(async (req, res) => {
     res.status(201).json(await startBulk(actorOf(req), req.body as z.infer<typeof Setup> & { confirm: boolean }))
+  }),
+)
+
+// One person, without an Excel file.
+const Single = z
+  .object({
+    firstName: z.string().max(80),
+    companyName: z.string().max(200),
+    toEmail: z.string().max(254),
+    ccEmails: z.array(z.string().max(254)).max(10).optional(),
+    templateKey: z.string().min(1).max(60),
+  })
+  .strict()
+
+bulkEmailRoutes.post(
+  '/single/review',
+  requirePermission('operate'),
+  validateBody(Single),
+  asyncHandler(async (req, res) => {
+    res.json(await reviewSingle(actorOf(req), req.body as z.infer<typeof Single>))
+  }),
+)
+
+bulkEmailRoutes.post(
+  '/single/start',
+  requirePermission('approve'),
+  validateBody(Single.extend({ confirm: z.boolean() }).strict()),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await startSingle(actorOf(req), req.body as z.infer<typeof Single> & { confirm: boolean }))
   }),
 )
 

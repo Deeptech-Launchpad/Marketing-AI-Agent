@@ -36,7 +36,55 @@ export const STATIC_SITE: BulkTemplate = {
   ].join('\n'),
 }
 
-export const BULK_TEMPLATES: BulkTemplate[] = [STATIC_SITE]
+// Versions 2 and 3 (approved 2026-10-08), exactly as Sales supplied them.
+export const STATIC_SITE_V2: BulkTemplate = {
+  key: 'static_site_v2',
+  label: 'Static Site — Version 2',
+  subject: 'What AI LLMs say about [Company Name]',
+  body: [
+    '[First Name],',
+    'This is Manoj from AltiusNxt.',
+    "I asked ChatGPT, Gemini, Claude and Perplexity which suppliers they would recommend for your product category. You didn't come up as a recommended supplier.",
+    "One likely reason: your range and services are described well on your site, but there are no pages for individual parts with specs and datasheets. That leaves AI tools with little to quote, so buyers end up on competitors' listings.",
+    'We fix this for distributors with an online parts catalog, part-level Request-a-Quote and product details built from manufacturer sources. Our clients include Vallen, Travers Tool Co and Rubix Group, and we have worked in this area for 20+ years.',
+    'We are also attending B2B eCommerce World in Indianapolis on Nov 2-3, and you are welcome to join us as our guest - register here with code ALTIUSVIP.',
+    'I put together a short report on what the AI tools returned for you. Shall I send it over?',
+  ].join('\n'),
+}
+
+export const STATIC_SITE_V3: BulkTemplate = {
+  key: 'static_site_v3',
+  label: 'Static Site — Version 3',
+  subject: 'Quick note on AI search for [Company Name]',
+  body: [
+    '[First Name],',
+    'Manoj from AltiusNxt here.',
+    "I asked ChatGPT, Gemini, Claude and Perplexity which suppliers they would recommend for your product category. You didn't come up as a recommended supplier.",
+    "My guess is that your website talks about your strengths, but each part doesn't have its own page with details like specs and datasheets. Without these, AI tools have little to point to, and buyers go to other suppliers.",
+    'For 20+ years we have helped distributors, including Vallen, Travers Tool Co and Rubix Group, with an online parts catalog, part-level Request-a-Quote and well-structured product data.',
+    'If you will be in Indianapolis on Nov 2-3 for B2B eCommerce World, we would be glad to host you as our guest - register here with the code ALTIUSVIP.',
+    'I can send you a short report on what each AI tool returned. Just let me know, and I will send it over.',
+  ].join('\n'),
+}
+
+/**
+ * The approved versions, in rotation order: the 1st email of a bulk list gets
+ * Version 1, the 2nd Version 2, the 3rd Version 3, the 4th Version 1 again …
+ * Only which version a person gets is chosen — never the words.
+ */
+export const BULK_ROTATION: BulkTemplate[] = [STATIC_SITE, STATIC_SITE_V2, STATIC_SITE_V3]
+export const BULK_TEMPLATES: BulkTemplate[] = BULK_ROTATION
+
+/** The version for the n-th email of a list (0-based). */
+export function rotationTemplate(n: number): BulkTemplate {
+  return BULK_ROTATION[n % BULK_ROTATION.length]!
+}
+
+/** 1, 2 or 3. */
+export function versionOf(key: string | null | undefined): number | null {
+  const i = BULK_ROTATION.findIndex((t) => t.key === key)
+  return i < 0 ? null : i + 1
+}
 
 export function bulkTemplate(key: string): BulkTemplate | null {
   return BULK_TEMPLATES.find((t) => t.key === key) ?? null
@@ -70,6 +118,9 @@ export interface ComposedBulkEmail {
   html: string
   unfilled: string[]
 }
+
+/** One empty line, as mail programs write it. */
+export const SIGNATURE_GAP = '<div><br></div>'
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
@@ -112,8 +163,11 @@ export function composeBulkEmail(input: {
       : safe
   }
   const html = [
-    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222">',
+    '<div style="font-family:Verdana,Geneva,sans-serif;font-size:14px;line-height:1.5;color:#222">',
     ...paragraphs.map((p) => `<p style="margin:0 0 12px">${para(p)}</p>`),
+    // A blank line between the last sentence and the signature, so the
+    // signature never sits right under the text (2026-10-08).
+    ...(input.signatureHtml?.trim() || signature ? [SIGNATURE_GAP] : []),
     ...(input.signatureHtml?.trim()
       ? [`<div>${input.signatureHtml}</div>`]
       : signature

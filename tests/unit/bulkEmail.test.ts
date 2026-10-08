@@ -108,7 +108,7 @@ vi.mock('../../src/outreach/suppression.js', () => ({
   checkSuppression: vi.fn(async (i: { destination: string | null }) => ({ suppressed: Boolean(i.destination && suppressed.has(i.destination)), detail: 'Opted out' })),
 }))
 
-const { composeBulkEmail, STATIC_SITE } = await import('../../src/outreach/bulk/template.js')
+const { composeBulkEmail, STATIC_SITE, STATIC_SITE_V2, STATIC_SITE_V3, SIGNATURE_GAP } = await import('../../src/outreach/bulk/template.js')
 const { extractContacts, workAddress, firstNameOf, recipientsOf } = await import('../../src/outreach/bulk/extract.js')
 const { istToUtc, planSequential, fmtIst } = await import('../../src/outreach/bulk/schedule.js')
 const svc = await import('../../src/outreach/bulk/service.js')
@@ -579,6 +579,113 @@ describe('the signature, exactly as pasted', () => {
   })
 })
 
+// VERSIONS 1, 2 AND 3 IN ROTATION (2026-10-08): the approved texts, word for
+// word; only which version a person gets is chosen.
+describe('approved Versions 1, 2 and 3, in rotation', () => {
+  it('Version 2 and Version 3 are the approved texts, word for word', () => {
+    expect(STATIC_SITE_V2.subject).toBe('What AI LLMs say about [Company Name]')
+    expect(STATIC_SITE_V2.body.split('\n')).toEqual([
+      '[First Name],',
+      'This is Manoj from AltiusNxt.',
+      "I asked ChatGPT, Gemini, Claude and Perplexity which suppliers they would recommend for your product category. You didn't come up as a recommended supplier.",
+      "One likely reason: your range and services are described well on your site, but there are no pages for individual parts with specs and datasheets. That leaves AI tools with little to quote, so buyers end up on competitors' listings.",
+      'We fix this for distributors with an online parts catalog, part-level Request-a-Quote and product details built from manufacturer sources. Our clients include Vallen, Travers Tool Co and Rubix Group, and we have worked in this area for 20+ years.',
+      'We are also attending B2B eCommerce World in Indianapolis on Nov 2-3, and you are welcome to join us as our guest - register here with code ALTIUSVIP.',
+      'I put together a short report on what the AI tools returned for you. Shall I send it over?',
+    ])
+    expect(STATIC_SITE_V3.subject).toBe('Quick note on AI search for [Company Name]')
+    expect(STATIC_SITE_V3.body.split('\n')).toEqual([
+      '[First Name],',
+      'Manoj from AltiusNxt here.',
+      "I asked ChatGPT, Gemini, Claude and Perplexity which suppliers they would recommend for your product category. You didn't come up as a recommended supplier.",
+      "My guess is that your website talks about your strengths, but each part doesn't have its own page with details like specs and datasheets. Without these, AI tools have little to point to, and buyers go to other suppliers.",
+      'For 20+ years we have helped distributors, including Vallen, Travers Tool Co and Rubix Group, with an online parts catalog, part-level Request-a-Quote and well-structured product data.',
+      'If you will be in Indianapolis on Nov 2-3 for B2B eCommerce World, we would be glad to host you as our guest - register here with the code ALTIUSVIP.',
+      'I can send you a short report on what each AI tool returned. Just let me know, and I will send it over.',
+    ])
+    // Version 1 is unchanged.
+    expect(STATIC_SITE.subject).toBe('Are AI tools recommending [Company Name]?')
+    expect(STATIC_SITE.body.split('\n')[1]).toBe('Manoj here, from AltiusNxt.')
+  })
+
+  it('person 1 → V1, 2 → V2, 3 → V3, 4 → V1 … skipped rows take no turn; each is sent its own version', async () => {
+    const people = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo']
+    const fileBase64 = await xlsx([
+      HEADER,
+      ...people.slice(0, 2).map((p) => [`${p} Co`, 'u', `${p} Smith`, 'Owner', `${p.toLowerCase()}@${p.toLowerCase()}.test`, '', '', '', '']),
+      ['Skipped Co', 'u', 'Sam Skip', 'Owner', 'sam@skipped.test', '', '', '', 'Not interested'],
+      ...people.slice(2).map((p) => [`${p} Co`, 'u', `${p} Smith`, 'Owner', `${p.toLowerCase()}@${p.toLowerCase()}.test`, '', '', '', '']),
+    ])
+    const setup = { fileBase64, fileName: 'five.xlsx', templateKey: 'static_site_v1', startDate: '2026-10-10', startTime: '10:00', intervalMinutes: 5 }
+    const r = await svc.reviewBulk(actor, setup, new Date('2026-10-09T12:00:00Z'))
+    const ready = r.rows.filter((x) => x.status === 'ready')
+    expect(ready.map((x) => [x.companyName, x.version])).toEqual([['Alpha Co', 1], ['Bravo Co', 2], ['Charlie Co', 3], ['Delta Co', 1], ['Echo Co', 2]])
+    expect(ready[0]!.subject).toBe('Are AI tools recommending Alpha Co?')
+    expect(ready[1]!.subject).toBe('What AI LLMs say about Bravo Co')
+    expect(ready[1]!.text!.startsWith('Bravo,\n\nThis is Manoj from AltiusNxt.')).toBe(true)
+    expect(ready[2]!.subject).toBe('Quick note on AI search for Charlie Co')
+    expect(ready[2]!.text!.startsWith('Charlie,\n\nManoj from AltiusNxt here.')).toBe(true)
+
+    await setSender()
+    const sent: Array<{ to: string; subject: string; text: string }> = []
+    setBulkSenderForTests({ send: async (e) => (sent.push({ to: e.to, subject: e.subject, text: e.text }), { messageId: 'm' }) })
+    await svc.startBulk(actor, { ...setup, confirm: true }, new Date('2026-10-09T12:00:00Z'))
+    for (const t of ['10:00', '10:05', '10:10']) await svc.dispatchBulkEmails(istToUtc('2026-10-10', t)!)
+    expect(sent.map((x) => x.subject)).toEqual(['Are AI tools recommending Alpha Co?', 'What AI LLMs say about Bravo Co', 'Quick note on AI search for Charlie Co'])
+    expect(sent[2]!.text.endsWith('Just let me know, and I will send it over.')).toBe(true)
+  })
+
+  it('a blank line separates the email from the signature', () => {
+    const e = composeBulkEmail({ template: STATIC_SITE_V2, firstName: 'Ed', companyName: 'X', signature: 'Best Regards,\nManoj S', signatureHtml: '<div>Best Regards,<br />Manoj S</div>' })
+    expect(e.text).toContain('Shall I send it over?\n\nBest Regards,')
+    expect(e.html).toContain(`Shall I send it over?</p>${SIGNATURE_GAP}<div><div>Best Regards,`)
+    // No signature: no extra line.
+    expect(composeBulkEmail({ template: STATIC_SITE, firstName: 'Ed', companyName: 'X' }).html).not.toContain(SIGNATURE_GAP)
+  })
+})
+
+// ONE PERSON, WITHOUT AN EXCEL FILE (2026-10-08).
+describe('send to one person', () => {
+  const one = { firstName: 'Priya', companyName: 'Acme Supply', toEmail: 'priya@acme.test', ccEmails: [], templateKey: 'static_site_v2' }
+
+  it('reviews the chosen version with only the name and company filled — and writes nothing', async () => {
+    await setSender({ ccEmails: ['team@altiusnxt.test'] })
+    const r = await svc.reviewSingle(actor, one)
+    expect(r).toMatchObject({ toEmail: 'priya@acme.test', ccEmails: ['team@altiusnxt.test'], version: 2, subject: 'What AI LLMs say about Acme Supply', blocked: null })
+    expect(r.text.startsWith('Priya,\n\nThis is Manoj from AltiusNxt.')).toBe(true)
+    expect(store.bulkEmailCampaign).toHaveLength(0)
+  })
+
+  it('sends it within a minute of approval, from the checked sender', async () => {
+    await setSender()
+    const sent: Array<{ to: string; from: string; subject: string }> = []
+    setBulkSenderForTests({ send: async (e) => (sent.push({ to: e.to, from: e.fromEmail, subject: e.subject }), { messageId: 'm' }) })
+    const now = new Date('2026-10-09T12:00:00Z')
+    await expect(svc.startSingle(actor, { ...one, confirm: false }, now)).rejects.toThrow(/Tick the confirmation/)
+    const { campaignId } = await svc.startSingle(actor, { ...one, confirm: true }, now)
+    await svc.dispatchBulkEmails(new Date(now.getTime() + 60_000))
+    expect(sent).toEqual([{ to: 'priya@acme.test', from: 'manoj@altiusnxt.test', subject: 'What AI LLMs say about Acme Supply' }])
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.campaign.status).toBe('completed')
+    expect(view.recipients[0]).toMatchObject({ status: 'sent', version: 2 })
+  })
+
+  it('will not send to someone who opted out, or with no From set', async () => {
+    await expect(svc.startSingle(actor, { ...one, confirm: true })).rejects.toThrow(/Set the From email/)
+    await setSender()
+    suppressed.add('priya@acme.test')
+    expect((await svc.reviewSingle(actor, one)).blocked).toMatch(/opt-out list/)
+    await expect(svc.startSingle(actor, { ...one, confirm: true })).rejects.toThrow(/Not sent — priya@acme.test is on the opt-out list/)
+  })
+
+  it('needs a valid address, a first name, a company and a version', async () => {
+    await expect(svc.reviewSingle(actor, { ...one, toEmail: 'not an email' })).rejects.toThrow(/not a valid email address/)
+    await expect(svc.reviewSingle(actor, { ...one, firstName: ' ' })).rejects.toThrow(/first name/)
+    await expect(svc.reviewSingle(actor, { ...one, companyName: '' })).rejects.toThrow(/company name/)
+    await expect(svc.reviewSingle(actor, { ...one, templateKey: 'x' })).rejects.toThrow(/Version 1, 2 or 3/)
+  })
+})
+
 // BULK EMAIL IS A STANDALONE WORKFLOW (2026-10-07): it shares no code with
 // the One company or Several companies flows. Only the opt-out list is shared,
 // on purpose — an unsubscribe must hold everywhere.
@@ -591,5 +698,11 @@ describe('a standalone workflow', () => {
       const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]!)
       for (const i of imports) expect(i, `${f} imports ${i}`).not.toMatch(/salesSequence|batches|outreach\/engine/)
     }
+  })
+})
+
+describe('the email font', () => {
+  it('the email text is in Verdana', () => {
+    expect(composeBulkEmail({ template: STATIC_SITE, firstName: 'Ed', companyName: 'X' }).html.startsWith('<div style="font-family:Verdana,Geneva,sans-serif;')).toBe(true)
   })
 })

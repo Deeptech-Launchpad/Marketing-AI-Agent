@@ -2864,6 +2864,9 @@ model BulkEmailRecipient {
   // Exactly what is sent: the template with only its placeholders filled.
   subject     String?
   body        String?
+  // The approved version this person receives (static_site_v1 / v2 / v3);
+  // null on sends made before the versions rotated = the campaign's template.
+  templateKey String?
 
   // scheduled | sending | sent | failed | skipped
   status      String

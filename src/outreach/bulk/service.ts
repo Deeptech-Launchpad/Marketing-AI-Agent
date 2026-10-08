@@ -9,7 +9,7 @@ import { extractContacts, firstNameOf, recipientsOf, strictEmail } from './extra
 import { fmtIst, IST, istToUtc, planSequential } from './schedule.js'
 import { checkSender, type SenderCheck } from './senders.js'
 import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
-import { bulkTemplate, cleanSignature, composeBulkEmail, STATIC_SITE, type BulkTemplate } from './template.js'
+import { BULK_ROTATION, bulkTemplate, cleanSignature, composeBulkEmail, rotationTemplate, STATIC_SITE, versionOf, type BulkTemplate } from './template.js'
 import { bulkSender, bulkSendingStatus, bulkTransportAccount } from './transport.js'
 
 // BULK EMAIL (2026-10-08) — a simple, standalone workflow:
@@ -60,11 +60,11 @@ async function record(actor: { tenantId: string; crmUserId: string; requestId?: 
 // ── Settings ───────────────────────────────────────────────────────────────
 
 export async function bulkSettings(tenantId: string) {
-  const t = STATIC_SITE
   return {
     sending: bulkSendingStatus(),
     sender: await senderView(tenantId),
-    templates: [{ key: t.key, label: t.label, subject: t.subject, body: t.body, placeholders: ['[First Name]', '[Company Name]'] }],
+    // Versions 1, 2 and 3, assigned in turn down the list.
+    templates: BULK_ROTATION.map((t, i) => ({ key: t.key, label: t.label, version: i + 1, subject: t.subject, body: t.body, placeholders: ['[First Name]', '[Company Name]'] })),
     defaults: { startTime: '10:00', intervalMinutes: 5, timezone: IST },
     maxRecipients: MAX_RECIPIENTS,
   }
@@ -277,6 +277,9 @@ export interface ReviewRow {
   subject: string | null
   text: string | null
   html: string | null
+  /** The approved version this person receives (1, 2 or 3). */
+  templateKey: string | null
+  version: number | null
   status: 'ready' | 'skipped'
   reason: string | null
   scheduledAt: string | null
@@ -316,9 +319,10 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     earlier.find((e) => e.toEmail === email || e.companyName.toLowerCase().trim() === company.toLowerCase().trim())
 
   const rows: ReviewRow[] = []
+  let readyCount = 0
   for (const c of upload.companies) {
     const { to, cc } = recipientsOf(c)
-    const base = { position: rows.length, companyName: c.companyName, rows: c.rows, subject: null, text: null, html: null, scheduledAt: null, scheduledLocal: null }
+    const base = { position: rows.length, companyName: c.companyName, rows: c.rows, subject: null, text: null, html: null, templateKey: null, version: null, scheduledAt: null, scheduledLocal: null }
     const skip = (reason: string) => rows.push({ ...base, contactName: to?.name ?? null, toEmail: to?.email ?? c.people[0]?.email ?? null, ccEmails: [], status: 'skipped', reason })
     if (c.skip) {
       skip(c.skip)
@@ -355,12 +359,15 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     }
     // The sender's CC addresses are copied on every email too.
     for (const extra of profile.ccEmails) if (!ccOk.includes(extra) && extra !== to.email) ccOk.push(extra)
-    const email = composeBulkEmail({ template: setup.template, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
+    // Versions in sequence: 1, 2, 3, 1, 2, 3 … over the emails that go.
+    const template = rotationTemplate(readyCount)
+    const email = composeBulkEmail({ template, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
     if (email.unfilled.length) {
       skip(`Could not fill ${email.unfilled.join(', ')}.`)
       continue
     }
-    rows.push({ ...base, contactName: to.name, toEmail: to.email, ccEmails: ccOk, subject: email.subject, text: email.text, html: email.html, status: 'ready', reason: null })
+    readyCount++
+    rows.push({ ...base, contactName: to.name, toEmail: to.email, ccEmails: ccOk, subject: email.subject, text: email.text, html: email.html, templateKey: template.key, version: versionOf(template.key), status: 'ready', reason: null })
   }
 
   // A start time already passed begins now.
@@ -397,6 +404,147 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     sender: await senderView(actor.tenantId),
     sending: bulkSendingStatus(),
   }
+}
+
+// ── One person, without an Excel file (2026-10-08) ─────────────────────────
+//
+// The same approved versions, sender, checks and sender as a bulk list —
+// only the list is one person typed in. It goes as soon as it is approved
+// (within a minute, by the same one-at-a-time sender).
+
+export interface SingleSetup {
+  firstName: string
+  companyName: string
+  toEmail: string
+  ccEmails?: string[]
+  /** static_site_v1 / v2 / v3. */
+  templateKey: string
+}
+
+async function checkedSingle(actor: Actor, s: SingleSetup) {
+  const template = bulkTemplate(s.templateKey)
+  if (!template) throw new BadRequestError('Choose Version 1, 2 or 3.')
+  const firstName = s.firstName.trim()
+  const companyName = s.companyName.trim()
+  if (!firstName) throw new BadRequestError('Enter the first name.')
+  if (!companyName) throw new BadRequestError('Enter the company name.')
+  const toEmail = strictEmail(s.toEmail)
+  if (!toEmail) throw new BadRequestError(`"${s.toEmail}" is not a valid email address.`)
+  const profile = profileOf(await tenantSettings(actor.tenantId))
+  const ccEmails: string[] = []
+  for (const raw of [...(s.ccEmails ?? []), ...profile.ccEmails].map((c) => c.trim()).filter(Boolean)) {
+    const cc = strictEmail(raw)
+    if (!cc) throw new BadRequestError(`CC "${raw}" is not a valid email address.`)
+    if (cc !== toEmail && !ccEmails.includes(cc)) ccEmails.push(cc)
+  }
+  if (ccEmails.length > MAX_CC * 2) throw new BadRequestError('Too many CC addresses.')
+  return { template, firstName, companyName, toEmail, ccEmails, profile }
+}
+
+/** The one email exactly as it will be sent. Nothing is written. */
+export async function reviewSingle(actor: Actor, s: SingleSetup) {
+  const x = await checkedSingle(actor, s)
+  const sup = await checkSuppression({
+    tenantId: actor.tenantId,
+    crmCompanyId: `bulk:${x.companyName.toLowerCase()}`,
+    companyName: x.companyName,
+    companyDomain: x.toEmail.split('@')[1] ?? null,
+    destination: x.toEmail,
+    channel: 'email',
+    openDealCheck: 'skip',
+  })
+  const queued = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, status: { in: ['scheduled', 'sending'] } }, select: { id: true } })
+  const lastSent = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, status: 'sent' }, orderBy: { sentAt: 'desc' }, select: { sentAt: true } })
+  const email = composeBulkEmail({ template: x.template, firstName: x.firstName, companyName: x.companyName, signature: cleanSignature(x.profile.signature), signatureHtml: x.profile.signatureHtml })
+  const blocked = sup.suppressed
+    ? `${x.toEmail} is on the opt-out list: ${sup.detail ?? sup.reason}`
+    : queued
+      ? `An email to ${x.toEmail} is already waiting to be sent.`
+      : email.unfilled.length
+        ? `Could not fill ${email.unfilled.join(', ')}.`
+        : null
+  return {
+    toEmail: x.toEmail,
+    ccEmails: x.ccEmails,
+    companyName: x.companyName,
+    contactName: x.firstName,
+    templateKey: x.template.key,
+    version: versionOf(x.template.key),
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
+    blocked,
+    previouslySentLocal: lastSent?.sentAt ? fmtIst(lastSent.sentAt) : null,
+    sender: await senderView(actor.tenantId),
+    sending: bulkSendingStatus(),
+  }
+}
+
+/** Approves and sends the one email (within a minute). */
+export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boolean }, now = new Date()) {
+  if (s.confirm !== true) throw new BadRequestError('Tick the confirmation that you reviewed this email.')
+  const sending = bulkSendingStatus()
+  if (sending.reason) throw new ConflictError(sending.reason)
+  const review = await reviewSingle(actor, s)
+  if (review.blocked) throw new ConflictError(`Not sent — ${review.blocked}`)
+  const x = await checkedSingle(actor, s)
+  const fromEmail = x.profile.fromEmail
+  if (!fromEmail) throw new BadRequestError('Set the From email for bulk emails first (Sender, on the Bulk email page).')
+  const auth = await authorizeFrom(actor, fromEmail, now, true)
+  if (!auth.authorized) throw new ConflictError(`Not sent — ${fromEmail} is not authorized for this sending account. ${auth.reason}`)
+
+  const id = newId()
+  const name = `${x.firstName} at ${x.companyName} — ${fmtIst(now).replace(/, \d{1,2}:\d{2} [AP]M IST$/, '')}`.slice(0, 120)
+  await prisma.bulkEmailCampaign.create({
+    data: {
+      id,
+      tenantId: actor.tenantId,
+      name,
+      status: 'running',
+      templateKey: x.template.key,
+      subject: x.template.subject,
+      body: x.template.body,
+      fromEmail,
+      fromName: null,
+      ccEmails: x.profile.ccEmails as never,
+      signature: cleanSignature(x.profile.signature),
+      signatureHtml: x.profile.signatureHtml,
+      postalAddress: '',
+      sourceFileName: null,
+      timezone: IST,
+      startAt: now,
+      sendDays: [1, 2, 3, 4, 5, 6, 7] as never,
+      sendStartMinute: 0,
+      sendEndMinute: 1440,
+      intervalMinutes: 1,
+      dailyCap: 0,
+      totalRows: 1,
+      createdByCrmUserId: actor.crmUserId,
+      approvedByCrmUserId: actor.crmUserId,
+      approvedAt: now,
+    },
+  })
+  await prisma.bulkEmailRecipient.create({
+    data: {
+      id: newId(),
+      tenantId: actor.tenantId,
+      campaignId: id,
+      position: 0,
+      companyName: x.companyName,
+      contactName: x.firstName,
+      toEmail: x.toEmail,
+      ccEmails: x.ccEmails as never,
+      sourceRows: [] as never,
+      subject: review.subject,
+      body: review.text,
+      templateKey: x.template.key,
+      status: 'scheduled',
+      reason: null,
+      scheduledAt: now,
+    },
+  })
+  await record(actor, id, 'started', `Single email approved: Version ${review.version} to ${x.toEmail} from ${fromEmail}`, { toEmail: x.toEmail, version: review.version })
+  return { campaignId: id, scheduled: 1 }
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────
@@ -463,6 +611,7 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       sourceRows: r.rows as never,
       subject: r.subject,
       body: r.status === 'ready' ? r.text : null,
+      templateKey: r.templateKey,
       status: r.status === 'ready' ? 'scheduled' : 'skipped',
       reason: r.reason,
       scheduledAt: r.scheduledAt ? new Date(r.scheduledAt) : null,
@@ -531,6 +680,7 @@ export async function bulkView(tenantId: string, id: string) {
       ccEmails: r.ccEmails,
       subject: r.subject,
       body: r.body,
+      version: versionOf(r.templateKey ?? c.templateKey),
       status: r.status,
       reason: r.reason,
       scheduledLocal: r.scheduledAt ? fmtIst(r.scheduledAt) : null,
@@ -655,11 +805,12 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
     await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { status: 'skipped', reason: sup.suppressed ? `On the opt-out list: ${sup.detail ?? sup.reason}` : 'Nothing to send.' } })
     return 'skipped'
   }
-  const template: BulkTemplate = bulkTemplate(c.templateKey) ?? STATIC_SITE
+  // The version this person was given at review.
+  const template: BulkTemplate = bulkTemplate(r.templateKey ?? c.templateKey) ?? STATIC_SITE
   const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName, signature: c.signature, signatureHtml: c.signatureHtml })
   // What goes is what was reviewed: the stored text. The HTML part is the same
   // words, laid out, and is only used when it matches.
-  const html = email.text === r.body ? email.html : `<pre style="font-family:Arial,Helvetica,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`
+  const html = email.text === r.body ? email.html : `<pre style="font-family:Verdana,Geneva,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`
   try {
     const res = await bulkSender().send({ fromEmail: c.fromEmail, fromName: c.fromName, to: r.toEmail, cc: (r.ccEmails as string[]) ?? [], subject: r.subject, text: r.body, html })
     await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { status: 'sent', sentAt: now, messageId: res.messageId, reason: null } })

@@ -66,8 +66,8 @@ const REVIEW = {
   fileName: 'leads.xlsx',
   counts: { rowsWithCompany: 4, companies: 3, validEmails: 2, skipped: 1, noWorkAddress: 1 },
   rows: [
-    { position: 0, companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], rows: [2], subject: 'Are AI tools recommending Thermohvac?', text: TEXT, html: `<div style="font-family:Arial"><p>Maddie,</p><p>Manoj here, from AltiusNxt.</p><div>${SIG_HTML}</div></div>`, status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:00 AM IST' },
-    { position: 1, companyName: 'Babsco', contactName: 'Steve Kile', toEmail: 'skile@babsco.com', ccEmails: [], rows: [5], subject: 'Are AI tools recommending Babsco?', text: 'Steve,', status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:05 AM IST' },
+    { position: 0, companyName: 'Thermohvac', contactName: 'Maddie Stellick', toEmail: 'mstellick@thermohvac.com', ccEmails: ['mmurray@thermohvac.com'], rows: [2], subject: 'Are AI tools recommending Thermohvac?', text: TEXT, html: `<div style="font-family:Verdana"><p>Maddie,</p><p>Manoj here, from AltiusNxt.</p><div><br></div><div>${SIG_HTML}</div></div>`, version: 1, status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:00 AM IST' },
+    { position: 1, companyName: 'Babsco', contactName: 'Steve Kile', toEmail: 'skile@babsco.com', ccEmails: [], rows: [5], subject: 'What AI LLMs say about Babsco', text: 'Steve,', version: 2, status: 'ready', reason: null, scheduledLocal: 'Sat, Oct 10, 2026, 10:05 AM IST' },
     { position: 2, companyName: 'Progressive power', contactName: 'hank', toEmail: 'hank@progressivepower.net', ccEmails: [], rows: [3], subject: null, text: null, status: 'skipped', reason: 'Said not interested', scheduledLocal: null },
   ],
   noAddress: ANALYSIS.noAddress,
@@ -86,6 +86,17 @@ const DETAIL = {
   sending: SENDING,
 }
 
+const SINGLE_REVIEW = {
+  toEmail: 'priya@acme.test',
+  ccEmails: [],
+  version: 3,
+  subject: 'Quick note on AI search for Acme Supply',
+  text: 'Priya,\n\nManoj from AltiusNxt here.',
+  html: '<div style="font-family:Verdana"><p>Priya,</p><p>Manoj from AltiusNxt here.</p></div>',
+  blocked: null,
+  previouslySentLocal: null,
+}
+
 function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
@@ -98,6 +109,8 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender 
     if (method === 'POST' && u.endsWith('/outreach/bulk/sender')) return json(opts.saved ?? sender)
     if (method === 'POST' && u.endsWith('/outreach/bulk/sender/check')) return json(sender)
     if (u.endsWith('/outreach/bulk/sender')) return json(sender)
+    if (method === 'POST' && u.endsWith('/outreach/bulk/single/review')) return json({ ...SINGLE_REVIEW, sender, sending })
+    if (method === 'POST' && u.endsWith('/outreach/bulk/single/start')) return json({ campaignId: 'bk1', scheduled: 1 }, 201)
     if (method === 'POST' && u.endsWith('/outreach/bulk/analyze')) return json(ANALYSIS)
     if (method === 'POST' && u.endsWith('/outreach/bulk/review')) return json({ ...REVIEW, sender, sending })
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
@@ -174,6 +187,41 @@ describe('step 2: review emails', () => {
     expect(within(preview).getByText('Manoj S')).toBeInTheDocument()
     expect(screen.getByText(/skipped — said not interested/i)).toBeInTheDocument()
     expect(posts().find((c) => c.url.endsWith('/review'))!.body).toMatchObject({ startTime: '10:00', intervalMinutes: 5 })
+  })
+})
+
+describe('versions in turn', () => {
+  it('shows which approved version each person gets', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    const preview = await screen.findByLabelText('Email preview')
+    expect(screen.getByRole('columnheader', { name: 'Version' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: 'Version 2' })).toBeInTheDocument()
+    expect(within(preview).getByText('Version 1')).toBeInTheDocument()
+  })
+})
+
+describe('send to one person', () => {
+  it('reviews the chosen version and sends it after the confirmation — no Excel file', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /send to one person/i }))
+    await userEvent.type(screen.getByLabelText('First name'), 'Priya')
+    await userEvent.type(screen.getByLabelText('Company name'), 'Acme Supply')
+    await userEvent.type(screen.getByLabelText('Email'), 'priya@acme.test')
+    await userEvent.selectOptions(screen.getByLabelText('Approved email'), 'static_site_v3')
+    await userEvent.click(screen.getByRole('button', { name: /review the email/i }))
+    const preview = await screen.findByLabelText('Email preview')
+    expect(within(preview).getByText(/Quick note on AI search for Acme Supply/)).toBeInTheDocument()
+    expect(within(preview).getByText('Version 3')).toBeInTheDocument()
+    const send = screen.getByRole('button', { name: /approve and send/i })
+    expect(send).toBeDisabled()
+    await userEvent.click(screen.getByRole('checkbox', { name: /approve sending it now/i }))
+    await userEvent.click(send)
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/single/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/single/start'))!.body).toEqual({ firstName: 'Priya', companyName: 'Acme Supply', toEmail: 'priya@acme.test', ccEmails: [], templateKey: 'static_site_v3', confirm: true })
+    expect(await screen.findByText('Bulk sequence completed')).toBeInTheDocument()
   })
 })
 
