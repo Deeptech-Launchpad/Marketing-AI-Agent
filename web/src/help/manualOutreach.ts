@@ -494,7 +494,7 @@ export const BULK_EMAIL: ManualSection = {
       items: [
         'Open Outreach, click the "Bulk email" tab, then "New bulk email".',
         'Click "Choose Excel file" and pick the .xlsx file. The first sheet is read.',
-        'Check the list: each company, who it goes to, and who is copied. Companies whose Status says "not interested" or "Outreach - <date>" are skipped and say so.',
+        'Check the list: each company, who it goes to, and who is copied. Companies whose Status contains "Outreach" (for example "Outreach - <date>") are skipped and say so.',
         'Click "Next: review emails".',
       ],
     },

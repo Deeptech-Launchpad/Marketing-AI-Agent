@@ -10,8 +10,9 @@
 //     (gmail, yahoo, comcast …), is never emailed.
 //   · People of the same company — on one row or several — become ONE email:
 //     the first named person is the recipient, the others are copied.
-//   · A company whose Status says it is not interested, or that it was
-//     already contacted ("Outreach - 07/10/2026"), is skipped, with the reason.
+//   · A company is skipped only when its Status contains "Outreach" (already
+//     contacted, e.g. "Outreach - 07/10/2026"); any other Status is processed
+//     normally (2026-10-08).
 // Nothing is guessed: no address is made from a name, and no name from an
 // address.
 
@@ -139,11 +140,7 @@ function detectColumns(header: string[]) {
   return { company: company >= 0 ? company : null, status: status >= 0 ? status : null, pairs }
 }
 
-const SKIP_RULES: Array<[RegExp, string]> = [
-  [/not\s*interest/i, 'Said not interested'],
-  [/do\s*not\s*(contact|email|call)|unsubscrib|opt(ed)?\s*out/i, 'Asked not to be contacted'],
-  [/outreach\s*-/i, 'Already contacted'],
-]
+const SKIP_RULES: Array<[RegExp, string]> = [[/outreach/i, 'Already contacted']]
 
 export function extractContacts(rows: string[][], opts: { allowWebmail?: boolean } = {}): Extraction {
   // The heading row: the first with both a company and an email heading.

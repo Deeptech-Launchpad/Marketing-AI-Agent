@@ -6,7 +6,7 @@ import ExcelJS from 'exceljs'
 // The approved static template and nothing else, with only [First Name] and
 // [Company Name] filled. One email per company: the first named person
 // receives it and colleagues are copied; only work addresses are used; rows
-// marked not interested or already contacted are skipped. Date, time (IST) and
+// whose Status contains "Outreach" are skipped. Date, time (IST) and
 // minutes between emails: 10:00, 10:05, 10:10 … until the list is done. The
 // sender sends ONE at a time, a failure does not stop the rest, and the send
 // completes.
@@ -215,14 +215,21 @@ describe('reading the spreadsheet', () => {
     expect(x.companies[0]!.rows).toEqual([2, 3])
   })
 
-  it('skips companies that said not interested or were already contacted, and says why', () => {
+  it('skips a company only when its Status contains "Outreach" — any other Status is processed', () => {
     const x = extractContacts([
       HEADER,
       ['Progressive power', 'u', 'hank Rossman', 'President', 'Primary: hank@progressivepower.net', '', '', '', 'They said not interested'],
       ['First Electric Supply', 'u', 'Ed Droeger', 'President', 'edd@firstelectricsupply.com', '', '', '', 'Outreach - 06/10/2026'],
       ['Armour Screw', 'u', 'Jeff', 'Owner', 'jeff@armourscrew.com', '', '', '', ''],
     ])
-    expect(x.companies.map((c) => c.skip?.split(' (')[0] ?? null)).toEqual(['Said not interested', 'Already contacted', null])
+    expect(x.companies.map((c) => c.skip?.split(' (')[0] ?? null)).toEqual([null, 'Already contacted', null])
+    const y = extractContacts([
+      HEADER,
+      ['A Co', 'u', 'Ann Lee', 'Owner', 'ann@aco.test', '', '', '', 'Do not contact'],
+      ['B Co', 'u', 'Bob Ray', 'Owner', 'bob@bco.test', '', '', '', 'OUTREACH done'],
+      ['C Co', 'u', 'Cy Fox', 'Owner', 'cy@cco.test', '', '', '', 'Follow up next week'],
+    ])
+    expect(y.companies.map((c) => [c.companyName, c.skip?.split(' (')[0] ?? null])).toEqual([['A Co', null], ['B Co', 'Already contacted'], ['C Co', null]])
   })
 
   it('finds the columns by heading, in any order', () => {
@@ -257,7 +264,7 @@ describe('review, start, and sending one at a time', () => {
       ['Thermohvac', 'u', 'Maddie Stellick', 'Owner', 'mstellick@thermohvac.com', 'Mike Murray', 'GM', 'mmurray@thermohvac.com', ''],
       ['Armour Screw', 'u', 'jeff smith', 'Owner', 'Primary: jeff@armourscrew.com Personal: jefflg@sbcglobal.net', '', '', '', ''],
       ['Babsco', 'u', 'Steve Kile', 'Owner', 'skile@babsco.com', '', '', '', ''],
-      ['Progressive power', 'u', 'hank Rossman', 'President', 'hank@progressivepower.net', '', '', '', 'Not interested'],
+      ['Progressive power', 'u', 'hank Rossman', 'President', 'hank@progressivepower.net', '', '', '', 'Outreach - 06/10/2026'],
       ['No Email Co', 'u', 'Pat', 'Owner', '', '', '', '', ''],
     ]),
     fileName: 'Indianapolis - Static Leads.xlsx',
@@ -613,7 +620,7 @@ describe('approved Versions 1, 2 and 3, in rotation', () => {
     const fileBase64 = await xlsx([
       HEADER,
       ...people.slice(0, 2).map((p) => [`${p} Co`, 'u', `${p} Smith`, 'Owner', `${p.toLowerCase()}@${p.toLowerCase()}.test`, '', '', '', '']),
-      ['Skipped Co', 'u', 'Sam Skip', 'Owner', 'sam@skipped.test', '', '', '', 'Not interested'],
+      ['Skipped Co', 'u', 'Sam Skip', 'Owner', 'sam@skipped.test', '', '', '', 'Outreach - 06/10/2026'],
       ...people.slice(2).map((p) => [`${p} Co`, 'u', `${p} Smith`, 'Owner', `${p.toLowerCase()}@${p.toLowerCase()}.test`, '', '', '', '']),
     ])
     const setup = { fileBase64, fileName: 'five.xlsx', templateKey: 'static_site_v1', startDate: '2026-10-10', startTime: '10:00', intervalMinutes: 5 }
