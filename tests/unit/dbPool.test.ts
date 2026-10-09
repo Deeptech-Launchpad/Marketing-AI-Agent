@@ -15,7 +15,7 @@ vi.mock('../../src/config/env.js', () => ({
   },
 }))
 
-const { pooledDatabaseUrl } = await import('../../src/platform/db.js')
+const { pooledDatabaseUrl, isWorkerScript } = await import('../../src/platform/db.js')
 
 describe('the database connection pool', () => {
   it('the API process uses at most 3 connections, the worker at most 2, waiting up to 20 s', () => {
@@ -24,6 +24,15 @@ describe('the database connection pool', () => {
     expect(api.searchParams.get('pool_timeout')).toBe('20')
     expect(api.searchParams.get('schema')).toBe('marketing')
     expect(new URL(pooledDatabaseUrl(undefined, true)).searchParams.get('connection_limit')).toBe('2')
+  })
+
+  it('recognises the worker under pm2 (its script is in pm_exec_path) and under plain node', () => {
+    expect(isWorkerScript('/root/altius_tools/Nxt_Marketing_Agent/dist/worker.js')).toBe(true)
+    expect(isWorkerScript('D:\\app\\dist\\worker.js')).toBe(true)
+    expect(isWorkerScript('/root/altius_tools/Nxt_Marketing_Agent/dist/index.js')).toBe(false)
+    // pm2's own wrapper is what process.argv[1] shows under pm2 — never taken for the worker.
+    expect(isWorkerScript('/usr/local/lib/node_modules/pm2/lib/ProcessContainerFork.js')).toBe(false)
+    expect(isWorkerScript(undefined)).toBe(false)
   })
 
   it('keeps a limit written into the address itself', () => {
