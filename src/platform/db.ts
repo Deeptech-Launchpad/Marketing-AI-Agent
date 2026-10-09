@@ -2,8 +2,13 @@ import { PrismaClient } from '@prisma/client'
 import { createId } from '@paralleldrive/cuid2'
 import { env } from '../config/env.js'
 
-/** Which process this is: the worker (dist/worker.js) or the API and scripts. */
-const isWorker = /[\\/]worker\.(js|ts)$/.test(process.argv[1] ?? '')
+/**
+ * Which process this is: the worker (dist/worker.js) or the API and scripts.
+ * pm2 starts every app through its own wrapper, so process.argv[1] is the
+ * wrapper's path; the script it runs is in pm_exec_path (2026-10-09).
+ */
+export const isWorkerScript = (script: string | undefined): boolean => /[\\/]worker\.(js|ts)$/.test(script ?? '')
+const isWorker = isWorkerScript(process.env.pm_exec_path ?? process.argv[1])
 
 /**
  * The database address with this process's connection limit (2026-10-09).
