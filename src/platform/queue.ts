@@ -71,7 +71,8 @@ let boss: PgBoss | null = null
 export async function getQueue(): Promise<PgBoss> {
   if (boss) return boss
 
-  const instance = new PgBoss({ connectionString: connectionString(), schema: 'pgboss' })
+  // A small pool: the database is shared (see PGBOSS_MAX_CONNECTIONS).
+  const instance = new PgBoss({ connectionString: connectionString(), schema: 'pgboss', max: env.PGBOSS_MAX_CONNECTIONS })
   instance.on('error', (err) => logger.error({ err }, 'pg-boss error'))
   await instance.start()
   for (const q of ALL_QUEUES) {
