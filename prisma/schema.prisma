@@ -2807,6 +2807,9 @@ model BulkEmailCampaign {
   // Why it was paused by the sender (for example: the From address is no
   // longer authorized); null when a person paused it or it is running.
   statusReason String?
+  // How this send's emails go (2026-10-09): 'smtp' = this platform's mailbox;
+  // 'crm' = through NXT Sales' Gmail pipeline. Fixed when the send starts.
+  sendVia      String  @default("smtp")
 
   // The approved template, as it was when the send was approved.
   templateKey String
@@ -2879,6 +2882,11 @@ model BulkEmailRecipient {
   lastOpenedAt      DateTime?
   // Detected image requests — not a count of human reads.
   openCount         Int       @default(0)
+
+  // Sent through NXT Sales (2026-10-09): the idempotency key given to it, and
+  // its answer — sent | failed | unknown (null while waiting for it).
+  crmSendKey        String?   @unique
+  crmOutcome        String?
 
   // scheduled | sending | sent | failed | skipped
   status      String

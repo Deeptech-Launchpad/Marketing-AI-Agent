@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ExcelJS from 'exceljs'
 
 // BULK EMAIL (2026-10-08) — simple and standalone.
@@ -108,6 +108,11 @@ const env = {
   SMTP_USER: '',
   SMTP_PASS: '',
   OUTREACH_COOLDOWN_DAYS: 30,
+  // NXT Sales: sending through it is off unless a test switches it on.
+  BULK_SEND_VIA: 'smtp',
+  NXT_SALES_BASE_URL: 'http://localhost:4000',
+  NXT_SALES_MAX_CONCURRENCY: 2,
+  NXT_SALES_TIMEOUT_MS: 1000,
   // Open tracking: off unless a test switches it on.
   NODE_ENV: 'production',
   BULK_OPEN_TRACKING_ENABLED: false,
@@ -132,6 +137,7 @@ const { checkSender, parseDmarc, setSenderCheckDepsForTests } = await import('..
 const { cleanSignatureHtml, inlineImages } = await import('../../src/outreach/bulk/signature.js')
 const tracking = await import('../../src/outreach/bulk/tracking.js')
 const { bulkOpenTrackingRoutes } = await import('../../src/api/routes/bulkOpenTracking.routes.js')
+const crmSend = await import('../../src/outreach/bulk/crmSend.js')
 
 // The sender check, without DNS or a mailbox: each test says what they answer.
 const dmarcCalls: string[] = []
@@ -155,6 +161,8 @@ beforeEach(() => {
   setBulkSenderForTests(null)
   Object.assign(env, BULK_ACCOUNT, { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', NODE_ENV: 'production', BULK_OPEN_TRACKING_ENABLED: false, BULK_OPEN_TRACKING_BASE_URL: '' })
   tracking.setTrackingProbeForTests(async () => true)
+  crmSend.setCrmBulkForTests(null)
+  svc.resetCrmSyncForTests()
   dmarcCalls.length = 0
   probeCalls.length = 0
   dmarcAnswer = { policy: null, error: null }
@@ -848,7 +856,7 @@ describe('email open tracking', () => {
     let view = await svc.bulkView('t1', campaignId)
     expect(view.counts.opens).toEqual({ sent: 3, openDetected: 0, noOpenDetected: 0, trackingUnavailable: 3 })
     expect(view.recipients[0]!.tracking).toMatchObject({ status: 'tracking_unavailable', note: expect.stringMatching(/switched off/) })
-    expect(view.openTracking).toEqual({ enabled: false, reason: expect.stringMatching(/switched off/) })
+    expect(view.openTracking).toEqual({ enabled: false, reason: expect.stringMatching(/switched off/), via: 'smtp' })
 
     // A plain-http address in production.
     expect(tracking.trackingConfig()).toMatchObject({ ok: false })
@@ -904,6 +912,177 @@ describe('email open tracking', () => {
     expect(cfg('http://localhost:4100', 'development').ok).toBe(true)
     expect(cfg('http://localhost:4100', 'production').ok).toBe(false)
     expect(cfg('http://example.com', 'development').ok).toBe(false)
+  })
+})
+
+// SENDING THROUGH NXT SALES (2026-10-09): prepared, approved and timed here;
+// sent by NXT Sales' own Gmail pipeline as its configured sender, with its own
+// open tracking. Each email has a stable key, so it is never sent twice; there
+// is never a fallback to this platform's mailbox.
+describe('sending through NXT Sales', () => {
+  const LIST = async () => ({
+    fileBase64: await xlsx([
+      HEADER,
+      ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', 'Al Kim', 'GM', 'al@alpha.test', ''],
+      ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', ''],
+      ['Charlie Co', 'u', 'Cy Fox', 'Owner', 'cy@charlie.test', '', '', '', ''],
+    ]),
+    fileName: 'three.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-10',
+    startTime: '10:00',
+    intervalMinutes: 5,
+  })
+  const BEFORE = new Date('2026-10-09T12:00:00Z')
+  const at = (hhmm: string) => istToUtc('2026-10-10', hhmm)!
+  const row = (to: string) => store.bulkEmailRecipient!.find((r) => r.toEmail === to)!
+
+  // A stand-in for NXT Sales' /api/marketing-bulk API, with its idempotency.
+  type Sent = { key: string; to: string; cc: string[]; subject: string; html: string; text: string }
+  let crm: { ready: boolean; sends: Sent[]; records: Map<string, { status: string; tracked: boolean; openCount: number; firstOpenedAt: string | null; lastOpenedAt: string | null; error: string | null }>; next: 'sent' | 'failed' | 'unknown' | 'throw' }
+  const smtp: string[] = []
+  beforeEach(() => {
+    env.BULK_SEND_VIA = 'crm'
+    smtp.length = 0
+    setBulkSenderForTests({ send: async (e) => (smtp.push(e.to), { messageId: 'smtp' }) })
+    crm = { ready: true, sends: [], records: new Map(), next: 'sent' }
+    crmSend.setCrmBulkForTests({
+      sender: async () => (crm.ready ? { ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com' } : { ready: false, problem: 'The configured sender (manoj@altiusnxt.com) has no Gmail connected in NXT Sales.', name: 'Manoj S', fromEmail: null }),
+      send: async (e) => {
+        const prior = crm.records.get(e.key)
+        if (prior && prior.status !== 'failed') return { outcome: prior.status as 'sent', messageId: 'gm', activityId: 'act', fromEmail: 'manoj@altiusnxt.com', tracked: prior.tracked, error: null }
+        if (crm.next === 'throw') {
+          // Sent by NXT Sales, but the answer never arrived.
+          crm.sends.push({ key: e.key, to: e.to, cc: e.cc, subject: e.subject, html: e.html, text: e.text })
+          crm.records.set(e.key, { status: 'sent', tracked: true, openCount: 0, firstOpenedAt: null, lastOpenedAt: null, error: null })
+          return { outcome: 'unknown', messageId: null, activityId: null, fromEmail: null, tracked: false, error: 'No answer from NXT Sales (timeout).' }
+        }
+        if (crm.next === 'failed') {
+          crm.records.set(e.key, { status: 'failed', tracked: false, openCount: 0, firstOpenedAt: null, lastOpenedAt: null, error: 'Gmail not connected.' })
+          return { outcome: 'failed', messageId: null, activityId: null, fromEmail: null, tracked: false, error: 'Gmail not connected.' }
+        }
+        crm.sends.push({ key: e.key, to: e.to, cc: e.cc, subject: e.subject, html: e.html, text: e.text })
+        crm.records.set(e.key, { status: 'sent', tracked: true, openCount: 0, firstOpenedAt: null, lastOpenedAt: null, error: null })
+        return { outcome: 'sent', messageId: `gm-${crm.sends.length}`, activityId: `act-${crm.sends.length}`, fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }
+      },
+      statuses: async (keys) =>
+        keys.flatMap((k) => {
+          const r = crm.records.get(k)
+          return r ? [{ idempotencyKey: k, status: r.status as 'sent', error: r.error, sentAt: '2026-10-10T04:30:00.000Z', messageId: 'gm', activityId: 'act', fromEmail: 'manoj@altiusnxt.com', tracked: r.tracked, openCount: r.tracked ? r.openCount : null, firstOpenedAt: r.firstOpenedAt, lastOpenedAt: r.lastOpenedAt }] : []
+        }),
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+  })
+
+  it('the sender is NXT Sales\' configured Gmail sender; the review has no signature of this platform (NXT Sales adds the Gmail one)', async () => {
+    await setSender({ ccEmails: ['team@altiusnxt.com'], signatureHtml: '<p>Old signature</p>' })
+    const view = await svc.senderView('t1')
+    expect(view).toMatchObject({ via: 'crm', fromEmail: 'manoj@altiusnxt.com', authorized: true, problem: null, ccEmails: ['team@altiusnxt.com'], signatureHtml: '' })
+    const r = await svc.reviewBulk(actor, await LIST(), BEFORE)
+    const alpha = r.rows.find((x) => x.companyName === 'Alpha Co')!
+    expect(alpha.text!.endsWith('Would you like me to send it?')).toBe(true)
+    expect(alpha.html).not.toContain('Old signature')
+    expect(alpha.ccEmails).toEqual(['al@alpha.test', 'team@altiusnxt.com'])
+  })
+
+  it('each email is sent by NXT Sales, once, with its own key — the approved content, no pixel, never this platform\'s mailbox', async () => {
+    const { campaignId } = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ sendVia: 'crm', fromEmail: 'manoj@altiusnxt.com', signature: '', signatureHtml: '' })
+    for (const t of ['10:00', '10:05', '10:10']) await svc.dispatchBulkEmails(at(t))
+    expect(smtp).toEqual([])
+    expect(crm.sends.map((x) => [x.to, x.subject])).toEqual([
+      ['ann@alpha.test', 'Are AI tools recommending Alpha Co?'],
+      ['bob@bravo.test', 'What AI LLMs say about Bravo Co'],
+      ['cy@charlie.test', 'Quick note on AI search for Charlie Co'],
+    ])
+    expect(crm.sends[0]!.cc).toEqual(['al@alpha.test'])
+    expect(new Set(crm.sends.map((x) => x.key)).size).toBe(3)
+    expect(crm.sends.every((x) => !/bulk-open/.test(x.html))).toBe(true)
+    expect(row('ann@alpha.test')).toMatchObject({ status: 'sent', crmOutcome: 'sent', crmSendKey: crm.sends[0]!.key, trackingEnabled: true })
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.campaign.status).toBe('completed')
+    expect(view.counts.opens).toEqual({ sent: 3, openDetected: 0, noOpenDetected: 3, trackingUnavailable: 0 })
+  })
+
+  it('asking NXT Sales again with the same key never sends twice', async () => {
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    const key = row('ann@alpha.test').crmSendKey as string
+    const again = await crmSend.crmBulk().send({ key, campaignId: 'x', recipientId: 'x', to: 'ann@alpha.test', cc: [], subject: 's', html: 'h', text: 't' })
+    expect(again.outcome).toBe('sent')
+    expect(crm.sends.filter((x) => x.key === key)).toHaveLength(1)
+  })
+
+  it('a refusal is recorded as failed — no fallback to this platform\'s mailbox — and the rest carry on', async () => {
+    crm.next = 'failed'
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    crm.next = 'sent'
+    await svc.dispatchBulkEmails(at('10:05'))
+    expect(smtp).toEqual([])
+    expect(row('ann@alpha.test')).toMatchObject({ status: 'failed', crmOutcome: 'failed', reason: 'NXT Sales did not send it: Gmail not connected.' })
+    expect(row('bob@bravo.test')).toMatchObject({ status: 'sent' })
+  })
+
+  it('an unanswered send is not resent; the status check with NXT Sales confirms it was sent', async () => {
+    crm.next = 'throw'
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    // A status check just ran, so the next one is a few minutes away.
+    await svc.syncCrmSends(at('09:59'), true)
+    await svc.dispatchBulkEmails(at('10:00'))
+    expect(row('ann@alpha.test')).toMatchObject({ status: 'failed', crmOutcome: 'unknown' })
+    expect(row('ann@alpha.test').reason).toMatch(/Not confirmed by NXT Sales/)
+    expect(crm.sends).toHaveLength(1)
+    expect(await svc.syncCrmSends(at('10:01'), true)).toBeGreaterThan(0)
+    expect(row('ann@alpha.test')).toMatchObject({ status: 'sent', crmOutcome: 'sent', reason: null })
+    expect(crm.sends).toHaveLength(1)
+  })
+
+  it('NXT Sales\' own open tracking is copied in — never raised here, never assumed from sending', async () => {
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    for (const t of ['10:00', '10:05', '10:10']) await svc.dispatchBulkEmails(at(t))
+    expect(row('bob@bravo.test')).toMatchObject({ openCount: 0 })
+    const bobKey = row('bob@bravo.test').crmSendKey as string
+    crm.records.set(bobKey, { ...crm.records.get(bobKey)!, openCount: 2, firstOpenedAt: '2026-10-10T06:00:00.000Z', lastOpenedAt: '2026-10-10T07:30:00.000Z' })
+    await svc.syncCrmSends(at('11:00'), true)
+    expect(row('bob@bravo.test')).toMatchObject({ openCount: 2, firstOpenedAt: new Date('2026-10-10T06:00:00.000Z'), lastOpenedAt: new Date('2026-10-10T07:30:00.000Z') })
+    expect(row('ann@alpha.test')).toMatchObject({ openCount: 0 })
+    // An email NXT Sales sent without tracking is "Tracking unavailable", not "No open".
+    const cyKey = row('cy@charlie.test').crmSendKey as string
+    crm.records.set(cyKey, { ...crm.records.get(cyKey)!, tracked: false })
+    await svc.syncCrmSends(at('11:05'), true)
+    const view = await svc.bulkView('t1', store.bulkEmailCampaign![0]!.id as string)
+    expect(view.counts.opens).toEqual({ sent: 3, openDetected: 1, noOpenDetected: 1, trackingUnavailable: 1 })
+  })
+
+  it('cannot start, and a running send pauses, when NXT Sales cannot send — nothing goes another way', async () => {
+    crm.ready = false
+    await expect(svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)).rejects.toThrow(/Not started — NXT Sales cannot send yet: .*no Gmail connected/)
+    crm.ready = true
+    const { campaignId } = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    crm.ready = false
+    await svc.dispatchBulkEmails(at('10:00'))
+    let view = await svc.bulkView('t1', campaignId)
+    expect(view.campaign).toMatchObject({ status: 'paused' })
+    expect(view.campaign.statusReason).toMatch(/no Gmail connected/)
+    // Switching the server back to its own mailbox does not send a CRM send that way.
+    crm.ready = true
+    env.BULK_SEND_VIA = 'smtp'
+    await expect(svc.setBulkState(actor, campaignId, 'resume')).rejects.toThrow(/BULK_SEND_VIA/)
+    expect(smtp).toEqual([])
+    expect(crm.sends).toEqual([])
+    view = await svc.bulkView('t1', campaignId)
+    expect(view.counts.scheduled).toBe(3)
+  })
+
+  it('one person is sent through NXT Sales too', async () => {
+    const { campaignId } = await svc.startSingle(actor, { firstName: 'Priya', companyName: 'Acme Supply', toEmail: 'priya@acme.test', ccEmails: [], templateKey: 'static_site_v2', confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(new Date(BEFORE.getTime() + 60_000))
+    expect(crm.sends.map((x) => [x.to, x.subject])).toEqual([['priya@acme.test', 'What AI LLMs say about Acme Supply']])
+    expect((await svc.bulkView('t1', campaignId)).campaign.status).toBe('completed')
+    expect(smtp).toEqual([])
   })
 })
 

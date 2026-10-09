@@ -60,10 +60,11 @@ bulkEmailRoutes.get(
 // signature. Saving checks the From against the server's SMTP account.
 const Sender = z
   .object({
-    fromEmail: z.string().min(3).max(254),
+    // Through NXT Sales the From is NXT Sales' own sender, so it may be empty.
+    fromEmail: z.string().max(254).optional(),
     ccEmails: z.array(z.string().max(254)).max(10),
     // The signature as pasted (HTML, embedded images included).
-    signatureHtml: z.string().max(1_500_000),
+    signatureHtml: z.string().max(1_500_000).optional(),
   })
   .strict()
 

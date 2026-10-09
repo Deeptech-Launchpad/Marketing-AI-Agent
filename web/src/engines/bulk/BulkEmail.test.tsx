@@ -24,7 +24,7 @@ const SENDING: { enabled: boolean; mailboxConfigured: boolean; account: { email:
   account: { email: 'dtlpmanikandan@gmail.com', source: 'system' },
   reason: null,
 }
-type Sender = { fromEmail: string | null; ccEmails: string[]; signature: string; signatureHtml?: string; signatureRemoved?: string[]; check: { authorized: boolean; reason: string; warning: string | null; checkedLocal: string } | null; authorized: boolean; problem: string | null; account: typeof SENDING.account }
+type Sender = { via?: 'smtp' | 'crm'; senderName?: string | null; fromEmail: string | null; ccEmails: string[]; signature: string; signatureHtml?: string; signatureRemoved?: string[]; check: { authorized: boolean; reason: string; warning: string | null; checkedLocal: string } | null; authorized: boolean; problem: string | null; account: typeof SENDING.account }
 // A signature as Gmail copies it: a table with the logo and the details.
 const SIG_HTML =
   '<table cellpadding="0" cellspacing="0"><tbody><tr><td style="padding-right:15px">Best Regards,<br /><img src="https://ci3.googleusercontent.com/mail-sig/logo" width="200" alt="AltiusNxt" /></td><td style="border-left:1px solid #555555;padding-left:15px"><b>Manoj S</b><br />Digital Commerce Lead<br />m: <a href="tel:+13134869697">+13134869697</a></td></tr></tbody></table>'
@@ -389,6 +389,33 @@ describe('email open tracking', () => {
     // Never "read" / "opened" as a certainty.
     expect(document.body.textContent).not.toMatch(/\b(was read|definitely opened|not opened|unopened)\b/i)
     expect(screen.getByText(/a signal, not proof of reading/)).toBeInTheDocument()
+  })
+})
+
+describe('sending through NXT Sales', () => {
+  const CRM_SENDER: Sender = { ...SENDER_OK, fromEmail: 'manoj@altiusnxt.com', signature: '', signatureHtml: '', check: null, authorized: true, problem: null, account: null }
+  const viaCrm = { ...CRM_SENDER, via: 'crm', senderName: 'Manoj S' } as Sender
+
+  it('shows NXT Sales’ Gmail sender and signature, and lets only the CC be changed', async () => {
+    stub({ sender: viaCrm, saved: viaCrm, tracking: { enabled: true, reason: null, via: 'crm' } as never })
+    render(<BulkEmail canOperate canApprove />)
+    expect(await screen.findByText(/Sent through NXT Sales, from its configured Gmail sender \(Manoj S\)/)).toBeInTheDocument()
+    expect(screen.getByText(/The Gmail account’s own signature, added by NXT Sales/)).toBeInTheDocument()
+    expect(screen.getByText(/Emails are sent through NXT Sales, which tracks opens with its own tracking/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Edit CC' }))
+    expect(screen.queryByLabelText('From email')).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Signature' })).not.toBeInTheDocument()
+    await userEvent.clear(screen.getByLabelText('CC emails'))
+    await userEvent.type(screen.getByLabelText('CC emails'), 'team@altiusnxt.com')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/sender'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/outreach/bulk/sender'))!.body).toEqual({ ccEmails: ['team@altiusnxt.com'] })
+  })
+
+  it('says why sending cannot start when NXT Sales cannot send', async () => {
+    stub({ sender: { ...viaCrm, fromEmail: null, authorized: false, problem: 'The configured sender (manoj@altiusnxt.com) has no Gmail connected in NXT Sales.' } as Sender })
+    render(<BulkEmail canOperate canApprove />)
+    expect(await screen.findByText(/has no Gmail connected in NXT Sales/)).toBeInTheDocument()
   })
 })
 

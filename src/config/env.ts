@@ -472,6 +472,11 @@ const schema = z.object({
   // address that reaches this API (the same origin that serves
   // /api/v1/bulk-open/…). Never a plain-http address in production.
   BULK_OPEN_TRACKING_ENABLED: bool.default('false'),
+  // How bulk emails are sent (2026-10-09): 'smtp' = this platform's own
+  // mailbox (BULK_SMTP_* / SMTP_*); 'crm' = through NXT Sales' Gmail send
+  // pipeline and its native open tracking (/api/marketing-bulk). A send is
+  // started on one channel and stays on it — never a silent fallback.
+  BULK_SEND_VIA: z.enum(['smtp', 'crm']).default('smtp'),
   BULK_OPEN_TRACKING_BASE_URL: z.string().default(''),
 
 

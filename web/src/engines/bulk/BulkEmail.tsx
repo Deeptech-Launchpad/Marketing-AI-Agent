@@ -31,6 +31,9 @@ interface SendingStatus {
   reason: string | null
 }
 interface SenderView {
+  /** 'crm' = sent through NXT Sales, as its configured Gmail sender. */
+  via?: 'smtp' | 'crm'
+  senderName?: string | null
   fromEmail: string | null
   ccEmails: string[]
   signature: string
@@ -124,6 +127,7 @@ interface OpenTracking {
 interface TrackingSetting {
   enabled: boolean
   reason: string | null
+  via?: 'smtp' | 'crm'
 }
 const OPEN_STATUS: Record<OpenTracking['status'], { word: string; tone: 'ok' | 'neutral' | 'warn' }> = {
   open_detected: { word: 'Open detected', tone: 'ok' },
@@ -136,6 +140,13 @@ const OPEN_MEANING =
 /** Whether open tracking is on for new emails, and what it needs. */
 function TrackingNotice({ setting }: { setting: TrackingSetting | null | undefined }) {
   if (!setting) return null
+  if (setting.via === 'crm') {
+    return (
+      <p className="note">
+        Emails are sent through NXT Sales, which tracks opens with its own tracking; the results appear here within a few minutes. {OPEN_MEANING}
+      </p>
+    )
+  }
   return setting.enabled ? (
     <p className="note">Open tracking is on for new emails. {OPEN_MEANING}</p>
   ) : (
@@ -252,7 +263,8 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
   }
   const save = () =>
     void call.run('save', async () => {
-      const r = await api.post('/outreach/bulk/sender', { fromEmail: from.trim(), ccEmails: splitEmails(cc), signatureHtml })
+      const viaCrm = sender?.via === 'crm'
+      const r = await api.post('/outreach/bulk/sender', viaCrm ? { ccEmails: splitEmails(cc) } : { fromEmail: from.trim(), ccEmails: splitEmails(cc), signatureHtml })
       if (isSenderView(r)) setSaved(r)
       setEditing(false)
     })
@@ -277,7 +289,7 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
               </Button>
             )}
             <Button size="sm" icon={Mail} onClick={edit}>
-              {sender.fromEmail ? 'Edit sender' : 'Set sender'}
+              {sender.via === 'crm' ? 'Edit CC' : sender.fromEmail ? 'Edit sender' : 'Set sender'}
             </Button>
           </div>
         )
@@ -290,23 +302,31 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
       ) : !sender ? null : editing ? (
         <>
           <div className="otr-grid">
-            <label>
-              <span className="field-label">From email</span>
-              <input className="otr-input" type="email" aria-label="From email" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="sales@yourcompany.com" />
-            </label>
+            {sender.via !== 'crm' && (
+              <label>
+                <span className="field-label">From email</span>
+                <input className="otr-input" type="email" aria-label="From email" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="sales@yourcompany.com" />
+              </label>
+            )}
             <label>
               <span className="field-label">CC on every email (optional)</span>
               <input className="otr-input" aria-label="CC emails" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="colleague@yourcompany.com" />
             </label>
           </div>
-          <label style={{ display: 'block', marginTop: 'var(--s2)' }}>
-            <span className="field-label">Signature (optional) — paste it from your email; it is used exactly as it looks here</span>
-          </label>
-          <SignatureEditor initialHtml={signatureHtml} onChange={setSignatureHtml} />
-          <p className="note">
-            Saving checks that the server&rsquo;s sending account may genuinely send as this From address. For a Gmail account, one check message is sent to that
-            account itself — never to a customer. This can take up to 30 seconds.
-          </p>
+          {sender.via === 'crm' ? (
+            <p className="note">The From address and the signature are NXT Sales&rsquo; own: its configured Gmail sender, and that Gmail account&rsquo;s signature.</p>
+          ) : (
+            <>
+              <label style={{ display: 'block', marginTop: 'var(--s2)' }}>
+                <span className="field-label">Signature (optional) — paste it from your email; it is used exactly as it looks here</span>
+              </label>
+              <SignatureEditor initialHtml={signatureHtml} onChange={setSignatureHtml} />
+              <p className="note">
+                Saving checks that the server&rsquo;s sending account may genuinely send as this From address. For a Gmail account, one check message is sent to that
+                account itself — never to a customer. This can take up to 30 seconds.
+              </p>
+            </>
+          )}
           {call.error && (
             <p className="otr-err" role="alert">
               {call.error}
@@ -316,8 +336,8 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
             <Button variant="quiet" onClick={() => setEditing(false)}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!from.trim()} busy={call.busy === 'save'} onClick={save}>
-              Save and check sender
+            <Button variant="primary" disabled={sender.via !== 'crm' && !from.trim()} busy={call.busy === 'save'} onClick={save}>
+              {sender.via === 'crm' ? 'Save' : 'Save and check sender'}
             </Button>
           </div>
         </>
@@ -326,13 +346,16 @@ function SenderPanel({ canApprove }: { canApprove: boolean }) {
           <ul className="otr-list">
             <li>
               <span className="field-label">From</span> {sender.fromEmail ?? <span className="cell-dim">not set</span>} <SenderStatus sender={sender} />
+              {sender.via === 'crm' && <div className="cell-dim">Sent through NXT Sales, from its configured Gmail sender{sender.senderName ? ` (${sender.senderName})` : ''}.</div>}
             </li>
             <li>
               <span className="field-label">CC</span> {sender.ccEmails.length ? sender.ccEmails.join(', ') : <span className="cell-dim">none</span>}
             </li>
             <li>
               <span className="field-label">Signature</span>{' '}
-              {sender.signatureHtml || sender.signature ? (
+              {sender.via === 'crm' ? (
+                <span className="cell-dim">The Gmail account&rsquo;s own signature, added by NXT Sales.</span>
+              ) : sender.signatureHtml || sender.signature ? (
                 <SignatureView html={sender.signatureHtml || textToHtml(sender.signature)} />
               ) : (
                 <span className="cell-dim">none</span>

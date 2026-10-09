@@ -7,6 +7,7 @@ import { checkSuppression } from '../suppression.js'
 import { readSpreadsheet } from './excel.js'
 import { extractContacts, firstNameOf, recipientsOf, strictEmail } from './extract.js'
 import { fmtIst, IST, istToUtc, planSequential } from './schedule.js'
+import { crmBulk, crmKeyOf, type CrmSender } from './crmSend.js'
 import { checkSender, type SenderCheck } from './senders.js'
 import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
 import { BULK_ROTATION, bulkTemplate, cleanSignature, composeBulkEmail, rotationTemplate, STATIC_SITE, versionOf, type BulkTemplate } from './template.js'
@@ -171,6 +172,25 @@ async function authorizeFrom(actor: { tenantId: string; crmUserId: string; reque
 export async function senderView(tenantId: string) {
   const settings = await tenantSettings(tenantId)
   const profile = profileOf(settings)
+  // Through NXT Sales: the From is its configured Gmail sender, and the
+  // signature is that Gmail account's own, added by NXT Sales.
+  if (sendingViaCrm()) {
+    const s = await crmBulk().sender()
+    return {
+      via: 'crm' as const,
+      fromEmail: s.fromEmail,
+      senderName: s.name,
+      ccEmails: profile.ccEmails,
+      signature: '',
+      signatureHtml: '',
+      signatureRemoved: [] as string[],
+      updatedAt: profile.updatedAt,
+      check: null,
+      authorized: s.ready && Boolean(s.fromEmail),
+      problem: s.ready ? null : s.problem,
+      account: null,
+    }
+  }
   const sending = bulkSendingStatus()
   const check = profile.fromEmail ? currentCheck(settings, profile.fromEmail) : null
   const stale = profile.fromEmail && !check ? checksOf(settings)[profile.fromEmail.toLowerCase()] ?? null : null
@@ -186,7 +206,9 @@ export async function senderView(tenantId: string) {
           ? null
           : check.reason
   return {
+    via: 'smtp' as const,
     fromEmail: profile.fromEmail || null,
+    senderName: null,
     ccEmails: profile.ccEmails,
     signature: profile.signature,
     signatureHtml: profile.signatureHtml,
@@ -200,9 +222,12 @@ export async function senderView(tenantId: string) {
 }
 
 /** Saves the From, CC and signature, and checks the From straight away. */
-export async function saveBulkSender(actor: Actor, input: { fromEmail: string; ccEmails: string[]; signatureHtml: string }, now = new Date()) {
-  const fromEmail = strictEmail(input.fromEmail)
-  if (!fromEmail) throw new BadRequestError(`"${input.fromEmail}" is not a valid From email address.`)
+export async function saveBulkSender(actor: Actor, input: { fromEmail?: string; ccEmails: string[]; signatureHtml?: string }, now = new Date()) {
+  const viaCrm = sendingViaCrm()
+  // Through NXT Sales the From and signature are NXT Sales' own: only the CC is set here.
+  const current = profileOf(await tenantSettings(actor.tenantId))
+  const fromEmail = viaCrm ? current.fromEmail : strictEmail(input.fromEmail ?? '')
+  if (!viaCrm && !fromEmail) throw new BadRequestError(`"${input.fromEmail ?? ''}" is not a valid From email address.`)
   const ccEmails: string[] = []
   for (const raw of input.ccEmails.map((c) => c.trim()).filter(Boolean)) {
     const cc = strictEmail(raw)
@@ -212,27 +237,69 @@ export async function saveBulkSender(actor: Actor, input: { fromEmail: string; c
   if (ccEmails.length > MAX_CC) throw new BadRequestError(`At most ${MAX_CC} CC addresses.`)
   if ((input.signatureHtml ?? '').length > MAX_SIGNATURE_HTML) throw new BadRequestError('The signature is too large — use smaller images.')
   // Kept exactly as pasted; only active content and images that cannot travel are taken out.
-  const sig = cleanSignatureHtml(input.signatureHtml ?? '')
+  const sig = viaCrm ? null : cleanSignatureHtml(input.signatureHtml ?? '')
   const profile: BulkSenderProfile = {
-    fromEmail,
+    fromEmail: fromEmail ?? '',
     ccEmails,
-    signature: cleanSignature(sig.text),
-    signatureHtml: sig.html,
-    signatureRemoved: sig.removed,
+    signature: sig ? cleanSignature(sig.text) : current.signature,
+    signatureHtml: sig ? sig.html : current.signatureHtml,
+    signatureRemoved: sig ? sig.removed : current.signatureRemoved,
     updatedAt: now.toISOString(),
     updatedByCrmUserId: actor.crmUserId,
   }
   await patchSettings(actor.tenantId, { [SENDER_KEY]: profile })
-  await authorizeFrom(actor, fromEmail, now, true)
+  if (!viaCrm && fromEmail) await authorizeFrom(actor, fromEmail, now, true)
   return senderView(actor.tenantId)
 }
 
 /** Checks the saved From again (for example after adding it as a "Send mail as" address). */
 export async function recheckBulkSender(actor: Actor, now = new Date()) {
+  if (sendingViaCrm()) return senderView(actor.tenantId)
   const profile = profileOf(await tenantSettings(actor.tenantId))
   if (!profile.fromEmail) throw new BadRequestError('Set the From email first.')
   await authorizeFrom(actor, profile.fromEmail, now, true)
   return senderView(actor.tenantId)
+}
+
+// ── Which channel sends ────────────────────────────────────────────────────
+
+/** New sends go through NXT Sales (BULK_SEND_VIA=crm) or this platform's own mailbox. */
+function sendingViaCrm(): boolean {
+  return env.BULK_SEND_VIA === 'crm'
+}
+
+/**
+ * The From a new send starts with, checked now: NXT Sales' configured sender
+ * (through NXT Sales), or the From set here and authorized for the SMTP account.
+ */
+async function startingFrom(actor: Actor, profileFrom: string, now: Date, verb: string): Promise<string> {
+  if (sendingViaCrm()) {
+    const s = await crmBulk().sender()
+    if (!s.ready || !s.fromEmail) throw new ConflictError(`${verb} — NXT Sales cannot send yet: ${s.problem ?? 'no sender is configured there.'}`)
+    return s.fromEmail
+  }
+  if (!profileFrom) throw new BadRequestError('Set the From email for bulk emails first (Sender, on the Bulk email page).')
+  const auth = await authorizeFrom(actor, profileFrom, now, true)
+  if (!auth.authorized) throw new ConflictError(`${verb} — ${profileFrom} is not authorized for this sending account. ${auth.reason}`)
+  return profileFrom
+}
+
+/** What the screens say about open tracking for new sends. */
+function screenTracking(): { enabled: boolean; reason: string | null; via: 'smtp' | 'crm' } {
+  // Through NXT Sales its own tracking applies; each email shows whether it carried it.
+  if (sendingViaCrm()) return { enabled: true, reason: null, via: 'crm' }
+  return { ...trackingStatusForScreen(), via: 'smtp' }
+}
+
+/** Why a send that goes through NXT Sales cannot send right now (null = it can). */
+async function crmBlocker(cache: Map<string, CrmSender>): Promise<string | null> {
+  if (!sendingViaCrm()) return 'Sending through NXT Sales is switched off on this server (BULK_SEND_VIA). Nothing was sent from this platform instead.'
+  let s = cache.get('sender')
+  if (!s) {
+    s = await crmBulk().sender()
+    cache.set('sender', s)
+  }
+  return s.ready ? null : s.problem ?? 'NXT Sales cannot send yet.'
 }
 
 // ── Upload ─────────────────────────────────────────────────────────────────
@@ -301,8 +368,9 @@ function checkedSetup(s: BulkSetup) {
 export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const setup = checkedSetup(s)
   const profile = profileOf(await tenantSettings(actor.tenantId))
-  const signature = cleanSignature(profile.signature)
-  const signatureHtml = profile.signatureHtml
+  // Through NXT Sales the Gmail account's own signature is added there, not here.
+  const signature = sendingViaCrm() ? '' : cleanSignature(profile.signature)
+  const signatureHtml = sendingViaCrm() ? '' : profile.signatureHtml
   const upload = await analyzeUpload({ fileBase64: s.fileBase64, fileName: s.fileName, allowWebmail: s.allowWebmail })
   if (upload.companies.length > MAX_RECIPIENTS) throw new BadRequestError(`At most ${MAX_RECIPIENTS} companies per upload.`)
 
@@ -456,7 +524,14 @@ export async function reviewSingle(actor: Actor, s: SingleSetup) {
   })
   const queued = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, status: { in: ['scheduled', 'sending'] } }, select: { id: true } })
   const lastSent = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, status: 'sent' }, orderBy: { sentAt: 'desc' }, select: { sentAt: true } })
-  const email = composeBulkEmail({ template: x.template, firstName: x.firstName, companyName: x.companyName, signature: cleanSignature(x.profile.signature), signatureHtml: x.profile.signatureHtml })
+  const viaCrm = sendingViaCrm()
+  const email = composeBulkEmail({
+    template: x.template,
+    firstName: x.firstName,
+    companyName: x.companyName,
+    signature: viaCrm ? '' : cleanSignature(x.profile.signature),
+    signatureHtml: viaCrm ? '' : x.profile.signatureHtml,
+  })
   const blocked = sup.suppressed
     ? `${x.toEmail} is on the opt-out list: ${sup.detail ?? sup.reason}`
     : queued
@@ -489,10 +564,8 @@ export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boo
   const review = await reviewSingle(actor, s)
   if (review.blocked) throw new ConflictError(`Not sent — ${review.blocked}`)
   const x = await checkedSingle(actor, s)
-  const fromEmail = x.profile.fromEmail
-  if (!fromEmail) throw new BadRequestError('Set the From email for bulk emails first (Sender, on the Bulk email page).')
-  const auth = await authorizeFrom(actor, fromEmail, now, true)
-  if (!auth.authorized) throw new ConflictError(`Not sent — ${fromEmail} is not authorized for this sending account. ${auth.reason}`)
+  const via = sendingViaCrm() ? 'crm' : 'smtp'
+  const fromEmail = await startingFrom(actor, x.profile.fromEmail, now, 'Not sent')
 
   const id = newId()
   const name = `${x.firstName} at ${x.companyName} — ${fmtIst(now).replace(/, \d{1,2}:\d{2} [AP]M IST$/, '')}`.slice(0, 120)
@@ -508,8 +581,9 @@ export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boo
       fromEmail,
       fromName: null,
       ccEmails: x.profile.ccEmails as never,
-      signature: cleanSignature(x.profile.signature),
-      signatureHtml: x.profile.signatureHtml,
+      signature: via === 'crm' ? '' : cleanSignature(x.profile.signature),
+      signatureHtml: via === 'crm' ? '' : x.profile.signatureHtml,
+      sendVia: via,
       postalAddress: '',
       sourceFileName: null,
       timezone: IST,
@@ -556,11 +630,9 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   if (sending.reason) throw new ConflictError(sending.reason)
   const checked = checkedSetup(s)
   const profile = profileOf(await tenantSettings(actor.tenantId))
-  const fromEmail = profile.fromEmail
-  if (!fromEmail) throw new BadRequestError('Set the From email for bulk emails first (Sender, on the Bulk email page).')
-  // Checked again now, with the account configured now: never sent on an old answer.
-  const auth = await authorizeFrom(actor, fromEmail, now, true)
-  if (!auth.authorized) throw new ConflictError(`Not started — ${fromEmail} is not authorized for this sending account. ${auth.reason}`)
+  const via = sendingViaCrm() ? 'crm' : 'smtp'
+  // Checked again now: never started on an old answer.
+  const fromEmail = await startingFrom(actor, profile.fromEmail, now, 'Not started')
 
   const review = await reviewBulk(actor, s, now)
   const ready = review.rows.filter((r) => r.status === 'ready')
@@ -582,8 +654,9 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       fromEmail,
       fromName: null,
       ccEmails: profile.ccEmails as never,
-      signature: cleanSignature(profile.signature),
-      signatureHtml: profile.signatureHtml,
+      signature: via === 'crm' ? '' : cleanSignature(profile.signature),
+      signatureHtml: via === 'crm' ? '' : profile.signatureHtml,
+      sendVia: via,
       postalAddress: '',
       sourceFileName: s.fileName ?? null,
       timezone: IST,
@@ -693,7 +766,7 @@ export async function listBulk(tenantId: string) {
   const campaigns = await prisma.bulkEmailCampaign.findMany({ where: { tenantId }, orderBy: { createdAt: 'desc' }, take: 100 })
   const out = []
   for (const c of campaigns) out.push({ ...campaignRow(c), counts: await countsOf(c.id) })
-  return { campaigns: out, sending: bulkSendingStatus(), openTracking: trackingStatusForScreen() }
+  return { campaigns: out, sending: bulkSendingStatus(), openTracking: screenTracking() }
 }
 
 export async function bulkView(tenantId: string, id: string) {
@@ -721,7 +794,7 @@ export async function bulkView(tenantId: string, id: string) {
       tracking: openTracking(r),
     })),
     sending: bulkSendingStatus(),
-    openTracking: trackingStatusForScreen(),
+    openTracking: screenTracking(),
   }
 }
 
@@ -737,8 +810,13 @@ export async function setBulkState(actor: Actor, id: string, to: 'pause' | 'resu
     return { id, status: 'paused' }
   }
   if (to === 'resume') {
-    const auth = await authorizeFrom(actor, c.fromEmail, now, true)
-    if (!auth.authorized) throw new ConflictError(`Not resumed — ${c.fromEmail} is not authorized for this sending account. ${auth.reason}`)
+    if (c.sendVia === 'crm') {
+      const why = await crmBlocker(new Map())
+      if (why) throw new ConflictError(`Not resumed — ${why}`)
+    } else {
+      const auth = await authorizeFrom(actor, c.fromEmail, now, true)
+      if (!auth.authorized) throw new ConflictError(`Not resumed — ${c.fromEmail} is not authorized for this sending account. ${auth.reason}`)
+    }
     // The rest are re-timed from now, so a long pause never ends in a burst.
     const remaining = await prisma.bulkEmailRecipient.findMany({ where: { campaignId: id, status: 'scheduled' }, orderBy: { position: 'asc' }, select: { id: true } })
     const slots = planSequential(now, remaining.length, c.intervalMinutes)
@@ -778,6 +856,7 @@ export async function dispatchBulkEmails(now = new Date()): Promise<{ sent: numb
   let sent = 0
   let failed = 0
   if (bulkSendingStatus().reason) return { sent, failed }
+  const crmCache = new Map<string, CrmSender>()
 
   // An email left "sending" by a worker that died is not sent again blind.
   await prisma.bulkEmailRecipient.updateMany({
@@ -794,7 +873,16 @@ export async function dispatchBulkEmails(now = new Date()): Promise<{ sent: numb
         const next = await prisma.bulkEmailRecipient.findFirst({ where: { campaignId: c.id, status: 'scheduled', scheduledAt: { lte: now } }, orderBy: [{ scheduledAt: 'asc' }, { position: 'asc' }] })
         if (next) {
           const system = { tenantId: c.tenantId, crmUserId: 'bulk-sender' }
-          const auth = await authorizeFrom(system, c.fromEmail, now, false)
+          if (c.sendVia === 'crm') {
+            // Never sent any other way: if NXT Sales cannot send, the send pauses.
+            const why = await crmBlocker(crmCache)
+            if (why) {
+              await prisma.bulkEmailCampaign.update({ where: { id: c.id }, data: { status: 'paused', statusReason: `Paused — ${why}` } })
+              await record(system, c.id, 'paused', `Bulk email "${c.name}" paused: NXT Sales cannot send`, { reason: why })
+              continue
+            }
+          }
+          const auth = c.sendVia === 'crm' ? { authorized: true, reason: '' } : await authorizeFrom(system, c.fromEmail, now, false)
           if (!auth.authorized) {
             // Nothing goes from an address this account may not send as.
             const statusReason = `Paused — ${c.fromEmail} is not authorized for the sending account: ${auth.reason}`
@@ -818,7 +906,74 @@ export async function dispatchBulkEmails(now = new Date()): Promise<{ sent: numb
       logger.error({ err, campaignId: c.id }, 'bulk email: dispatch failed; it is tried again next minute')
     }
   }
+  // NXT Sales' answers and open tracking, every few minutes.
+  try {
+    await syncCrmSends(now)
+  } catch (err) {
+    logger.warn({ err: String((err as Error).message ?? err).slice(0, 200) }, 'bulk email: NXT Sales status check failed; tried again later')
+  }
   return { sent, failed }
+}
+
+// ── NXT Sales: confirming sends and reading its open tracking ──────────────
+
+const CRM_SYNC_EVERY_MS = 5 * 60_000
+const CRM_SYNC_DAYS = 30
+let lastCrmSync = 0
+
+export function resetCrmSyncForTests(): void {
+  lastCrmSync = 0
+}
+
+/**
+ * Reads, from NXT Sales, the outcome of every email it was asked to send and
+ * its own open tracking for them: an unconfirmed send becomes sent or failed
+ * as NXT Sales recorded it, and open counts are copied as NXT Sales has them
+ * (never raised here). Only while sending through NXT Sales is on.
+ */
+export async function syncCrmSends(now = new Date(), force = false): Promise<number> {
+  if (!sendingViaCrm()) return 0
+  if (!force && now.getTime() - lastCrmSync < CRM_SYNC_EVERY_MS) return 0
+  lastCrmSync = now.getTime()
+  const since = new Date(now.getTime() - CRM_SYNC_DAYS * 86_400_000)
+  const rows = await prisma.bulkEmailRecipient.findMany({
+    where: {
+      crmSendKey: { not: null },
+      OR: [{ crmOutcome: null, status: { not: 'scheduled' } }, { crmOutcome: 'unknown' }, { status: 'sent', sentAt: { gte: since } }],
+    },
+    select: { id: true, crmSendKey: true, crmOutcome: true, status: true },
+    take: 2000,
+  })
+  let changed = 0
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200)
+    const results = await crmBulk().statuses(chunk.map((r) => r.crmSendKey!))
+    const byKey = new Map(results.map((x) => [x.idempotencyKey, x]))
+    for (const r of chunk) {
+      const x = byKey.get(r.crmSendKey!)
+      if (!x) continue
+      if (x.status === 'sent') {
+        await prisma.bulkEmailRecipient.update({
+          where: { id: r.id },
+          data: {
+            ...(r.status !== 'sent' ? { status: 'sent', sentAt: x.sentAt ? new Date(x.sentAt) : now, reason: null } : {}),
+            crmOutcome: 'sent',
+            messageId: x.messageId,
+            trackingEnabled: x.tracked,
+            trackingNote: x.tracked ? null : 'NXT Sales sent this email without open tracking (its public address is not configured).',
+            ...(x.tracked && x.openCount !== null
+              ? { openCount: x.openCount, firstOpenedAt: x.firstOpenedAt ? new Date(x.firstOpenedAt) : null, lastOpenedAt: x.lastOpenedAt ? new Date(x.lastOpenedAt) : null }
+              : {}),
+          },
+        })
+        changed++
+      } else if (x.status === 'failed' && r.crmOutcome !== 'failed') {
+        await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { status: 'failed', crmOutcome: 'failed', reason: `NXT Sales did not send it: ${x.error ?? 'refused'}` } })
+        changed++
+      }
+    }
+  }
+  return changed
 }
 
 async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | 'failed' | 'skipped' | 'taken'> {
@@ -846,6 +1001,10 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
   // What goes is what was reviewed: the stored text. The HTML part is the same
   // words, laid out, and is only used when it matches.
   const reviewedHtml = email.text === r.body ? email.html : `<pre style="font-family:Verdana,Geneva,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`
+
+  // Through NXT Sales: its Gmail pipeline sends and tracks; this platform adds
+  // no image of its own and never falls back to its own mailbox.
+  if (c.sendVia === 'crm') return sendThroughCrm(c, r, reviewedHtml, now)
 
   // Open tracking: this email's own invisible image, only when a verified
   // public HTTPS address is in place. Any problem here means the email goes
@@ -883,4 +1042,38 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
     logger.warn({ campaignId: c.id, recipientId: r.id, reason }, 'bulk email: one email failed; the send carries on')
     return 'failed'
   }
+}
+
+async function sendThroughCrm(c: Campaign, r: Recipient, html: string, now: Date): Promise<'sent' | 'failed'> {
+  const key = crmKeyOf(r.id)
+  // The key is recorded before asking, so its outcome can always be looked up.
+  await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { crmSendKey: key, crmOutcome: null } })
+  const res = await crmBulk().send({ key, campaignId: c.id, recipientId: r.id, to: r.toEmail!, cc: (r.ccEmails as string[]) ?? [], subject: r.subject!, html, text: r.body! })
+  if (res.outcome === 'sent') {
+    await prisma.bulkEmailRecipient.update({
+      where: { id: r.id },
+      data: {
+        status: 'sent',
+        sentAt: now,
+        messageId: res.messageId,
+        reason: null,
+        crmOutcome: 'sent',
+        trackingEnabled: res.tracked,
+        trackingNote: res.tracked ? null : 'NXT Sales sent this email without open tracking (its public address is not configured).',
+      },
+    })
+    return 'sent'
+  }
+  // Failed, or not confirmed: shown as failed now; an unconfirmed one is looked
+  // up with NXT Sales and corrected if it was in fact sent. Never resent here.
+  await prisma.bulkEmailRecipient.update({
+    where: { id: r.id },
+    data: {
+      status: 'failed',
+      crmOutcome: res.outcome,
+      reason: res.outcome === 'unknown' ? `Not confirmed by NXT Sales — ${res.error}` : `NXT Sales did not send it: ${res.error}`,
+    },
+  })
+  logger.warn({ campaignId: c.id, recipientId: r.id, outcome: res.outcome }, 'bulk email: NXT Sales did not confirm one email; the send carries on')
+  return 'failed'
 }

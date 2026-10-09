@@ -281,3 +281,41 @@ export async function crmGetOrNull<T>(path: string, params: QueryParams = {}): P
     throw err
   }
 }
+
+/**
+ * Bulk Email sending through NXT Sales (2026-10-09): the one channel to the
+ * CRM's /api/marketing-bulk API. It does not create or change CRM records
+ * itself — NXT Sales sends the email through its own pipeline and records it —
+ * so it has its own explicit switch (BULK_SEND_VIA=crm) rather than
+ * CRM_WRITE_ENABLED, which stays off. The same service identity check as
+ * every write still applies to a live CRM.
+ *
+ * Answers with the HTTP status and the JSON body whatever the status, because
+ * the API's error answers carry the send outcome. Throws only when NXT Sales
+ * gave no answer (unreachable, timeout) — in that case the email may or may
+ * not have been sent, and the caller must treat it as unknown.
+ */
+export async function crmBulkRequest<T>(method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = env.NXT_SALES_TIMEOUT_MS): Promise<{ status: number; body: T | null }> {
+  if (env.BULK_SEND_VIA !== 'crm') {
+    throw new UpstreamError('Refusing to call the NXT Sales bulk-send API: BULK_SEND_VIA is not "crm".', { retryable: false, details: { path } })
+  }
+  try {
+    assertServiceIdentity()
+  } catch (err) {
+    throw new UpstreamError((err as Error).message, { retryable: false, details: { path } })
+  }
+  return limit(async () => {
+    const res = await fetch(`${env.NXT_SALES_BASE_URL}${path}`, {
+      method,
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        Authorization: `Bearer ${serviceToken()}`,
+        Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    const parsed = (await res.json().catch(() => null)) as T | null
+    return { status: res.status, body: parsed }
+  })
+}

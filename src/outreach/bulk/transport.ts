@@ -60,6 +60,15 @@ export interface BulkSendingStatus {
 }
 
 export function bulkSendingStatus(): BulkSendingStatus {
+  // Through NXT Sales: its own Gmail pipeline sends, so no SMTP account is needed here.
+  if (env.BULK_SEND_VIA === 'crm') {
+    return {
+      enabled: env.BULK_EMAIL_ENABLED,
+      mailboxConfigured: true,
+      account: null,
+      reason: env.BULK_EMAIL_ENABLED ? null : 'Bulk sending is switched off on the server (BULK_EMAIL_ENABLED). You can upload and review, but not start.',
+    }
+  }
   const account = bulkTransportAccount()
   const reason = !env.BULK_EMAIL_ENABLED
     ? 'Bulk sending is switched off on the server (BULK_EMAIL_ENABLED). You can upload and review, but not start.'
