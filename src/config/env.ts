@@ -19,6 +19,16 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
   MARKETING_DATABASE_URL: z.string().min(1, 'MARKETING_DATABASE_URL is required'),
+  // Database connections (2026-10-09). The PostgreSQL server is shared with
+  // NXT Sales and other apps and has 100 connections in all, so this service
+  // keeps its own use small: at most this many Prisma connections in the API
+  // process and in the worker process, waiting up to the pool timeout for a
+  // free one, plus PGBOSS_MAX_CONNECTIONS each for the job queue. A
+  // connection_limit written into MARKETING_DATABASE_URL itself wins.
+  MARKETING_DB_CONNECTION_LIMIT_API: z.coerce.number().int().min(1).max(50).default(3),
+  MARKETING_DB_CONNECTION_LIMIT_WORKER: z.coerce.number().int().min(1).max(50).default(2),
+  MARKETING_DB_POOL_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(120).default(20),
+  PGBOSS_MAX_CONNECTIONS: z.coerce.number().int().min(1).max(20).default(1),
 
   // Must be byte-identical to NXT Sales' JWT_SECRET: this service verifies the
   // tokens NXT Sales issues, and mints the service-account token it uses to
