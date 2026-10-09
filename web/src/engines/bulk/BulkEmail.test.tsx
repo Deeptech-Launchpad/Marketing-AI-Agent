@@ -97,7 +97,21 @@ const SINGLE_REVIEW = {
   previouslySentLocal: null,
 }
 
-function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender } = {}) {
+// A send with open tracking: three sent — one open detected, one not, one
+// sent before tracking existed.
+const TRACKED = {
+  ...DETAIL,
+  campaign: { ...DETAIL.campaign, id: 'bk2', name: 'tracked send' },
+  counts: { scheduled: 0, sending: 0, sent: 3, failed: 0, skipped: 0, total: 3, opens: { sent: 3, openDetected: 1, noOpenDetected: 1, trackingUnavailable: 1 } },
+  recipients: [
+    { id: 't1', companyName: 'Alpha Co', contactName: 'Ann', toEmail: 'ann@alpha.test', ccEmails: [], subject: 's', body: 'b', status: 'sent', reason: null, scheduledLocal: 'x', sentLocal: 'Sat, Oct 10, 2026, 10:00 AM IST', version: 1, tracking: { status: 'open_detected', note: null, openCount: 3, firstOpenedLocal: 'Sat, Oct 10, 2026, 11:30 AM IST', lastOpenedLocal: 'Sat, Oct 10, 2026, 1:00 PM IST' } },
+    { id: 't2', companyName: 'Bravo Co', contactName: 'Bob', toEmail: 'bob@bravo.test', ccEmails: [], subject: 's', body: 'b', status: 'sent', reason: null, scheduledLocal: 'x', sentLocal: 'Sat, Oct 10, 2026, 10:05 AM IST', version: 2, tracking: { status: 'no_open_detected', note: null, openCount: 0, firstOpenedLocal: null, lastOpenedLocal: null } },
+    { id: 't3', companyName: 'Old Co', contactName: 'Olga', toEmail: 'olga@old.test', ccEmails: [], subject: 's', body: 'b', status: 'sent', reason: null, scheduledLocal: 'x', sentLocal: 'Fri, Oct 9, 2026, 10:00 AM IST', version: 1, tracking: { status: 'tracking_unavailable', note: 'Sent before open tracking existed.', openCount: 0, firstOpenedLocal: null, lastOpenedLocal: null } },
+  ],
+  openTracking: { enabled: true, reason: null },
+}
+
+function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null } } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const u = String(url)
@@ -117,7 +131,16 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender 
     if (method === 'POST') return json({ ok: true })
     if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending })
     if (u.endsWith('/outreach/bulk/bk1')) return json(DETAIL)
-    if (u.endsWith('/outreach/bulk')) return json({ campaigns: [{ ...DETAIL.campaign, counts: DETAIL.counts }], sending })
+    if (u.endsWith('/outreach/bulk/bk2')) return json(TRACKED)
+    if (u.endsWith('/outreach/bulk'))
+      return json({
+        campaigns: [
+          { ...TRACKED.campaign, counts: TRACKED.counts },
+          { ...DETAIL.campaign, counts: DETAIL.counts },
+        ],
+        sending,
+        openTracking: opts.tracking ?? { enabled: false, reason: 'No public HTTPS address is configured for open tracking (BULK_OPEN_TRACKING_BASE_URL).' },
+      })
     return json({ error: { code: 'not_found', message: 'none' } }, 404)
   })
 }
@@ -337,11 +360,43 @@ describe('the sender: From, CC and signature', () => {
   })
 })
 
+describe('email open tracking', () => {
+  it('says when tracking is off, why, and that a privacy review comes first', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    expect(await screen.findByText(/Open tracking is off: No public HTTPS address is configured/)).toBeInTheDocument()
+    expect(screen.getByText(/privacy policy\s+\/ consent wording should be reviewed/)).toBeInTheDocument()
+  })
+
+  it('shows opens per send, counted over the emails that carried tracking', async () => {
+    stub({ tracking: { enabled: true, reason: null } })
+    render(<BulkEmail canOperate canApprove />)
+    expect(await screen.findByText('1 of 2 tracked')).toBeInTheDocument()
+    expect(screen.getByText(/Open tracking is on for new emails/)).toBeInTheDocument()
+  })
+
+  it('shows each person: Open detected with first, last and count; No open detected; Tracking unavailable — and the totals', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click((await screen.findAllByRole('button', { name: /^open$/i }))[0]!)
+    expect(await screen.findByLabelText('Open tracking')).toHaveTextContent('Emails sent 3 · Open detected 1 · No open detected 1 · Tracking unavailable 1')
+    const rowOf = (email: string) => screen.getByText(email).closest('tr')!
+    expect(within(rowOf('ann@alpha.test')).getByText('Open detected')).toBeInTheDocument()
+    expect(within(rowOf('ann@alpha.test')).getByText('First Sat, Oct 10, 2026, 11:30 AM IST · last Sat, Oct 10, 2026, 1:00 PM IST · 3 detected')).toBeInTheDocument()
+    expect(within(rowOf('bob@bravo.test')).getByText('No open detected')).toBeInTheDocument()
+    expect(within(rowOf('olga@old.test')).getByText('Tracking unavailable')).toBeInTheDocument()
+    expect(within(rowOf('olga@old.test')).getByText('Sent before open tracking existed.')).toBeInTheDocument()
+    // Never "read" / "opened" as a certainty.
+    expect(document.body.textContent).not.toMatch(/\b(was read|definitely opened|not opened|unopened)\b/i)
+    expect(screen.getByText(/a signal, not proof of reading/)).toBeInTheDocument()
+  })
+})
+
 describe('a bulk email that has run', () => {
   it('says the sequence is completed, with the final summary, and offers unsubscribe', async () => {
     stub()
     render(<BulkEmail canOperate canApprove />)
-    await userEvent.click(await screen.findByRole('button', { name: /^open$/i }))
+    await userEvent.click((await screen.findAllByRole('button', { name: /^open$/i }))[1]!)
     expect(await screen.findByText('Bulk sequence completed')).toBeInTheDocument()
     expect(screen.getByText(/4 processed: 2 sent, 1 failed, 1 skipped/)).toBeInTheDocument()
     expect(screen.getByText(/one every 5 min/)).toBeInTheDocument()

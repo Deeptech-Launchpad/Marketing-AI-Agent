@@ -88,7 +88,7 @@ interface CampaignRow {
   createdAt: string
   completedLocal: string | null
   estimatedCompletionLocal?: string | null
-  counts?: { scheduled: number; sending: number; sent: number; failed: number; skipped: number; total: number }
+  counts?: { scheduled: number; sending: number; sent: number; failed: number; skipped: number; total: number; opens?: OpenCounts }
 }
 interface RecipientRow {
   id: string
@@ -103,6 +103,47 @@ interface RecipientRow {
   scheduledLocal: string | null
   sentLocal: string | null
   version?: number | null
+  tracking?: OpenTracking | null
+}
+
+// Email open tracking (2026-10-09). An "open" is the email's invisible image
+// being loaded — a signal, not proof that a person read it.
+interface OpenCounts {
+  sent: number
+  openDetected: number
+  noOpenDetected: number
+  trackingUnavailable: number
+}
+interface OpenTracking {
+  status: 'open_detected' | 'no_open_detected' | 'tracking_unavailable'
+  note: string | null
+  openCount: number
+  firstOpenedLocal: string | null
+  lastOpenedLocal: string | null
+}
+interface TrackingSetting {
+  enabled: boolean
+  reason: string | null
+}
+const OPEN_STATUS: Record<OpenTracking['status'], { word: string; tone: 'ok' | 'neutral' | 'warn' }> = {
+  open_detected: { word: 'Open detected', tone: 'ok' },
+  no_open_detected: { word: 'No open detected', tone: 'neutral' },
+  tracking_unavailable: { word: 'Tracking unavailable', tone: 'warn' },
+}
+const OPEN_MEANING =
+  'An open is detected when the email’s invisible image is loaded. Some mail programs block images, and some privacy features and security scanners load them without anyone reading — so it is a signal, not proof of reading or of interest.'
+
+/** Whether open tracking is on for new emails, and what it needs. */
+function TrackingNotice({ setting }: { setting: TrackingSetting | null | undefined }) {
+  if (!setting) return null
+  return setting.enabled ? (
+    <p className="note">Open tracking is on for new emails. {OPEN_MEANING}</p>
+  ) : (
+    <p className="note">
+      Open tracking is off: {setting.reason} New emails are sent without it and show &ldquo;Tracking unavailable&rdquo;. Before it is switched on, the privacy policy
+      / consent wording should be reviewed — recipients are not told that opens are recorded.
+    </p>
+  )
 }
 
 const CAMPAIGN_STATUS: Record<string, { word: string; tone: 'ok' | 'warn' | 'info' | 'neutral' }> = {
@@ -331,7 +372,7 @@ function SendingNote({ sending }: { sending: SendingStatus | null }) {
 
 function BulkList({ canOperate, onOpen, onNew, onSingle }: { canOperate: boolean; onOpen: (id: string) => void; onNew: () => void; onSingle: () => void }) {
   const list = useAsync<unknown>((signal) => api.get('/outreach/bulk', { signal }), [])
-  const data = list.data as { campaigns?: CampaignRow[]; sending?: SendingStatus } | null
+  const data = list.data as { campaigns?: CampaignRow[]; sending?: SendingStatus; openTracking?: TrackingSetting } | null
   const rows = Array.isArray(data?.campaigns) ? data!.campaigns : []
   usePolling(list.refresh, rows.some((r) => r.status === 'running'), 60_000)
   return (
@@ -351,6 +392,7 @@ function BulkList({ canOperate, onOpen, onNew, onSingle }: { canOperate: boolean
         )
       }
     >
+      <TrackingNotice setting={data?.openTracking} />
       {list.loading && !list.data ? (
         <Unset what="Loading…" />
       ) : list.error ? (
@@ -367,6 +409,7 @@ function BulkList({ canOperate, onOpen, onNew, onSingle }: { canOperate: boolean
               <th>Scheduled</th>
               <th>Failed</th>
               <th>Skipped</th>
+              <th>Open detected</th>
               <th />
             </tr>
           </thead>
@@ -388,6 +431,15 @@ function BulkList({ canOperate, onOpen, onNew, onSingle }: { canOperate: boolean
                 <td className="tnum">{c.counts?.scheduled ?? 0}</td>
                 <td className="tnum">{c.counts?.failed ?? 0}</td>
                 <td className="tnum">{c.counts?.skipped ?? 0}</td>
+                <td className="tnum">
+                  {!c.counts?.opens || c.counts.opens.sent === 0 ? (
+                    '—'
+                  ) : c.counts.opens.trackingUnavailable === c.counts.opens.sent ? (
+                    <span className="cell-dim">Tracking unavailable</span>
+                  ) : (
+                    `${c.counts.opens.openDetected} of ${c.counts.opens.sent - c.counts.opens.trackingUnavailable} tracked`
+                  )}
+                </td>
                 <td>
                   <Button size="sm" onClick={() => onOpen(c.id)}>
                     Open
@@ -779,7 +831,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
 function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolean; onBack: () => void }) {
   const state = useAsync<unknown>((signal) => api.get(`/outreach/bulk/${encodeURIComponent(id)}`, { signal }), [id])
   const call = useCall(state.refresh)
-  const data = state.data as { campaign?: CampaignRow; counts?: NonNullable<CampaignRow['counts']>; recipients?: RecipientRow[]; sending?: SendingStatus } | null
+  const data = state.data as { campaign?: CampaignRow; counts?: NonNullable<CampaignRow['counts']>; recipients?: RecipientRow[]; sending?: SendingStatus; openTracking?: TrackingSetting } | null
   const c = data?.campaign ?? null
   const counts = data?.counts ?? null
   const recipients = Array.isArray(data?.recipients) ? data!.recipients : []
@@ -842,7 +894,15 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
           {counts.sent} sent · {counts.scheduled} scheduled · {counts.sending} sending · {counts.failed} failed · {counts.skipped} skipped — of {counts.total}
         </li>
         {c.status !== 'completed' && c.estimatedCompletionLocal && <li className="cell-dim">Last email due {c.estimatedCompletionLocal}</li>}
+        {counts.opens && counts.opens.sent > 0 && (
+          <li aria-label="Open tracking">
+            Emails sent {counts.opens.sent} · Open detected {counts.opens.openDetected} · No open detected {counts.opens.noOpenDetected} · Tracking unavailable{' '}
+            {counts.opens.trackingUnavailable}
+          </li>
+        )}
       </ul>
+      {counts.opens && counts.opens.sent > 0 && counts.opens.trackingUnavailable < counts.opens.sent && <p className="note">{OPEN_MEANING}</p>}
+      {c.status !== 'completed' && c.status !== 'cancelled' && <TrackingNotice setting={data?.openTracking} />}
       <div className="otr-scroll">
         <table className="otr-table">
           <thead>
@@ -851,6 +911,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
               <th>To / CC</th>
               <th>When (IST)</th>
               <th>Status</th>
+              <th>Opens</th>
               <th />
             </tr>
           </thead>
@@ -881,6 +942,21 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
                   <td>
                     <Chip tone={st.tone}>{st.word}</Chip>
                     {r.reason && <div className="cell-dim">{r.reason}</div>}
+                  </td>
+                  <td>
+                    {r.tracking ? (
+                      <>
+                        <Chip tone={OPEN_STATUS[r.tracking.status].tone}>{OPEN_STATUS[r.tracking.status].word}</Chip>
+                        {r.tracking.status === 'open_detected' && (
+                          <div className="cell-dim">
+                            First {r.tracking.firstOpenedLocal} · last {r.tracking.lastOpenedLocal} · {r.tracking.openCount} detected
+                          </div>
+                        )}
+                        {r.tracking.note && <div className="cell-dim">{r.tracking.note}</div>}
+                      </>
+                    ) : (
+                      <span className="cell-dim">—</span>
+                    )}
                   </td>
                   <td>
                     {canOperate && r.toEmail && r.status !== 'skipped' && (

@@ -2868,6 +2868,18 @@ model BulkEmailRecipient {
   // null on sends made before the versions rotated = the campaign's template.
   templateKey String?
 
+  // Open tracking (2026-10-09). The SHA-256 of the random token in this
+  // email's invisible image — the token itself is never stored. trackingEnabled
+  // is true only when the sent email carried a working pixel; false = sent
+  // without one (trackingNote says why); null = sent before tracking existed.
+  trackingTokenHash String?   @unique
+  trackingEnabled   Boolean?
+  trackingNote      String?
+  firstOpenedAt     DateTime?
+  lastOpenedAt      DateTime?
+  // Detected image requests — not a count of human reads.
+  openCount         Int       @default(0)
+
   // scheduled | sending | sent | failed | skipped
   status      String
   reason      String?

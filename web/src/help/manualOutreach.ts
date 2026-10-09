@@ -542,6 +542,11 @@ export const BULK_EMAIL: ManualSection = {
         { term: 'Cancel unsent', meaning: 'Stops the send; emails not yet sent are skipped.' },
         { term: 'Unsubscribe', meaning: 'When someone replies "unsubscribe", click this beside them. They are never emailed again.' },
         { term: 'Bulk sequence completed', meaning: 'Shown when every email has been processed, with the totals sent, failed and skipped.' },
+        {
+          term: 'Open detected / No open detected / Tracking unavailable',
+          meaning:
+            'When open tracking is on, each email carries an invisible image of its own; "Open detected" means it was loaded (first and last time, and how many times). Mail programs that block images show nothing, and privacy features or security scanners can load it without anyone reading — so it is a signal, not proof of reading or interest. "Tracking unavailable" means the email went without tracking (for example, tracking was off).',
+        },
       ],
     },
 

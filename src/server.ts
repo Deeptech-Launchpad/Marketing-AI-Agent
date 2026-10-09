@@ -10,6 +10,8 @@ import { apiRoutes } from './api/routes/index.js'
 import { engagementWebhookRoutes } from './api/routes/engagementWebhook.routes.js'
 import { healthRoutes } from './api/routes/health.routes.js'
 import { publicWorkbenchRoutes } from './api/routes/publicWorkbench.routes.js'
+import { bulkOpenTrackingRoutes } from './api/routes/bulkOpenTracking.routes.js'
+import { OPEN_PATH } from './outreach/bulk/tracking.js'
 
 export function createServer() {
   const app = express()
@@ -37,7 +39,8 @@ export function createServer() {
     pinoHttp({
       logger,
       customProps: (req: express.Request) => ({ requestId: req.requestId }),
-      autoLogging: { ignore: (req: { url?: string }) => req.url?.startsWith('/health') ?? false },
+      // Health checks, and the open-tracking image (its address carries a token that must not be logged).
+      autoLogging: { ignore: (req: { url?: string }) => (req.url?.startsWith('/health') || req.url?.startsWith(OPEN_PATH)) ?? false },
     }),
   )
 
@@ -82,6 +85,10 @@ export function createServer() {
   // token and emits no internal identifier.
   app.use(express.urlencoded({ extended: false, limit: '16kb' }))
   app.use(publicWorkbenchRoutes)
+
+  // Bulk Email open tracking: the image mail programs load. Before /api/v1,
+  // which requires login; it answers every request with the same image.
+  app.use(bulkOpenTrackingRoutes)
 
   app.use('/api/v1', apiRoutes)
 

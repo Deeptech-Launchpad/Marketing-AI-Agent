@@ -467,6 +467,12 @@ const schema = z.object({
   BULK_SMTP_SECURE: bool.default('false'),
   BULK_SMTP_USER: z.string().default(''),
   BULK_SMTP_PASS: z.string().default(''),
+  // Open tracking (2026-10-09): an invisible image per email, counted when a
+  // mail program loads it. Off unless switched on AND given the public HTTPS
+  // address that reaches this API (the same origin that serves
+  // /api/v1/bulk-open/…). Never a plain-http address in production.
+  BULK_OPEN_TRACKING_ENABLED: bool.default('false'),
+  BULK_OPEN_TRACKING_BASE_URL: z.string().default(''),
 
 
   // ── Task #983: engagement tracking ──────────────────────────────────────

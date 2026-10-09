@@ -21,12 +21,14 @@ const reset = () => {
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([k, v]) => {
     if (k === 'OR') return (v as Row[]).some((w) => matches(row, w))
+    if (v === null) return row[k] == null
     if (v && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v)) {
       const o = v as Row
       if ('in' in o) return (o.in as unknown[]).includes(row[k])
       if ('not' in o) return row[k] !== o.not
       if ('lte' in o) return row[k] != null && (row[k] as Date) <= (o.lte as Date)
       if ('lt' in o) return row[k] != null && (row[k] as Date) < (o.lt as Date)
+      if ('gt' in o) return row[k] != null && (row[k] as Date) > (o.gt as Date)
       if ('gte' in o) return row[k] != null && (row[k] as Date) >= (o.gte as Date)
       return true
     }
@@ -44,28 +46,37 @@ const sortBy = (rows: Row[], orderBy?: Row | Row[]) => {
     return 0
   })
 }
+/** Writes data into a row; { increment: n } adds, as the database does. */
+function apply(row: Row, data: Row) {
+  for (const [k, v] of Object.entries(data)) {
+    if (v && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v) && 'increment' in (v as Row)) row[k] = ((row[k] as number) ?? 0) + ((v as Row).increment as number)
+    else row[k] = v
+  }
+  row.updatedAt = new Date()
+}
 const model = (table: string) => ({
   findUnique: vi.fn(async (a: Row = {}) => store[table]!.find((x) => matches(x, a.where as Row)) ?? null),
   findFirst: vi.fn(async (a: Row = {}) => sortBy(store[table]!.filter((x) => matches(x, a.where as Row)), a.orderBy as Row)[0] ?? null),
   findMany: vi.fn(async (a: Row = {}) => sortBy(store[table]!.filter((x) => matches(x, a.where as Row)), a.orderBy as Row)),
   count: vi.fn(async (a: Row = {}) => store[table]!.filter((x) => matches(x, a.where as Row)).length),
   create: vi.fn(async ({ data }: { data: Row }) => {
-    const row = { createdAt: new Date(), updatedAt: new Date(), ...data }
+    const row = { createdAt: new Date(), updatedAt: new Date(), ...(table === 'bulkEmailRecipient' ? { openCount: 0 } : {}), ...data }
     store[table]!.push(row)
     return row
   }),
   createMany: vi.fn(async ({ data }: { data: Row[] }) => {
-    data.forEach((d) => store[table]!.push({ createdAt: new Date(), updatedAt: new Date(), ...d }))
+    // Column defaults, as the database applies them.
+    data.forEach((d) => store[table]!.push({ createdAt: new Date(), updatedAt: new Date(), ...(table === 'bulkEmailRecipient' ? { openCount: 0 } : {}), ...d }))
     return { count: data.length }
   }),
   update: vi.fn(async ({ where, data }: { where: Row; data: Row }) => {
     const row = store[table]!.find((x) => matches(x, where))!
-    Object.assign(row, data, { updatedAt: new Date() })
+    apply(row, data)
     return row
   }),
   updateMany: vi.fn(async ({ where, data }: { where: Row; data: Row }) => {
     const rows = store[table]!.filter((x) => matches(x, where))
-    rows.forEach((r) => Object.assign(r, data, { updatedAt: new Date() }))
+    rows.forEach((r) => apply(r, data))
     return { count: rows.length }
   }),
   upsert: vi.fn(async ({ create }: { create: Row }) => {
@@ -97,6 +108,10 @@ const env = {
   SMTP_USER: '',
   SMTP_PASS: '',
   OUTREACH_COOLDOWN_DAYS: 30,
+  // Open tracking: off unless a test switches it on.
+  NODE_ENV: 'production',
+  BULK_OPEN_TRACKING_ENABLED: false,
+  BULK_OPEN_TRACKING_BASE_URL: '',
 }
 const BULK_ACCOUNT = { BULK_SMTP_HOST: env.BULK_SMTP_HOST, BULK_SMTP_USER: env.BULK_SMTP_USER, BULK_SMTP_PASS: env.BULK_SMTP_PASS }
 vi.mock('../../src/config/env.js', () => ({ env }))
@@ -115,6 +130,8 @@ const svc = await import('../../src/outreach/bulk/service.js')
 const { setBulkSenderForTests, bulkTransportAccount, bulkMailOptions } = await import('../../src/outreach/bulk/transport.js')
 const { checkSender, parseDmarc, setSenderCheckDepsForTests } = await import('../../src/outreach/bulk/senders.js')
 const { cleanSignatureHtml, inlineImages } = await import('../../src/outreach/bulk/signature.js')
+const tracking = await import('../../src/outreach/bulk/tracking.js')
+const { bulkOpenTrackingRoutes } = await import('../../src/api/routes/bulkOpenTracking.routes.js')
 
 // The sender check, without DNS or a mailbox: each test says what they answer.
 const dmarcCalls: string[] = []
@@ -136,7 +153,8 @@ beforeEach(() => {
   reset()
   suppressed.clear()
   setBulkSenderForTests(null)
-  Object.assign(env, BULK_ACCOUNT, { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '' })
+  Object.assign(env, BULK_ACCOUNT, { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', NODE_ENV: 'production', BULK_OPEN_TRACKING_ENABLED: false, BULK_OPEN_TRACKING_BASE_URL: '' })
+  tracking.setTrackingProbeForTests(async () => true)
   dmarcCalls.length = 0
   probeCalls.length = 0
   dmarcAnswer = { policy: null, error: null }
@@ -692,6 +710,207 @@ describe('send to one person', () => {
     await expect(svc.reviewSingle(actor, { ...one, templateKey: 'x' })).rejects.toThrow(/Version 1, 2 or 3/)
   })
 })
+
+// EMAIL OPEN TRACKING (2026-10-09): one invisible image per email, with its
+// own random token; counted for that email only; never reported as working
+// when there is no verified HTTPS address or no pixel; never in the way of
+// sending.
+describe('email open tracking', () => {
+  const BASE = 'https://track.example.test'
+  const on = () => Object.assign(env, { BULK_OPEN_TRACKING_ENABLED: true, BULK_OPEN_TRACKING_BASE_URL: BASE })
+  const LIST = async () => ({
+    fileBase64: await xlsx([
+      HEADER,
+      ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''],
+      ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', ''],
+      ['Charlie Co', 'u', 'Cy Fox', 'Owner', 'cy@charlie.test', '', '', '', ''],
+    ]),
+    fileName: 'three.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-10',
+    startTime: '10:00',
+    intervalMinutes: 5,
+  })
+  const BEFORE = new Date('2026-10-09T12:00:00Z')
+  const at = (hhmm: string) => istToUtc('2026-10-10', hhmm)!
+  const tokenIn = (html: string) => /bulk-open\/([A-Za-z0-9_-]{43})\.gif/.exec(html)?.[1] ?? null
+
+  async function sendAll(capture: Array<{ to: string; html: string; text: string }>) {
+    setBulkSenderForTests({ send: async (e) => (capture.push({ to: e.to, html: e.html, text: e.text }), { messageId: 'm' }) })
+    await setSender()
+    const { campaignId } = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    for (const t of ['10:00', '10:05', '10:10']) await svc.dispatchBulkEmails(at(t))
+    return campaignId
+  }
+  const row = (to: string) => store.bulkEmailRecipient!.find((r) => r.toEmail === to)!
+
+  it('each email carries its own random token, as an invisible image at the end of the HTML only', async () => {
+    on()
+    const sent: Array<{ to: string; html: string; text: string }> = []
+    await sendAll(sent)
+    const tokens = sent.map((e) => tokenIn(e.html))
+    expect(tokens.every((t) => t && tracking.isTrackingToken(t))).toBe(true)
+    expect(new Set(tokens).size).toBe(3)
+    // The pixel is the only addition: the approved HTML is intact before it; the text part has none.
+    const first = sent[0]!
+    const reviewed = svc_reviewedHtml(first.html)
+    expect(first.html).toBe(tracking.addPixel(reviewed, `${BASE}/api/v1/bulk-open/${tokens[0]}.gif`))
+    expect(first.html).toMatch(/<img src="https:\/\/track\.example\.test\/api\/v1\/bulk-open\/[A-Za-z0-9_-]{43}\.gif" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;margin:0;padding:0;opacity:0" \/><\/div>$/)
+    expect(first.text).not.toMatch(/bulk-open|track\.example/)
+    // The address says nothing about the person; only the token's hash is stored.
+    expect(first.html.match(/bulk-open\/[^"]+/)![0]).not.toMatch(/ann|alpha|@/i)
+    expect(row('ann@alpha.test').trackingTokenHash).toBe(tracking.hashToken(tokens[0]!))
+    expect(JSON.stringify(store.bulkEmailRecipient)).not.toContain(tokens[0]!)
+    expect(row('ann@alpha.test')).toMatchObject({ trackingEnabled: true, trackingNote: null })
+  })
+
+  it('an image request counts for that one email — first, last and how many', async () => {
+    on()
+    const sent: Array<{ to: string; html: string; text: string }> = []
+    const campaignId = await sendAll(sent)
+    const bob = tokenIn(sent.find((e) => e.to === 'bob@bravo.test')!.html)!
+    const t1 = new Date('2026-10-10T06:00:00Z')
+    const t2 = new Date('2026-10-10T07:30:00Z')
+    expect(await tracking.recordOpen(bob, t1)).toBe(true)
+    expect(await tracking.recordOpen(bob, new Date('2026-10-10T06:30:00Z'))).toBe(true)
+    expect(await tracking.recordOpen(bob, t2)).toBe(true)
+    expect(row('bob@bravo.test')).toMatchObject({ openCount: 3, firstOpenedAt: t1, lastOpenedAt: t2 })
+    expect(row('ann@alpha.test')).toMatchObject({ openCount: 0 })
+    expect(row('ann@alpha.test').firstOpenedAt).toBeUndefined()
+
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.counts.opens).toEqual({ sent: 3, openDetected: 1, noOpenDetected: 2, trackingUnavailable: 0 })
+    const b = view.recipients.find((r) => r.toEmail === 'bob@bravo.test')!
+    expect(b.tracking).toEqual({ status: 'open_detected', note: null, openCount: 3, firstOpenedLocal: 'Sat, Oct 10, 2026, 11:30 AM IST', lastOpenedLocal: 'Sat, Oct 10, 2026, 1:00 PM IST' })
+    expect(view.recipients.find((r) => r.toEmail === 'ann@alpha.test')!.tracking).toMatchObject({ status: 'no_open_detected', openCount: 0 })
+  })
+
+  it('requests at once all count, and first open is set once', async () => {
+    on()
+    const sent: Array<{ to: string; html: string; text: string }> = []
+    await sendAll(sent)
+    const cy = tokenIn(sent.find((e) => e.to === 'cy@charlie.test')!.html)!
+    const times = Array.from({ length: 20 }, (_, i) => new Date(Date.UTC(2026, 9, 10, 8, 0, i)))
+    const results = await Promise.all(times.map((t) => tracking.recordOpen(cy, t)))
+    expect(results.every(Boolean)).toBe(true)
+    expect(row('cy@charlie.test')).toMatchObject({ openCount: 20, firstOpenedAt: times[0] })
+    expect(row('ann@alpha.test').openCount).toBe(0)
+    expect(row('bob@bravo.test').openCount).toBe(0)
+  })
+
+  it('a wrong, malformed or made-up token records nothing', async () => {
+    on()
+    const sent: Array<{ to: string; html: string; text: string }> = []
+    await sendAll(sent)
+    const real = tokenIn(sent[0]!.html)!
+    const altered = `${real.slice(0, 42)}${real.endsWith('A') ? 'B' : 'A'}`
+    for (const bad of ['', 'x', 'ann@alpha.test', tracking.newTrackingToken(), altered, '../../etc/passwd']) {
+      expect(await tracking.recordOpen(bad)).toBe(false)
+    }
+    expect(store.bulkEmailRecipient!.every((r) => !r.openCount)).toBe(true)
+  })
+
+  it('the public endpoint answers every request with the same image, no-cache, and reveals nothing', async () => {
+    on()
+    const sent: Array<{ to: string; html: string; text: string }> = []
+    await sendAll(sent)
+    const express = (await import('express')).default
+    const app = express()
+    app.use(bulkOpenTrackingRoutes)
+    const server = app.listen(0)
+    try {
+      const port = (server.address() as { port: number }).port
+      const get = (path: string) => fetch(`http://127.0.0.1:${port}${path}`)
+      const good = await get(`/api/v1/bulk-open/${tokenIn(sent[0]!.html)}.gif`)
+      const bad = await get(`/api/v1/bulk-open/${tracking.newTrackingToken()}.gif`)
+      const junk = await get('/api/v1/bulk-open/whoever@example.com')
+      for (const r of [good, bad, junk]) {
+        expect(r.status).toBe(200)
+        expect(r.headers.get('content-type')).toBe('image/gif')
+        expect(r.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate, private, max-age=0')
+        expect(r.headers.get('set-cookie')).toBeNull()
+        expect(Buffer.from(await r.arrayBuffer()).equals(tracking.PIXEL_GIF)).toBe(true)
+      }
+      expect(row('ann@alpha.test').openCount).toBe(1)
+      expect(store.bulkEmailRecipient!.reduce((a, r) => a + ((r.openCount as number) ?? 0), 0)).toBe(1)
+      const ping = await get('/api/v1/bulk-open/ping.gif')
+      expect(ping.headers.get('x-open-tracking')).toBe('ok')
+    } finally {
+      server.close()
+    }
+  })
+
+  it('without a verified HTTPS address: no image in the email, and "Tracking unavailable" — never "no open"', async () => {
+    // Switched off.
+    let sent: Array<{ to: string; html: string; text: string }> = []
+    let campaignId = await sendAll(sent)
+    expect(sent.every((e) => !/bulk-open/.test(e.html))).toBe(true)
+    let view = await svc.bulkView('t1', campaignId)
+    expect(view.counts.opens).toEqual({ sent: 3, openDetected: 0, noOpenDetected: 0, trackingUnavailable: 3 })
+    expect(view.recipients[0]!.tracking).toMatchObject({ status: 'tracking_unavailable', note: expect.stringMatching(/switched off/) })
+    expect(view.openTracking).toEqual({ enabled: false, reason: expect.stringMatching(/switched off/) })
+
+    // A plain-http address in production.
+    expect(tracking.trackingConfig()).toMatchObject({ ok: false })
+    Object.assign(env, { BULK_OPEN_TRACKING_ENABLED: true, BULK_OPEN_TRACKING_BASE_URL: 'http://72.61.245.208:8110' })
+    expect(tracking.trackingConfig()).toEqual({ ok: false, base: null, reason: 'BULK_OPEN_TRACKING_BASE_URL must be an https:// address.' })
+
+    // HTTPS configured, but the address does not answer.
+    reset()
+    Object.assign(env, { BULK_OPEN_TRACKING_BASE_URL: BASE })
+    tracking.setTrackingProbeForTests(async () => false)
+    sent = []
+    campaignId = await sendAll(sent)
+    expect(sent.every((e) => !/bulk-open/.test(e.html))).toBe(true)
+    view = await svc.bulkView('t1', campaignId)
+    expect(view.counts.opens.trackingUnavailable).toBe(3)
+    expect(view.recipients[0]!.tracking!.note).toMatch(/did not answer/)
+    expect(view.openTracking.enabled).toBe(false)
+  })
+
+  it('a tracking problem never stops the email', async () => {
+    on()
+    const p = prisma as unknown as Record<string, { update: ReturnType<typeof vi.fn> }>
+    const orig = p.bulkEmailRecipient!.update.getMockImplementation()!
+    p.bulkEmailRecipient!.update.mockImplementation(async (a: { data: Row }) => {
+      if ('trackingTokenHash' in a.data) throw new Error('database unavailable')
+      return orig(a)
+    })
+    try {
+      const sent: Array<{ to: string; html: string; text: string }> = []
+      await sendAll(sent)
+      expect(sent).toHaveLength(3)
+      expect(sent.every((e) => !/bulk-open/.test(e.html))).toBe(true)
+      expect(row('ann@alpha.test')).toMatchObject({ status: 'sent', trackingEnabled: false, trackingNote: expect.stringMatching(/sent without it/) })
+    } finally {
+      p.bulkEmailRecipient!.update.mockImplementation(orig)
+    }
+  })
+
+  it('emails sent before tracking existed are "Tracking unavailable", not "No open detected"', async () => {
+    store.bulkEmailCampaign!.push({ id: 'old', tenantId: 't1', name: 'Old send', status: 'completed', templateKey: 'static_site_v1', fromEmail: 'manoj@altiusnxt.test', startAt: BEFORE, intervalMinutes: 5, createdAt: BEFORE, completedAt: BEFORE, ccEmails: [], statusReason: null })
+    store.bulkEmailRecipient!.push({ id: 'o1', tenantId: 't1', campaignId: 'old', position: 0, companyName: 'Old Co', contactName: 'Olga', toEmail: 'olga@old.test', ccEmails: [], status: 'sent', sentAt: BEFORE, scheduledAt: BEFORE, openCount: 0 })
+    const view = await svc.bulkView('t1', 'old')
+    expect(view.counts.opens).toEqual({ sent: 1, openDetected: 0, noOpenDetected: 0, trackingUnavailable: 1 })
+    expect(view.recipients[0]!.tracking).toMatchObject({ status: 'tracking_unavailable', note: 'Sent before open tracking existed.' })
+  })
+
+  it('only https, plain addresses are accepted; plain http only to this machine in development', () => {
+    Object.assign(env, { BULK_OPEN_TRACKING_ENABLED: true })
+    const cfg = (u: string, nodeEnv = 'production') => (Object.assign(env, { BULK_OPEN_TRACKING_BASE_URL: u, NODE_ENV: nodeEnv }), tracking.trackingConfig())
+    expect(cfg('https://marketing.example.com/')).toEqual({ ok: true, base: 'https://marketing.example.com', reason: null })
+    expect(cfg('https://marketing.example.com?x=1').ok).toBe(false)
+    expect(cfg('not a url').ok).toBe(false)
+    expect(cfg('http://localhost:4100', 'development').ok).toBe(true)
+    expect(cfg('http://localhost:4100', 'production').ok).toBe(false)
+    expect(cfg('http://example.com', 'development').ok).toBe(false)
+  })
+})
+
+/** The approved HTML before the pixel. */
+function svc_reviewedHtml(html: string) {
+  return html.replace(/<img src="[^"]*bulk-open[^"]*"[^>]*\/>/, '')
+}
 
 // BULK EMAIL IS A STANDALONE WORKFLOW (2026-10-07): it shares no code with
 // the One company or Several companies flows. Only the opt-out list is shared,

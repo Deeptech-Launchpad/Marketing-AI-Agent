@@ -10,6 +10,7 @@ import { fmtIst, IST, istToUtc, planSequential } from './schedule.js'
 import { checkSender, type SenderCheck } from './senders.js'
 import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
 import { BULK_ROTATION, bulkTemplate, cleanSignature, composeBulkEmail, rotationTemplate, STATIC_SITE, versionOf, type BulkTemplate } from './template.js'
+import { addPixel, hashToken, newTrackingToken, pixelUrl, trackingReady, trackingStatusForScreen } from './tracking.js'
 import { bulkSender, bulkSendingStatus, bulkTransportAccount } from './transport.js'
 
 // BULK EMAIL (2026-10-08) — a simple, standalone workflow:
@@ -632,7 +633,39 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
 async function countsOf(campaignId: string) {
   const groups = await prisma.bulkEmailRecipient.groupBy({ by: ['status'], where: { campaignId }, _count: { _all: true } })
   const n = (st: string) => groups.find((g) => g.status === st)?._count._all ?? 0
-  return { scheduled: n('scheduled'), sending: n('sending'), sent: n('sent'), failed: n('failed'), skipped: n('skipped'), total: groups.reduce((a, g) => a + g._count._all, 0) }
+  // Open tracking, over the sent emails: the three always add up to "sent".
+  const tracked = await prisma.bulkEmailRecipient.count({ where: { campaignId, status: 'sent', trackingEnabled: true } })
+  const openDetected = await prisma.bulkEmailRecipient.count({ where: { campaignId, status: 'sent', trackingEnabled: true, openCount: { gt: 0 } } })
+  return {
+    scheduled: n('scheduled'),
+    sending: n('sending'),
+    sent: n('sent'),
+    failed: n('failed'),
+    skipped: n('skipped'),
+    total: groups.reduce((a, g) => a + g._count._all, 0),
+    opens: { sent: n('sent'), openDetected, noOpenDetected: tracked - openDetected, trackingUnavailable: n('sent') - tracked },
+  }
+}
+
+/** One email's open-tracking result, as the screen shows it. Nothing is shown for an email not sent. */
+function openTracking(r: { status: string; trackingEnabled: boolean | null; trackingNote: string | null; openCount: number; firstOpenedAt: Date | null; lastOpenedAt: Date | null }) {
+  if (r.status !== 'sent') return null
+  if (r.trackingEnabled !== true) {
+    return {
+      status: 'tracking_unavailable' as const,
+      note: r.trackingEnabled === false ? r.trackingNote ?? 'This email was sent without open tracking.' : 'Sent before open tracking existed.',
+      openCount: 0,
+      firstOpenedLocal: null,
+      lastOpenedLocal: null,
+    }
+  }
+  return {
+    status: r.openCount > 0 ? ('open_detected' as const) : ('no_open_detected' as const),
+    note: null,
+    openCount: r.openCount,
+    firstOpenedLocal: r.firstOpenedAt ? fmtIst(r.firstOpenedAt) : null,
+    lastOpenedLocal: r.lastOpenedAt ? fmtIst(r.lastOpenedAt) : null,
+  }
 }
 
 type Campaign = NonNullable<Awaited<ReturnType<typeof prisma.bulkEmailCampaign.findFirst>>>
@@ -660,7 +693,7 @@ export async function listBulk(tenantId: string) {
   const campaigns = await prisma.bulkEmailCampaign.findMany({ where: { tenantId }, orderBy: { createdAt: 'desc' }, take: 100 })
   const out = []
   for (const c of campaigns) out.push({ ...campaignRow(c), counts: await countsOf(c.id) })
-  return { campaigns: out, sending: bulkSendingStatus() }
+  return { campaigns: out, sending: bulkSendingStatus(), openTracking: trackingStatusForScreen() }
 }
 
 export async function bulkView(tenantId: string, id: string) {
@@ -685,8 +718,10 @@ export async function bulkView(tenantId: string, id: string) {
       reason: r.reason,
       scheduledLocal: r.scheduledAt ? fmtIst(r.scheduledAt) : null,
       sentLocal: r.sentAt ? fmtIst(r.sentAt) : null,
+      tracking: openTracking(r),
     })),
     sending: bulkSendingStatus(),
+    openTracking: trackingStatusForScreen(),
   }
 }
 
@@ -810,10 +845,37 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
   const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName, signature: c.signature, signatureHtml: c.signatureHtml })
   // What goes is what was reviewed: the stored text. The HTML part is the same
   // words, laid out, and is only used when it matches.
-  const html = email.text === r.body ? email.html : `<pre style="font-family:Verdana,Geneva,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`
+  const reviewedHtml = email.text === r.body ? email.html : `<pre style="font-family:Verdana,Geneva,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`
+
+  // Open tracking: this email's own invisible image, only when a verified
+  // public HTTPS address is in place. Any problem here means the email goes
+  // without it — never that the email does not go.
+  let html = reviewedHtml
+  let tracked = false
+  let trackingNote: string | null = null
+  try {
+    const t = await trackingReady(now)
+    if (t.ok && t.base) {
+      const token = newTrackingToken()
+      await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { trackingTokenHash: hashToken(token) } })
+      html = addPixel(reviewedHtml, pixelUrl(t.base, token))
+      tracked = true
+    } else {
+      trackingNote = t.reason
+    }
+  } catch (err) {
+    logger.warn({ campaignId: c.id, recipientId: r.id, err: String((err as Error).message ?? err).slice(0, 200) }, 'bulk email: open tracking could not be prepared; sending without it')
+    html = reviewedHtml
+    tracked = false
+    trackingNote = 'Open tracking could not be prepared for this email, so it was sent without it.'
+  }
+
   try {
     const res = await bulkSender().send({ fromEmail: c.fromEmail, fromName: c.fromName, to: r.toEmail, cc: (r.ccEmails as string[]) ?? [], subject: r.subject, text: r.body, html })
-    await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { status: 'sent', sentAt: now, messageId: res.messageId, reason: null } })
+    await prisma.bulkEmailRecipient.update({
+      where: { id: r.id },
+      data: { status: 'sent', sentAt: now, messageId: res.messageId, reason: null, trackingEnabled: tracked, trackingNote: tracked ? null : trackingNote },
+    })
     return 'sent'
   } catch (err) {
     const reason = String((err as Error).message ?? err).slice(0, 400)
