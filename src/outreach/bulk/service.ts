@@ -303,6 +303,18 @@ function screenTracking(): { enabled: boolean; reason: string | null; via: 'smtp
 
 export const CRM_MIN_INTERVAL_MINUTES = 5
 
+/**
+ * An email handed to NXT Sales whose outcome is unknown or was never
+ * recorded (2026-10-10): it may have been delivered. Its address counts as
+ * possibly already emailed, so no later send — bulk or one-person — emails it
+ * again; a person checks the sender's Sent folder. An email NXT Sales refused
+ * before sending (outcome "failed") was not delivered and is not counted.
+ */
+const UNCONFIRMED_CRM = { crmSendKey: { not: null }, status: { not: 'sent' }, OR: [{ crmOutcome: 'unknown' }, { crmOutcome: null }] }
+
+const possiblyEmailedReason = (email: string, at: Date | null) =>
+  `Possibly already emailed: an earlier email to ${email} was handed to NXT Sales${at ? ` on ${at.toISOString().slice(0, 10)}` : ''} and its outcome is unknown, so it is not sent again. Check the sender's Sent folder in Gmail.`
+
 /** The active send through NXT Sales, other than `exceptId`, if there is one. */
 async function activeCrmCampaign(exceptId?: string) {
   return prisma.bulkEmailCampaign.findFirst({
@@ -423,10 +435,15 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const earlier = await prisma.bulkEmailRecipient.findMany({
     where: {
       tenantId: actor.tenantId,
-      OR: [{ status: { in: ['scheduled', 'sending'] } }, ...(s.allowWebmail ? [] : [{ status: 'sent', sentAt: { gte: since } }])],
+      OR: [{ status: { in: ['scheduled', 'sending'] } }, ...(s.allowWebmail ? [] : [{ status: 'sent', sentAt: { gte: since } }]), UNCONFIRMED_CRM],
     },
-    select: { toEmail: true, companyName: true, status: true, sentAt: true },
+    select: { toEmail: true, companyName: true, status: true, sentAt: true, crmSendKey: true, crmOutcome: true, crmAttemptedAt: true },
   })
+  // An address with an unknown outcome through NXT Sales may already have the email.
+  const unconfirmedFor = (email: string) =>
+    earlier.find(
+      (e) => e.toEmail === email && Boolean(e.crmSendKey) && (e.crmOutcome === 'unknown' || e.crmOutcome === null) && !['sent', 'scheduled', 'sending'].includes(e.status),
+    )
   const earlierFor = (company: string, email: string) =>
     earlier.find((e) => e.toEmail === email || e.companyName.toLowerCase().trim() === company.toLowerCase().trim())
 
@@ -443,6 +460,11 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     if (!c.people.length) continue // no usable address at all: listed under noAddress
     if (!to) {
       skip('No contact name, so the greeting [First Name] cannot be filled.')
+      continue
+    }
+    const unconfirmed = unconfirmedFor(to.email)
+    if (unconfirmed) {
+      skip(possiblyEmailedReason(to.email, unconfirmed.crmAttemptedAt))
       continue
     }
     const prior = earlierFor(c.companyName, to.email)
@@ -566,6 +588,7 @@ export async function reviewSingle(actor: Actor, s: SingleSetup) {
     openDealCheck: 'skip',
   })
   const queued = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, status: { in: ['scheduled', 'sending'] } }, select: { id: true } })
+  const unconfirmed = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, ...UNCONFIRMED_CRM }, select: { crmAttemptedAt: true } })
   const lastSent = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, status: 'sent' }, orderBy: { sentAt: 'desc' }, select: { sentAt: true } })
   const viaCrm = sendingViaCrm()
   const email = composeBulkEmail({
@@ -579,7 +602,9 @@ export async function reviewSingle(actor: Actor, s: SingleSetup) {
     ? `${x.toEmail} is on the opt-out list: ${sup.detail ?? sup.reason}`
     : queued
       ? `An email to ${x.toEmail} is already waiting to be sent.`
-      : email.unfilled.length
+      : unconfirmed
+        ? possiblyEmailedReason(x.toEmail, unconfirmed.crmAttemptedAt)
+        : email.unfilled.length
         ? `Could not fill ${email.unfilled.join(', ')}.`
         : null
   return {
