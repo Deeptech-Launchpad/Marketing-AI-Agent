@@ -2887,6 +2887,12 @@ model BulkEmailRecipient {
   // its answer — sent | failed | unknown (null while waiting for it).
   crmSendKey        String?   @unique
   crmOutcome        String?
+  // When NXT Sales was last asked to send this email (2026-10-10) — sent or
+  // not. Every email through NXT Sales waits at least 5 minutes after the
+  // previous attempt, whichever send it belonged to.
+  crmAttemptedAt    DateTime?
+
+  @@index([crmAttemptedAt])
 
   // scheduled | sending | sent | failed | skipped
   status      String

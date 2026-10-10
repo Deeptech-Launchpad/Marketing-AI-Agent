@@ -111,7 +111,7 @@ const TRACKED = {
   openTracking: { enabled: true, reason: null },
 }
 
-function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null } } = {}) {
+function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const u = String(url)
@@ -123,13 +123,13 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
     if (method === 'POST' && u.endsWith('/outreach/bulk/sender')) return json(opts.saved ?? sender)
     if (method === 'POST' && u.endsWith('/outreach/bulk/sender/check')) return json(sender)
     if (u.endsWith('/outreach/bulk/sender')) return json(sender)
-    if (method === 'POST' && u.endsWith('/outreach/bulk/single/review')) return json({ ...SINGLE_REVIEW, sender, sending })
+    if (method === 'POST' && u.endsWith('/outreach/bulk/single/review')) return json({ ...SINGLE_REVIEW, blocked: opts.singleBlocked ?? null, sender, sending })
     if (method === 'POST' && u.endsWith('/outreach/bulk/single/start')) return json({ campaignId: 'bk1', scheduled: 1 }, 201)
     if (method === 'POST' && u.endsWith('/outreach/bulk/analyze')) return json(ANALYSIS)
     if (method === 'POST' && u.endsWith('/outreach/bulk/review')) return json({ ...REVIEW, sender, sending })
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
-    if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending })
+    if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending, sender })
     if (u.endsWith('/outreach/bulk/bk1')) return json(DETAIL)
     if (u.endsWith('/outreach/bulk/bk2')) return json(TRACKED)
     if (u.endsWith('/outreach/bulk'))
@@ -226,6 +226,22 @@ describe('versions in turn', () => {
 })
 
 describe('send to one person', () => {
+  it('shows the warning and cannot send when that address was possibly already emailed', async () => {
+    const WARNING =
+      "Possibly already emailed: an earlier email to priya@acme.test was handed to NXT Sales on 2026-10-10 and its outcome is unknown, so it is not sent again. Check the sender's Sent folder in Gmail."
+    stub({ singleBlocked: WARNING })
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /send to one person/i }))
+    await userEvent.type(screen.getByLabelText('First name'), 'Priya')
+    await userEvent.type(screen.getByLabelText('Company name'), 'Acme Supply')
+    await userEvent.type(screen.getByLabelText('Email'), 'priya@acme.test')
+    await userEvent.click(screen.getByRole('button', { name: /review the email/i }))
+    expect(await screen.findByText(WARNING)).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /approve sending it now/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /approve and send/i })).toBeDisabled()
+    expect(posts().some((c) => c.url.endsWith('/single/start'))).toBe(false)
+  })
+
   it('reviews the chosen version and sends it after the confirmation — no Excel file', async () => {
     stub()
     render(<BulkEmail canOperate canApprove />)
@@ -393,6 +409,19 @@ describe('email open tracking', () => {
 })
 
 describe('sending through NXT Sales', () => {
+  it('asks for at least 5 minutes between emails', async () => {
+    stub({ sender: { ...SENDER_OK, via: 'crm', senderName: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', signature: '', signatureHtml: '', check: null, account: null } as Sender })
+    await toSchedule()
+    const minutes = screen.getByText('Minutes between emails').closest('label')!.querySelector('input')!
+    expect(minutes.min).toBe('5')
+    await userEvent.clear(minutes)
+    await userEvent.type(minutes, '3')
+    expect(screen.getByRole('button', { name: /show the sending times/i })).toBeDisabled()
+    await userEvent.clear(minutes)
+    await userEvent.type(minutes, '5')
+    expect(screen.getByRole('button', { name: /show the sending times/i })).toBeEnabled()
+  })
+
   const CRM_SENDER: Sender = { ...SENDER_OK, fromEmail: 'manoj@altiusnxt.com', signature: '', signatureHtml: '', check: null, authorized: true, problem: null, account: null }
   const viaCrm = { ...CRM_SENDER, via: 'crm', senderName: 'Manoj S' } as Sender
 

@@ -25,7 +25,7 @@ function matches(row: Row, where: Row = {}): boolean {
     if (v && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v)) {
       const o = v as Row
       if ('in' in o) return (o.in as unknown[]).includes(row[k])
-      if ('not' in o) return row[k] !== o.not
+      if ('not' in o) return o.not === null ? row[k] != null : row[k] !== o.not
       if ('lte' in o) return row[k] != null && (row[k] as Date) <= (o.lte as Date)
       if ('lt' in o) return row[k] != null && (row[k] as Date) < (o.lt as Date)
       if ('gt' in o) return row[k] != null && (row[k] as Date) > (o.gt as Date)
@@ -476,6 +476,34 @@ describe('the sender: may this account send as the chosen From?', () => {
     expect(o.headers['List-Unsubscribe']).toBe('<mailto:sales@example.org?subject=unsubscribe>')
     expect(o.envelope).toEqual({ from: 'dtlpmanikandan@gmail.com', to: ['buyer@acme.test', 'cc@acme.test'] })
     expect(JSON.stringify({ from: o.from, replyTo: o.replyTo, headers: o.headers })).not.toMatch(/dtlpmanikandan|Manikandan/i)
+  })
+})
+
+describe('this platform\'s own mailbox (SMTP) is unchanged by the NXT Sales guards', () => {
+  it('an SMTP email that failed does not block that address; nothing NXT Sales-related applies', async () => {
+    await setSender()
+    const list = async () => ({
+      fileBase64: await xlsx([HEADER, ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''], ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', '']]),
+      fileName: 'two.xlsx',
+      templateKey: 'static_site_v1',
+      startDate: '2026-10-10',
+      startTime: '10:00',
+      intervalMinutes: 1,
+    })
+    setBulkSenderForTests({
+      send: async (e) => {
+        if (e.to === 'ann@alpha.test') throw new Error('421 try again later')
+        return { messageId: 'm' }
+      },
+    })
+    await svc.startBulk(actor, { ...(await list()), confirm: true }, new Date('2026-10-09T12:00:00Z'))
+    for (const t of ['10:00', '10:01', '10:02']) await svc.dispatchBulkEmails(istToUtc('2026-10-10', t)!)
+    expect(store.bulkEmailRecipient!.find((r) => r.toEmail === 'ann@alpha.test')).toMatchObject({ status: 'failed' })
+    expect(store.bulkEmailRecipient!.every((r) => r.crmSendKey === undefined && r.crmAttemptedAt === undefined)).toBe(true)
+    const r = await svc.reviewBulk(actor, await list(), new Date('2026-10-11T12:00:00Z'))
+    expect(r.rows.find((x) => x.toEmail === 'ann@alpha.test')!.status).toBe('ready')
+    expect(r.rows.find((x) => x.toEmail === 'bob@bravo.test')!.reason).toMatch(/^Already emailed by a bulk send on/)
+    expect((await svc.reviewSingle(actor, { firstName: 'Ann', companyName: 'Alpha Co', toEmail: 'ann@alpha.test', ccEmails: [], templateKey: 'static_site_v1' })).blocked).toBeNull()
   })
 })
 
@@ -939,16 +967,17 @@ describe('sending through NXT Sales', () => {
 
   // A stand-in for NXT Sales' /api/marketing-bulk API, with its idempotency.
   type Sent = { key: string; to: string; cc: string[]; subject: string; html: string; text: string }
-  let crm: { ready: boolean; sends: Sent[]; records: Map<string, { status: string; tracked: boolean; openCount: number; firstOpenedAt: string | null; lastOpenedAt: string | null; error: string | null }>; next: 'sent' | 'failed' | 'unknown' | 'throw' }
+  let crm: { ready: boolean; sends: Sent[]; records: Map<string, { status: string; tracked: boolean; openCount: number; firstOpenedAt: string | null; lastOpenedAt: string | null; error: string | null }>; next: 'sent' | 'failed' | 'unknown' | 'throw'; calls: string[] }
   const smtp: string[] = []
   beforeEach(() => {
     env.BULK_SEND_VIA = 'crm'
     smtp.length = 0
     setBulkSenderForTests({ send: async (e) => (smtp.push(e.to), { messageId: 'smtp' }) })
-    crm = { ready: true, sends: [], records: new Map(), next: 'sent' }
+    crm = { ready: true, sends: [], records: new Map(), next: 'sent', calls: [] }
     crmSend.setCrmBulkForTests({
       sender: async () => (crm.ready ? { ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com' } : { ready: false, problem: 'The configured sender (manoj@altiusnxt.com) has no Gmail connected in NXT Sales.', name: 'Manoj S', fromEmail: null }),
       send: async (e) => {
+        crm.calls.push(e.key)
         const prior = crm.records.get(e.key)
         if (prior && prior.status !== 'failed') return { outcome: prior.status as 'sent', messageId: 'gm', activityId: 'act', fromEmail: 'manoj@altiusnxt.com', tracked: prior.tracked, error: null }
         if (crm.next === 'throw') {
@@ -956,6 +985,11 @@ describe('sending through NXT Sales', () => {
           crm.sends.push({ key: e.key, to: e.to, cc: e.cc, subject: e.subject, html: e.html, text: e.text })
           crm.records.set(e.key, { status: 'sent', tracked: true, openCount: 0, firstOpenedAt: null, lastOpenedAt: null, error: null })
           return { outcome: 'unknown', messageId: null, activityId: null, fromEmail: null, tracked: false, error: 'No answer from NXT Sales (timeout).' }
+        }
+        if (crm.next === 'unknown') {
+          // NXT Sales itself could not tell whether Gmail took it (e.g. a timeout or a quota error).
+          crm.records.set(e.key, { status: 'unknown', tracked: false, openCount: 0, firstOpenedAt: null, lastOpenedAt: null, error: 'Outcome unknown — check the sender\'s Sent folder before sending again.' })
+          return { outcome: 'unknown', messageId: null, activityId: null, fromEmail: null, tracked: false, error: 'Outcome unknown — check the sender\'s Sent folder before sending again.' }
         }
         if (crm.next === 'failed') {
           crm.records.set(e.key, { status: 'failed', tracked: false, openCount: 0, firstOpenedAt: null, lastOpenedAt: null, error: 'Gmail not connected.' })
@@ -1075,6 +1109,179 @@ describe('sending through NXT Sales', () => {
     expect(crm.sends).toEqual([])
     view = await svc.bulkView('t1', campaignId)
     expect(view.counts.scheduled).toBe(3)
+  })
+
+  // ── The safety rules (2026-10-10) ──
+  const LIST_B = async () => ({
+    ...(await LIST()),
+    fileName: 'other.xlsx',
+    fileBase64: await xlsx([HEADER, ['Delta Co', 'u', 'Dee Lane', 'Owner', 'dee@delta.test', '', '', '', ''], ['Echo Co', 'u', 'Eve Moss', 'Owner', 'eve@echo.test', '', '', '', '']]),
+  })
+  const one = (toEmail: string) => ({ firstName: 'Priya', companyName: `Co ${toEmail}`, toEmail, ccEmails: [], templateKey: 'static_site_v1', confirm: true as const })
+  const minute = (t: Date, m: number) => new Date(t.getTime() + m * 60_000)
+
+  it('rule 1: emails through NXT Sales are at least 5 minutes apart — fewer minutes are refused', async () => {
+    await expect(svc.reviewBulk(actor, { ...(await LIST()), intervalMinutes: 4 }, BEFORE)).rejects.toThrow(/at least 5 minutes apart/)
+    await expect(svc.startBulk(actor, { ...(await LIST()), intervalMinutes: 1, confirm: true }, BEFORE)).rejects.toThrow(/at least 5 minutes apart/)
+    expect(store.bulkEmailCampaign).toHaveLength(0)
+    const ok = await svc.reviewBulk(actor, { ...(await LIST()), intervalMinutes: 5 }, BEFORE)
+    expect(ok.rows.filter((x) => x.status === 'ready').map((x) => x.scheduledLocal!.split(', ').pop())).toEqual(['10:00 AM IST', '10:05 AM IST', '10:10 AM IST'])
+    // This platform's own mailbox keeps its 1-minute minimum.
+    env.BULK_SEND_VIA = 'smtp'
+    await setSender()
+    expect((await svc.reviewBulk(actor, { ...(await LIST()), intervalMinutes: 1 }, BEFORE)).schedule.intervalMinutes).toBe(1)
+  })
+
+  it('rule 1: the 5 minutes hold across sends — a second one-person send waits for them', async () => {
+    const t0 = new Date('2026-10-12T05:00:00Z')
+    await svc.startSingle(actor, one('a@one.test'), t0)
+    await svc.dispatchBulkEmails(minute(t0, 1)) // handed over at +1 min
+    expect(crm.calls).toHaveLength(1)
+    await svc.startSingle(actor, one('b@two.test'), minute(t0, 2))
+    for (const m of [2, 3, 4, 5]) await svc.dispatchBulkEmails(minute(t0, m))
+    expect(crm.calls).toHaveLength(1) // not before 5 minutes after the first
+    await svc.dispatchBulkEmails(minute(t0, 6))
+    expect(crm.sends.map((x) => x.to)).toEqual(['a@one.test', 'b@two.test'])
+  })
+
+  it('rule 2: only one send through NXT Sales is active at a time — running or paused', async () => {
+    const first = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await expect(svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)).rejects.toThrow(/Not started — another bulk email is being sent through NXT Sales .*sending/)
+    await expect(svc.startSingle(actor, one('c@three.test'), BEFORE)).rejects.toThrow(/Not sent — another bulk email is being sent through NXT Sales/)
+    await svc.setBulkState(actor, first.campaignId, 'pause')
+    await expect(svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)).rejects.toThrow(/paused/)
+    await svc.setBulkState(actor, first.campaignId, 'cancel')
+    const second = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    expect(second.scheduled).toBe(3)
+    expect(store.bulkEmailCampaign!.filter((c) => c.status === 'running')).toHaveLength(1)
+  })
+
+  it('rule 2: a paused send cannot be resumed while another one is active', async () => {
+    const first = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await svc.setBulkState(actor, first.campaignId, 'pause')
+    // A second one slipped in (as if two people started at the same instant).
+    store.bulkEmailCampaign![0]!.status = 'completed'
+    await svc.startBulk(actor, { ...(await LIST_B()), confirm: true }, BEFORE)
+    store.bulkEmailCampaign![0]!.status = 'paused'
+    await expect(svc.setBulkState(actor, first.campaignId, 'resume')).rejects.toThrow(/Not resumed — another bulk email is being sent through NXT Sales/)
+  })
+
+  it('rule 2: even two running at once never send side by side — the oldest goes first, 5 minutes apart', async () => {
+    const a = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    // Simulate a race that slipped past the start check.
+    store.bulkEmailCampaign![0]!.status = 'completed'
+    const b = await svc.startBulk(actor, { ...(await LIST_B()), confirm: true }, BEFORE)
+    store.bulkEmailCampaign![0]!.status = 'running'
+    for (const t of ['10:00', '10:01', '10:02', '10:05', '10:06', '10:10', '10:15']) await svc.dispatchBulkEmails(at(t))
+    const owner = (key: string) => store.bulkEmailRecipient!.find((r) => r.crmSendKey === key)!.campaignId
+    expect(crm.calls.map(owner)).toEqual([a.campaignId, a.campaignId, a.campaignId, b.campaignId])
+    const times = store.bulkEmailRecipient!.filter((r) => r.crmAttemptedAt).map((r) => (r.crmAttemptedAt as Date).getTime()).sort()
+    for (let i = 1; i < times.length; i++) expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(5 * 60_000 - 5_000)
+  })
+
+  it('rule 3: an email whose outcome is unknown is never handed over again — the others carry on', async () => {
+    crm.next = 'unknown'
+    const { campaignId } = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    crm.next = 'sent'
+    for (const t of ['10:05', '10:10', '10:15', '10:20', '10:30']) {
+      await svc.dispatchBulkEmails(at(t))
+      await svc.syncCrmSends(at(t), true)
+    }
+    const annKey = row('ann@alpha.test').crmSendKey as string
+    expect(crm.calls.filter((k) => k === annKey)).toHaveLength(1)
+    expect(row('ann@alpha.test')).toMatchObject({ status: 'failed', crmOutcome: 'unknown' })
+    expect(row('ann@alpha.test').reason).toMatch(/Not confirmed by NXT Sales/)
+    expect(crm.sends.map((x) => x.to)).toEqual(['bob@bravo.test', 'cy@charlie.test'])
+    expect((await svc.bulkView('t1', campaignId)).campaign.status).toBe('completed')
+    // Not even a resume hands it over again.
+    expect(row('ann@alpha.test').status).toBe('failed')
+  })
+
+  it('normal sending: every email once, 5 minutes apart, in order', async () => {
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    for (const t of ['10:00', '10:02', '10:04', '10:05', '10:09', '10:10', '10:11']) await svc.dispatchBulkEmails(at(t))
+    expect(crm.sends.map((x) => x.to)).toEqual(['ann@alpha.test', 'bob@bravo.test', 'cy@charlie.test'])
+    expect(new Set(crm.calls).size).toBe(crm.calls.length)
+    expect(store.bulkEmailRecipient!.map((r) => r.crmAttemptedAt && (r.crmAttemptedAt as Date).toISOString())).toEqual([at('10:00').toISOString(), at('10:05').toISOString(), at('10:10').toISOString()])
+  })
+
+  // ── Possibly already emailed: unknown or unconfirmed outcomes (2026-10-10) ──
+  const ANN_AND_DEE = async () => ({
+    ...(await LIST()),
+    fileName: 'again.xlsx',
+    fileBase64: await xlsx([HEADER, ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''], ['Delta Co', 'u', 'Dee Lane', 'Owner', 'dee@delta.test', '', '', '', '']]),
+  })
+  const LATER = new Date('2026-10-11T12:00:00Z')
+  /** A first send through NXT Sales in which Ann's outcome is unknown; Bob and Cy are sent. */
+  async function firstSendWithUnknownAnn() {
+    crm.next = 'unknown'
+    const first = await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    crm.next = 'sent'
+    for (const t of ['10:05', '10:10', '10:15']) await svc.dispatchBulkEmails(at(t))
+    expect((await svc.bulkView('t1', first.campaignId)).campaign.status).toBe('completed')
+    expect(row('ann@alpha.test')).toMatchObject({ status: 'failed', crmOutcome: 'unknown' })
+  }
+
+  it('bulk review skips an address whose earlier email through NXT Sales has an unknown outcome — with the reason', async () => {
+    await firstSendWithUnknownAnn()
+    const r = await svc.reviewBulk(actor, await ANN_AND_DEE(), LATER)
+    const ann = r.rows.find((x) => x.toEmail === 'ann@alpha.test')!
+    expect(ann.status).toBe('skipped')
+    expect(ann.reason).toBe(`Possibly already emailed: an earlier email to ann@alpha.test was handed to NXT Sales on 2026-10-10 and its outcome is unknown, so it is not sent again. Check the sender's Sent folder in Gmail.`)
+    expect(r.rows.find((x) => x.toEmail === 'dee@delta.test')!.status).toBe('ready')
+    // Starting it sends Dee only — never Ann again.
+    await svc.startBulk(actor, { ...(await ANN_AND_DEE()), confirm: true }, LATER)
+    await svc.dispatchBulkEmails(new Date(LATER.getTime() + 60_000))
+    await svc.dispatchBulkEmails(new Date(LATER.getTime() + 10 * 60_000))
+    expect(crm.calls.filter((k) => k === row('ann@alpha.test').crmSendKey)).toHaveLength(1)
+    expect(crm.sends.map((x) => x.to)).toEqual(['bob@bravo.test', 'cy@charlie.test', 'dee@delta.test'])
+  })
+
+  it('an email handed over with no outcome recorded (e.g. after a crash) counts as possibly emailed too', async () => {
+    await firstSendWithUnknownAnn()
+    Object.assign(row('ann@alpha.test'), { crmOutcome: null, reason: 'Sending did not complete. It was not retried, so the contact cannot receive it twice.' })
+    const r = await svc.reviewBulk(actor, await ANN_AND_DEE(), LATER)
+    expect(r.rows.find((x) => x.toEmail === 'ann@alpha.test')!.reason).toMatch(/^Possibly already emailed/)
+  })
+
+  it('an email NXT Sales refused before sending was not delivered — that address may be emailed again', async () => {
+    crm.next = 'failed'
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    crm.next = 'sent'
+    for (const t of ['10:05', '10:10', '10:15']) await svc.dispatchBulkEmails(at(t))
+    expect(row('ann@alpha.test')).toMatchObject({ status: 'failed', crmOutcome: 'failed' })
+    const r = await svc.reviewBulk(actor, await ANN_AND_DEE(), LATER)
+    expect(r.rows.find((x) => x.toEmail === 'ann@alpha.test')!.status).toBe('ready')
+  })
+
+  it('once NXT Sales confirms it was sent, it is "already emailed" like any sent email', async () => {
+    await firstSendWithUnknownAnn()
+    crm.records.set(row('ann@alpha.test').crmSendKey as string, { status: 'sent', tracked: true, openCount: 0, firstOpenedAt: null, lastOpenedAt: null, error: null })
+    await svc.syncCrmSends(at('10:20'), true)
+    const r = await svc.reviewBulk(actor, await ANN_AND_DEE(), LATER)
+    expect(r.rows.find((x) => x.toEmail === 'ann@alpha.test')!.reason).toMatch(/^Already emailed by a bulk send on/)
+  })
+
+  it('one-person sending is blocked for that address, with the warning', async () => {
+    await firstSendWithUnknownAnn()
+    const single = { firstName: 'Ann', companyName: 'Alpha Co', toEmail: 'ann@alpha.test', ccEmails: [], templateKey: 'static_site_v2' }
+    const r = await svc.reviewSingle(actor, single)
+    expect(r.blocked).toMatch(/^Possibly already emailed: an earlier email to ann@alpha.test was handed to NXT Sales on 2026-10-10 and its outcome is unknown/)
+    await expect(svc.startSingle(actor, { ...single, confirm: true }, LATER)).rejects.toThrow(/Not sent — Possibly already emailed/)
+    expect(crm.calls.filter((k) => k === row('ann@alpha.test').crmSendKey)).toHaveLength(1)
+    // Another address is not affected.
+    expect((await svc.reviewSingle(actor, { ...single, toEmail: 'dee@delta.test' })).blocked).toBeNull()
+  })
+
+  it('the guard holds whichever way the next email would be sent', async () => {
+    await firstSendWithUnknownAnn()
+    env.BULK_SEND_VIA = 'smtp'
+    await setSender()
+    const r = await svc.reviewBulk(actor, await ANN_AND_DEE(), LATER)
+    expect(r.rows.find((x) => x.toEmail === 'ann@alpha.test')!.reason).toMatch(/^Possibly already emailed/)
   })
 
   it('one person is sent through NXT Sales too', async () => {
