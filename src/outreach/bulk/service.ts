@@ -291,6 +291,46 @@ function screenTracking(): { enabled: boolean; reason: string | null; via: 'smtp
   return { ...trackingStatusForScreen(), via: 'smtp' }
 }
 
+// ── Safety rules for sending through NXT Sales (2026-10-10) ──────────────
+//
+//   - At least 5 minutes between any two emails handed to NXT Sales, across
+//     all sends (bulk and one-person alike): its Gmail sender's quota is shared
+//     with its own mailbox sync.
+//   - Only one send through NXT Sales may be active (running or paused) at a
+//     time; the sender also takes only the oldest running one, so even two
+//     started at the same instant never send side by side.
+//   - An email whose outcome is unknown is never handed over again.
+
+export const CRM_MIN_INTERVAL_MINUTES = 5
+
+/** The active send through NXT Sales, other than `exceptId`, if there is one. */
+async function activeCrmCampaign(exceptId?: string) {
+  return prisma.bulkEmailCampaign.findFirst({
+    where: { sendVia: 'crm', status: { in: ['running', 'paused'] }, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, name: true, status: true },
+  })
+}
+
+async function assertNoActiveCrmCampaign(verb: string, exceptId?: string): Promise<void> {
+  const other = await activeCrmCampaign(exceptId)
+  if (other) {
+    throw new ConflictError(
+      `${verb} — another bulk email is being sent through NXT Sales ("${other.name}", ${other.status === 'paused' ? 'paused' : 'sending'}). Only one runs at a time: wait until it completes, or cancel it.`,
+    )
+  }
+}
+
+/** Whether NXT Sales may be handed another email now: the last one went at least 5 minutes ago. */
+async function crmSlotFree(now: Date): Promise<boolean> {
+  const last = await prisma.bulkEmailRecipient.findFirst({
+    where: { crmAttemptedAt: { not: null } },
+    orderBy: { crmAttemptedAt: 'desc' },
+    select: { crmAttemptedAt: true },
+  })
+  return !last?.crmAttemptedAt || now.getTime() - last.crmAttemptedAt.getTime() >= CRM_MIN_INTERVAL_MINUTES * 60_000 - 5_000
+}
+
 /** Why a send that goes through NXT Sales cannot send right now (null = it can). */
 async function crmBlocker(cache: Map<string, CrmSender>): Promise<string | null> {
   if (!sendingViaCrm()) return 'Sending through NXT Sales is switched off on this server (BULK_SEND_VIA). Nothing was sent from this platform instead.'
@@ -361,6 +401,9 @@ function checkedSetup(s: BulkSetup) {
   if (!start) throw new BadRequestError('Choose the date and the time sending starts.')
   const intervalMinutes = Math.round(Number(s.intervalMinutes))
   if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 240) throw new BadRequestError('Minutes between emails must be 1 to 240.')
+  if (sendingViaCrm() && intervalMinutes < CRM_MIN_INTERVAL_MINUTES) {
+    throw new BadRequestError(`Through NXT Sales, emails go at least ${CRM_MIN_INTERVAL_MINUTES} minutes apart — choose ${CRM_MIN_INTERVAL_MINUTES} or more minutes between emails.`)
+  }
   return { template, start, intervalMinutes }
 }
 
@@ -565,6 +608,7 @@ export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boo
   if (review.blocked) throw new ConflictError(`Not sent — ${review.blocked}`)
   const x = await checkedSingle(actor, s)
   const via = sendingViaCrm() ? 'crm' : 'smtp'
+  if (via === 'crm') await assertNoActiveCrmCampaign('Not sent')
   const fromEmail = await startingFrom(actor, x.profile.fromEmail, now, 'Not sent')
 
   const id = newId()
@@ -591,7 +635,7 @@ export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boo
       sendDays: [1, 2, 3, 4, 5, 6, 7] as never,
       sendStartMinute: 0,
       sendEndMinute: 1440,
-      intervalMinutes: 1,
+      intervalMinutes: via === 'crm' ? CRM_MIN_INTERVAL_MINUTES : 1,
       dailyCap: 0,
       totalRows: 1,
       createdByCrmUserId: actor.crmUserId,
@@ -631,6 +675,7 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   const checked = checkedSetup(s)
   const profile = profileOf(await tenantSettings(actor.tenantId))
   const via = sendingViaCrm() ? 'crm' : 'smtp'
+  if (via === 'crm') await assertNoActiveCrmCampaign('Not started')
   // Checked again now: never started on an old answer.
   const fromEmail = await startingFrom(actor, profile.fromEmail, now, 'Not started')
 
@@ -813,6 +858,7 @@ export async function setBulkState(actor: Actor, id: string, to: 'pause' | 'resu
     if (c.sendVia === 'crm') {
       const why = await crmBlocker(new Map())
       if (why) throw new ConflictError(`Not resumed — ${why}`)
+      await assertNoActiveCrmCampaign('Not resumed', c.id)
     } else {
       const auth = await authorizeFrom(actor, c.fromEmail, now, true)
       if (!auth.authorized) throw new ConflictError(`Not resumed — ${c.fromEmail} is not authorized for this sending account. ${auth.reason}`)
@@ -865,10 +911,16 @@ export async function dispatchBulkEmails(now = new Date()): Promise<{ sent: numb
   })
 
   const campaigns = await prisma.bulkEmailCampaign.findMany({ where: { status: 'running' }, orderBy: { createdAt: 'asc' } })
+  // Through NXT Sales: only the oldest running send may hand over an email,
+  // and only when the last one went at least 5 minutes ago (any send).
+  const crmTurn = campaigns.find((x) => x.sendVia === 'crm')?.id ?? null
+  const crmFree = crmTurn ? await crmSlotFree(now) : false
   for (const c of campaigns) {
     try {
       const lastSent = await prisma.bulkEmailRecipient.findFirst({ where: { campaignId: c.id, sentAt: { not: null } }, orderBy: { sentAt: 'desc' }, select: { sentAt: true } })
-      const spaced = !lastSent?.sentAt || now.getTime() - lastSent.sentAt.getTime() >= c.intervalMinutes * 60_000 - 5_000
+      const spaced =
+        (!lastSent?.sentAt || now.getTime() - lastSent.sentAt.getTime() >= c.intervalMinutes * 60_000 - 5_000) &&
+        (c.sendVia !== 'crm' || (c.id === crmTurn && crmFree))
       if (spaced) {
         const next = await prisma.bulkEmailRecipient.findFirst({ where: { campaignId: c.id, status: 'scheduled', scheduledAt: { lte: now } }, orderBy: [{ scheduledAt: 'asc' }, { position: 'asc' }] })
         if (next) {
@@ -1047,7 +1099,7 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
 async function sendThroughCrm(c: Campaign, r: Recipient, html: string, now: Date): Promise<'sent' | 'failed'> {
   const key = crmKeyOf(r.id)
   // The key is recorded before asking, so its outcome can always be looked up.
-  await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { crmSendKey: key, crmOutcome: null } })
+  await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { crmSendKey: key, crmOutcome: null, crmAttemptedAt: now } })
   const res = await crmBulk().send({ key, campaignId: c.id, recipientId: r.id, to: r.toEmail!, cc: (r.ccEmails as string[]) ?? [], subject: r.subject!, html, text: r.body! })
   if (res.outcome === 'sent') {
     await prisma.bulkEmailRecipient.update({

@@ -47,6 +47,7 @@ interface SenderView {
 const isSenderView = (v: unknown): v is SenderView => Boolean(v && typeof v === 'object' && 'authorized' in v && 'ccEmails' in v)
 interface Settings {
   sending: SendingStatus
+  sender?: SenderView
   templates: Array<{ key: string; label: string; subject: string; body: string; placeholders: string[] }>
 }
 interface Analysis {
@@ -543,7 +544,9 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
 
   const sendable = analysis ? analysis.companies.filter((c) => !c.skip && c.people.length > 0) : []
   const preview = review?.rows.find((r) => r.position === previewPos) ?? null
-  const intervalOk = /^\d+$/.test(interval) && Number(interval) >= 1 && Number(interval) <= 240
+  // Through NXT Sales emails go at least 5 minutes apart (the server checks this too).
+  const minInterval = settings?.sender?.via === 'crm' ? 5 : 1
+  const intervalOk = /^\d+$/.test(interval) && Number(interval) >= minInterval && Number(interval) <= 240
 
   return (
     <Panel
@@ -766,7 +769,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               <input
                 className="otr-input"
                 type="number"
-                min={1}
+                min={minInterval}
                 max={240}
                 value={interval}
                 onChange={(e) => {

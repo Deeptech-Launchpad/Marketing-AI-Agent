@@ -129,7 +129,7 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
     if (method === 'POST' && u.endsWith('/outreach/bulk/review')) return json({ ...REVIEW, sender, sending })
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
-    if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending })
+    if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending, sender })
     if (u.endsWith('/outreach/bulk/bk1')) return json(DETAIL)
     if (u.endsWith('/outreach/bulk/bk2')) return json(TRACKED)
     if (u.endsWith('/outreach/bulk'))
@@ -393,6 +393,19 @@ describe('email open tracking', () => {
 })
 
 describe('sending through NXT Sales', () => {
+  it('asks for at least 5 minutes between emails', async () => {
+    stub({ sender: { ...SENDER_OK, via: 'crm', senderName: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', signature: '', signatureHtml: '', check: null, account: null } as Sender })
+    await toSchedule()
+    const minutes = screen.getByText('Minutes between emails').closest('label')!.querySelector('input')!
+    expect(minutes.min).toBe('5')
+    await userEvent.clear(minutes)
+    await userEvent.type(minutes, '3')
+    expect(screen.getByRole('button', { name: /show the sending times/i })).toBeDisabled()
+    await userEvent.clear(minutes)
+    await userEvent.type(minutes, '5')
+    expect(screen.getByRole('button', { name: /show the sending times/i })).toBeEnabled()
+  })
+
   const CRM_SENDER: Sender = { ...SENDER_OK, fromEmail: 'manoj@altiusnxt.com', signature: '', signatureHtml: '', check: null, authorized: true, problem: null, account: null }
   const viaCrm = { ...CRM_SENDER, via: 'crm', senderName: 'Manoj S' } as Sender
 
