@@ -11,6 +11,7 @@ import { stagedAttachments, linkAttachments, campaignAttachments, campaignAttach
 import { crmBulk, crmKeyOf, type CrmSender } from './crmSend.js'
 import { checkSender, type SenderCheck } from './senders.js'
 import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
+import { composeCustomEmail, CUSTOM_TEMPLATE_KEY, prepareCustomTemplate, type CustomTemplate } from './customTemplate.js'
 import { BULK_ROTATION, bulkTemplate, cleanSignature, composeBulkEmail, rotationTemplate, STATIC_SITE, versionOf, type BulkTemplate } from './template.js'
 import { addPixel, hashToken, newTrackingToken, pixelUrl, trackingReady, trackingStatusForScreen } from './tracking.js'
 import { bulkSender, bulkSendingStatus, bulkTransportAccount } from './transport.js'
@@ -423,6 +424,13 @@ export interface BulkSetup {
   name?: string
   /** Staged files (2026-10-12) that go with every email of the send. */
   attachmentIds?: string[]
+  /** The user's OWN template instead of Versions 1-3 (2026-10-12): every recipient gets this same email. */
+  customTemplate?: { subject: string; bodyHtml: string }
+}
+
+/** A template the user pasted, as the one "template" of a send (key 'custom'); its text and HTML stay with it. */
+function customAsTemplate(c: CustomTemplate): BulkTemplate {
+  return { key: CUSTOM_TEMPLATE_KEY, label: 'Your own template', subject: c.subject, body: c.text }
 }
 
 export interface ReviewRow {
@@ -445,7 +453,8 @@ export interface ReviewRow {
 }
 
 function checkedSetup(s: BulkSetup) {
-  const template = bulkTemplate(s.templateKey)
+  const custom = s.customTemplate ? prepareCustomTemplate(s.customTemplate) : null
+  const template = custom ? customAsTemplate(custom) : bulkTemplate(s.templateKey)
   if (!template) throw new BadRequestError('Unknown template.')
   const start = istToUtc(s.startDate, s.startTime)
   if (!start) throw new BadRequestError('Choose the date and the time sending starts.')
@@ -454,12 +463,16 @@ function checkedSetup(s: BulkSetup) {
   if (sendingViaCrm() && intervalMinutes < CRM_MIN_INTERVAL_MINUTES) {
     throw new BadRequestError(`Through NXT Sales, emails go at least ${CRM_MIN_INTERVAL_MINUTES} minutes apart — choose ${CRM_MIN_INTERVAL_MINUTES} or more minutes between emails.`)
   }
-  return { template, start, intervalMinutes }
+  return { template, custom, start, intervalMinutes }
 }
 
 /** Every company's email, its time and its status — exactly what Start would store. Nothing is written. */
+/** All the emails of one send with your own template, together (characters of HTML and text). */
+const MAX_CUSTOM_TOTAL_CHARS = 40_000_000
+
 export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const setup = checkedSetup(s)
+  let customBytes = 0
   const attachments = await sendAttachments(actor, s.attachmentIds)
   const profile = profileOf(await tenantSettings(actor.tenantId))
   // Through NXT Sales the Gmail account's own signature is added there, not here.
@@ -533,11 +546,22 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     // The sender's CC addresses are copied on every email too.
     for (const extra of profile.ccEmails) if (!ccOk.includes(extra) && extra !== to.email) ccOk.push(extra)
     // Versions in sequence: 1, 2, 3, 1, 2, 3 … over the emails that go.
-    const template = rotationTemplate(readyCount)
-    const email = composeBulkEmail({ template, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
+    // Your own template: the same email for everyone, no rotation.
+    const template = setup.custom ? setup.template : rotationTemplate(readyCount)
+    const email = setup.custom
+      ? composeCustomEmail({ template: setup.custom, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
+      : composeBulkEmail({ template, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
     if (email.unfilled.length) {
       skip(`Could not fill ${email.unfilled.join(', ')}.`)
       continue
+    }
+    // Your own template is stored once per person: refuse a template so large, for this many people, that the review and the
+    // stored emails would become enormous (a normal email is 5-15 KB).
+    if (setup.custom) {
+      customBytes += email.html.length + email.text.length
+      if (customBytes > MAX_CUSTOM_TOTAL_CHARS) {
+        throw new BadRequestError(`Your template is too large to send to this many people (${Math.round(customBytes / 1_000_000)} MB of emails). Shorten the template or send the list in parts.`)
+      }
     }
     readyCount++
     rows.push({ ...base, contactName: to.name, toEmail: to.email, ccEmails: ccOk, subject: email.subject, text: email.text, html: email.html, templateKey: template.key, version: versionOf(template.key), status: 'ready', reason: null })
@@ -578,6 +602,8 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     sending: bulkSendingStatus(),
     attachments: attachments.list,
     attachmentProblem: attachments.problem,
+    /** What was taken out of the pasted template, in words (empty = kept whole). */
+    templateNotes: setup.custom?.removed ?? [],
   }
 }
 
@@ -596,11 +622,14 @@ export interface SingleSetup {
   templateKey: string
   /** Staged files (2026-10-12) that go with the email. */
   attachmentIds?: string[]
+  /** The user's OWN template instead of Version 1-3 (2026-10-12). */
+  customTemplate?: { subject: string; bodyHtml: string }
 }
 
 async function checkedSingle(actor: Actor, s: SingleSetup) {
-  const template = bulkTemplate(s.templateKey)
-  if (!template) throw new BadRequestError('Choose Version 1, 2 or 3.')
+  const custom = s.customTemplate ? prepareCustomTemplate(s.customTemplate) : null
+  const template = custom ? customAsTemplate(custom) : bulkTemplate(s.templateKey)
+  if (!template) throw new BadRequestError('Choose Version 1, 2 or 3, or use your own template.')
   const firstName = s.firstName.trim()
   const companyName = s.companyName.trim()
   if (!firstName) throw new BadRequestError('Enter the first name.')
@@ -615,7 +644,7 @@ async function checkedSingle(actor: Actor, s: SingleSetup) {
     if (cc !== toEmail && !ccEmails.includes(cc)) ccEmails.push(cc)
   }
   if (ccEmails.length > MAX_CC * 2) throw new BadRequestError('Too many CC addresses.')
-  return { template, firstName, companyName, toEmail, ccEmails, profile }
+  return { template, custom, firstName, companyName, toEmail, ccEmails, profile }
 }
 
 /** The one email exactly as it will be sent. Nothing is written. */
@@ -635,13 +664,13 @@ export async function reviewSingle(actor: Actor, s: SingleSetup) {
   const unconfirmed = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, ...UNCONFIRMED_CRM }, select: { crmAttemptedAt: true } })
   const lastSent = await prisma.bulkEmailRecipient.findFirst({ where: { tenantId: actor.tenantId, toEmail: x.toEmail, status: 'sent' }, orderBy: { sentAt: 'desc' }, select: { sentAt: true } })
   const viaCrm = sendingViaCrm()
-  const email = composeBulkEmail({
-    template: x.template,
+  const compose = {
     firstName: x.firstName,
     companyName: x.companyName,
     signature: viaCrm ? '' : cleanSignature(x.profile.signature),
     signatureHtml: viaCrm ? '' : x.profile.signatureHtml,
-  })
+  }
+  const email = x.custom ? composeCustomEmail({ template: x.custom, ...compose }) : composeBulkEmail({ template: x.template, ...compose })
   const blocked = sup.suppressed
     ? `${x.toEmail} is on the opt-out list: ${sup.detail ?? sup.reason}`
     : queued
@@ -666,6 +695,7 @@ export async function reviewSingle(actor: Actor, s: SingleSetup) {
     sender: await senderView(actor.tenantId),
     sending: bulkSendingStatus(),
     attachments: attachments.list,
+    templateNotes: x.custom?.removed ?? [],
   }
 }
 
@@ -728,13 +758,14 @@ export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boo
       sourceRows: [] as never,
       subject: review.subject,
       body: review.text,
+      bodyHtml: x.custom ? review.html : null,
       templateKey: x.template.key,
       status: 'scheduled',
       reason: null,
       scheduledAt: now,
     },
   })
-  await record(actor, id, 'started', `Single email approved: Version ${review.version} to ${x.toEmail} from ${fromEmail}${attachmentNames(review.attachments)}`, {
+  await record(actor, id, 'started', `Single email approved: ${review.version ? `Version ${review.version}` : 'your own template'} to ${x.toEmail} from ${fromEmail}${attachmentNames(review.attachments)}`, {
     toEmail: x.toEmail,
     version: review.version,
     attachments: review.attachments.map((a) => ({ fileName: a.fileName, sizeBytes: a.sizeBytes })),
@@ -809,6 +840,7 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       sourceRows: r.rows as never,
       subject: r.subject,
       body: r.status === 'ready' ? r.text : null,
+      bodyHtml: r.status === 'ready' && r.templateKey === CUSTOM_TEMPLATE_KEY ? r.html : null,
       templateKey: r.templateKey,
       status: r.status === 'ready' ? 'scheduled' : 'skipped',
       reason: r.reason,
@@ -912,6 +944,7 @@ export async function bulkView(tenantId: string, id: string) {
       subject: r.subject,
       body: r.body,
       version: versionOf(r.templateKey ?? c.templateKey),
+      ownTemplate: (r.templateKey ?? c.templateKey) === CUSTOM_TEMPLATE_KEY,
       status: r.status,
       reason: r.reason,
       scheduledLocal: r.scheduledAt ? fmtIst(r.scheduledAt) : null,
@@ -1145,7 +1178,7 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
   const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName, signature: c.signature, signatureHtml: c.signatureHtml })
   // What goes is what was reviewed: the stored text. The HTML part is the same
   // words, laid out, and is only used when it matches.
-  const reviewedHtml = email.text === r.body ? email.html : `<pre style="font-family:Verdana,Geneva,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`
+  const reviewedHtml = r.bodyHtml ? r.bodyHtml : email.text === r.body ? email.html : `<pre style="font-family:Verdana,Geneva,sans-serif;white-space:pre-wrap">${r.body.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`
 
   // Through NXT Sales: its Gmail pipeline sends and tracks; this platform adds
   // no image of its own and never falls back to its own mailbox.

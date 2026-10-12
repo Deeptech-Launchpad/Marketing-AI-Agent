@@ -112,7 +112,7 @@ const TRACKED = {
   openTracking: { enabled: true, reason: null },
 }
 
-function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string; attachmentProblem?: string } = {}) {
+function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string; attachmentProblem?: string; templateNotes?: string[] } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const u = String(url)
@@ -133,15 +133,25 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
       return json(a, 201)
     }
     if (method === 'DELETE' && u.includes('/outreach/bulk/attachments/')) return json({ id: u.split('/').pop(), removed: true })
+    // Your own template (2026-10-12): the server returns the template filled for the person, with no version.
+    const ownFill = (t: { subject: string; bodyHtml: string }, first: string, co: string) => ({
+      subject: t.subject.replace('[Company Name]', co),
+      html: t.bodyHtml.replace('[First Name]', first).replace('[Company Name]', co),
+      text: `Hi ${first}`,
+    })
     if (method === 'POST' && u.endsWith('/outreach/bulk/single/review')) {
-      const b = JSON.parse(String(init.body)) as { attachmentIds?: string[] }
-      return json({ ...SINGLE_REVIEW, blocked: opts.singleBlocked ?? null, sender, sending, attachments: files(b.attachmentIds) })
+      const b = JSON.parse(String(init.body)) as { attachmentIds?: string[]; customTemplate?: { subject: string; bodyHtml: string } }
+      const own = b.customTemplate ? { ...ownFill(b.customTemplate, 'Priya', 'Acme Supply'), templateKey: 'custom', version: null, templateNotes: opts.templateNotes ?? [] } : {}
+      return json({ ...SINGLE_REVIEW, ...own, blocked: opts.singleBlocked ?? null, sender, sending, attachments: files(b.attachmentIds) })
     }
     if (method === 'POST' && u.endsWith('/outreach/bulk/single/start')) return json({ campaignId: 'bk1', scheduled: 1 }, 201)
     if (method === 'POST' && u.endsWith('/outreach/bulk/analyze')) return json(ANALYSIS)
     if (method === 'POST' && u.endsWith('/outreach/bulk/review')) {
-      const b = JSON.parse(String(init.body)) as { attachmentIds?: string[] }
-      return json({ ...REVIEW, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null })
+      const b = JSON.parse(String(init.body)) as { attachmentIds?: string[]; customTemplate?: { subject: string; bodyHtml: string } }
+      const rows = b.customTemplate
+        ? REVIEW.rows.map((r) => (r.status === 'ready' ? { ...r, ...ownFill(b.customTemplate!, r.contactName!.split(' ')[0]!, r.companyName), templateKey: 'custom', version: null } : r))
+        : REVIEW.rows
+      return json({ ...REVIEW, rows, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null, templateNotes: opts.templateNotes ?? [] })
     }
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
@@ -609,5 +619,137 @@ describe('attachments (2026-10-12): upload once below the preview, the same file
     await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/single/start'))).toBe(true))
     expect(posts().find((c) => c.url.endsWith('/single/start'))!.body).toMatchObject({ attachmentIds: ['att1'], confirm: true })
+  })
+})
+
+describe('your own template (2026-10-12): paste it, see the complete email, approve it, the same email goes to everyone', () => {
+  const BODY = '<p>Hi <b>[First Name]</b>,</p><p>Our own offer for [Company Name]: <a href="https://example.com/offer">see it</a>.</p>'
+  const own = async () => {
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    await userEvent.type(screen.getByLabelText('Template subject'), 'Idea for [[Company Name]') // [[ types a literal [
+    const box = screen.getByRole('textbox', { name: 'Template body' })
+    box.innerHTML = BODY
+    fireEvent.input(box)
+  }
+
+  it('offers the approved versions (default) or your own template; choosing your own shows a subject and a body box', async () => {
+    stub()
+    await upload()
+    expect(screen.getByRole('radio', { name: /approved emails version 1, 2 and 3/i })).toBeChecked()
+    expect(screen.queryByLabelText('Template subject')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    expect(screen.getByLabelText('Template subject')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Template body' })).toBeInTheDocument()
+    expect(screen.getByText(/filled for\s+each person/i)).toBeInTheDocument()
+  })
+
+  it('cannot go to the review until the subject and the body are both entered', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    const next = screen.getByRole('button', { name: /next: review emails/i })
+    expect(next).toBeDisabled()
+    await userEvent.type(screen.getByLabelText('Template subject'), 'Idea')
+    expect(next).toBeDisabled() // no body yet
+    const box = screen.getByRole('textbox', { name: 'Template body' })
+    box.innerHTML = '<p> </p>'
+    fireEvent.input(box)
+    expect(next).toBeDisabled() // a body with no text
+    box.innerHTML = BODY
+    fireEvent.input(box)
+    expect(next).toBeEnabled()
+  })
+
+  it('shows the complete email in the preview, labelled as your template, and sends the template with the review and the start', async () => {
+    stub()
+    await upload()
+    await own()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    const preview = await screen.findByLabelText('Email preview')
+    expect(within(preview).getByText('Your template')).toBeInTheDocument()
+    expect(within(preview).getByText(/Idea for Thermohvac/)).toBeInTheDocument()
+    expect(within(preview).getByText('Maddie')).toBeInTheDocument() // the filled [First Name], inside the bold
+    expect(within(preview).getByRole('link', { name: 'see it' })).toHaveAttribute('href', 'https://example.com/offer')
+    expect(within(preview).queryByText(/Version/)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('cell', { name: 'Your template' }).length).toBeGreaterThan(0)
+    expect(posts().filter((c) => c.url.endsWith('/outreach/bulk/review')).pop()!.body).toMatchObject({ customTemplate: { subject: 'Idea for [Company Name]', bodyHtml: BODY } })
+
+    await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+    expect(await screen.findByText(/Your own template: every recipient gets this same email/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ confirm: true, customTemplate: { subject: 'Idea for [Company Name]', bodyHtml: BODY } })
+  })
+
+  it('with the approved versions nothing about a template is sent', async () => {
+    stub()
+    await toSchedule()
+    await userEvent.click(await screen.findByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect('customTemplate' in posts().find((c) => c.url.endsWith('/start'))!.body!).toBe(false)
+  })
+
+  it('switching back to the approved versions drops the template from the request (and the typed text is kept if you return)', async () => {
+    stub()
+    await upload()
+    await own()
+    await userEvent.click(screen.getByRole('radio', { name: /approved emails version 1, 2 and 3/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    expect('customTemplate' in posts().filter((c) => c.url.endsWith('/outreach/bulk/review')).pop()!.body!).toBe(false)
+  })
+
+  it('a pasted template never brings code into the page', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    const box = screen.getByRole('textbox', { name: 'Template body' })
+    box.innerHTML = ''
+    fireEvent.paste(box, { clipboardData: { getData: (t: string) => (t === 'text/html' ? '<p onclick="steal()"><b>Hi</b> [First Name]</p><script>alert(1)</script><img src="x" onerror="alert(1)">' : ''), files: [] } })
+    expect(box.innerHTML).toContain('<b>Hi</b>')
+    expect(box.innerHTML).not.toMatch(/onclick|script|onerror/)
+  })
+
+  it('says what the server took out of the pasted template, on the review', async () => {
+    stub({ templateNotes: ['scripts and active content'] })
+    await upload()
+    await own()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    expect(await screen.findByText(/Taken out of your template for safety: scripts and active content/)).toBeInTheDocument()
+  })
+
+  it('changing the template after a review clears the review and the confirmation', async () => {
+    stub()
+    await upload()
+    await own()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    await userEvent.click(screen.getAllByRole('button', { name: /^back$/i }).pop()!)
+    await userEvent.type(screen.getByLabelText('Template subject'), ' now')
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    expect(posts().filter((c) => c.url.endsWith('/outreach/bulk/review')).pop()!.body).toMatchObject({ customTemplate: { subject: 'Idea for [Company Name] now' } })
+  })
+
+  it('one person: your own template replaces the version list, is reviewed in full, and the same email is sent after the approval', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /send to one person/i }))
+    await userEvent.type(screen.getByLabelText('First name'), 'Priya')
+    await userEvent.type(screen.getByLabelText('Company name'), 'Acme Supply')
+    await userEvent.type(screen.getByLabelText('Email'), 'priya@acme.test')
+    expect(screen.getByLabelText('Approved email')).toBeInTheDocument()
+    await own()
+    expect(screen.queryByLabelText('Approved email')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /review the email/i }))
+    const preview = await screen.findByLabelText('Email preview')
+    expect(within(preview).getByText('Your template')).toBeInTheDocument()
+    expect(within(preview).getByText(/Idea for Acme Supply/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /approve sending it now/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/single/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/single/start'))!.body).toMatchObject({ confirm: true, customTemplate: { subject: 'Idea for [Company Name]', bodyHtml: BODY } })
   })
 })

@@ -17,6 +17,7 @@ import {
   type Actor,
 } from '../../outreach/bulk/service.js'
 import { MAX_ATTACHMENTS, MAX_FILE_BYTES, removeStagedAttachment, stageAttachment } from '../../outreach/bulk/attachments.js'
+import { MAX_CUSTOM_HTML, MAX_CUSTOM_SUBJECT } from '../../outreach/bulk/customTemplate.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -28,6 +29,15 @@ import { validateBody } from '../middleware/validate.js'
 export const bulkEmailRoutes = Router()
 
 const actorOf = (req: Request): Actor => ({ tenantId: req.principal!.tenantId, crmUserId: req.principal!.crmUserId, requestId: req.requestId })
+
+// The user's OWN template (2026-10-12): a subject and the pasted body as HTML. It is cleaned again on the
+// server; the browser's clean-up is never trusted.
+const CustomTemplate = z
+  .object({
+    subject: z.string().max(MAX_CUSTOM_SUBJECT + 50),
+    bodyHtml: z.string().max(MAX_CUSTOM_HTML + 5_000),
+  })
+  .strict()
 
 // ~5 MB of spreadsheet, base64-encoded.
 const File = {
@@ -48,6 +58,7 @@ const Setup = z
     name: z.string().max(120).optional(),
     // Staged files that go with every email (2026-10-12).
     attachmentIds: z.array(z.string().min(1).max(64)).max(MAX_ATTACHMENTS).optional(),
+    customTemplate: CustomTemplate.optional(),
   })
   .strict()
 
@@ -140,6 +151,7 @@ const Single = z
     ccEmails: z.array(z.string().max(254)).max(10).optional(),
     templateKey: z.string().min(1).max(60),
     attachmentIds: z.array(z.string().min(1).max(64)).max(MAX_ATTACHMENTS).optional(),
+    customTemplate: CustomTemplate.optional(),
   })
   .strict()
 

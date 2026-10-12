@@ -24,7 +24,7 @@ const DATA_IMAGE = /^data:image\/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=\s]+)
 // (font, colour, size, spacing, borders, alignment …) is kept as pasted.
 const BAD_CSS = /expression\s*\(|javascript\s*:|vbscript\s*:|behavior\s*:|-moz-binding|@import|url\s*\(\s*['"]?\s*(?!https:)/i
 
-function cleanStyle(style: string): string {
+export function cleanStyle(style: string): string {
   return style
     .split(';')
     .filter((d) => d.trim() && !BAD_CSS.test(d))
@@ -39,7 +39,7 @@ export interface CleanSignature {
   removed: string[]
 }
 
-const STYLE_ATTRS = ['style', 'align', 'valign', 'width', 'height', 'bgcolor', 'dir', 'title', 'lang']
+export const STYLE_ATTRS = ['style', 'align', 'valign', 'width', 'height', 'bgcolor', 'dir', 'title', 'lang']
 
 export function cleanSignatureHtml(input: string): CleanSignature {
   const removed = new Set<string>()
