@@ -1515,3 +1515,189 @@ describe('attachments', async () => {
     expect(options.attachments).toEqual([{ filename: 'Overview.pdf', content: Buffer.from(PDF, 'base64'), contentType: 'application/pdf' }])
   })
 })
+
+// ── Your own template (2026-10-12) ──────────────────────────────────────────
+// The user pastes their own email instead of Versions 1-3. It is reviewed, and
+// the SAME approved email (only [First Name] / [Company Name] filled) is sent to
+// every recipient, through NXT Sales exactly like the approved versions.
+describe('your own template', () => {
+  const OWN = {
+    subject: 'A quick idea for [Company Name]',
+    bodyHtml: '<p>Hi <b>[First Name]</b>,</p><p>Here is <i>our</i> own offer: <a href="https://example.com/offer">see it</a>.</p><ul><li>Fast</li><li>Simple</li></ul>',
+  }
+  const LIST = async (extra: Record<string, unknown> = {}) => ({
+    fileBase64: await xlsx([
+      HEADER,
+      ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''],
+      ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', ''],
+      ['Charlie Co', 'u', 'Cy Fox', 'Owner', 'cy@charlie.test', '', '', '', ''],
+    ]),
+    fileName: 'three.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-10',
+    startTime: '10:00',
+    intervalMinutes: 5,
+    ...extra,
+  })
+  const BEFORE = new Date('2026-10-09T12:00:00Z')
+  const at = (hhmm: string) => istToUtc('2026-10-10', hhmm)!
+  type Sent = { key: string; to: string; subject: string; html: string; text: string; attachments?: unknown[] }
+  let crm: { sends: Sent[] }
+  const smtpSent: Array<{ to: string; subject: string; html: string; text: string }> = []
+
+  beforeEach(() => {
+    env.BULK_SEND_VIA = 'crm'
+    smtpSent.length = 0
+    setBulkSenderForTests({ send: async (e) => (smtpSent.push({ to: e.to, subject: e.subject, html: e.html, text: e.text }), { messageId: 'smtp' }) })
+    crm = { sends: [] }
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: { maxFiles: 5, maxBytes: 10485760 } }),
+      send: async (e) => {
+        crm.sends.push({ key: e.key, to: e.to, subject: e.subject, html: e.html, text: e.text, ...(e.attachments ? { attachments: e.attachments } : {}) })
+        return { outcome: 'sent', messageId: `gm-${crm.sends.length}`, activityId: `act-${crm.sends.length}`, fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }
+      },
+      statuses: async () => [],
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+  })
+
+  it('the review shows the complete email for every person — the same template, no versions in turn, only the names differ', async () => {
+    const review = await svc.reviewBulk(actor, await LIST({ customTemplate: OWN }), BEFORE)
+    const ready = review.rows.filter((r) => r.status === 'ready')
+    expect(ready).toHaveLength(3)
+    expect(ready.map((r) => [r.templateKey, r.version])).toEqual([['custom', null], ['custom', null], ['custom', null]])
+    expect(ready.map((r) => r.subject)).toEqual(['A quick idea for Alpha Co', 'A quick idea for Bravo Co', 'A quick idea for Charlie Co'])
+    expect(ready[0]!.html).toContain('<b>Ann</b>')
+    expect(ready[0]!.html).toContain('<a href="https://example.com/offer">see it</a>')
+    expect(ready[0]!.html).toContain('<ul><li>Fast</li><li>Simple</li></ul>')
+    expect(ready[0]!.text).toContain('Hi Ann,')
+    const same = (r: (typeof ready)[number], first: string, co: string) => r.html!.replace(first, '#').replace(co, '$')
+    expect(same(ready[0]!, 'Ann', 'Alpha')).toBe(same(ready[1]!, 'Bob', 'Bravo'))
+    expect(review.templateNotes).toEqual([])
+    expect(store.bulkEmailCampaign).toEqual([]) // a review writes nothing
+  })
+
+  it('the review says what was taken out of the pasted template (scripts, pictures that are not links)', async () => {
+    const review = await svc.reviewBulk(actor, await LIST({ customTemplate: { ...OWN, bodyHtml: OWN.bodyHtml + '<script>alert(1)</script><img src="data:image/png;base64,AAAA">' } }), BEFORE)
+    expect(review.templateNotes.join(' ')).toMatch(/scripts and active content/)
+    expect(review.templateNotes.join(' ')).toMatch(/not a link to the web/)
+    expect(review.rows[0]!.html).not.toMatch(/<script|data:image/)
+  })
+
+  it('through NXT Sales every recipient is sent the same approved email, byte for byte (only their names differ) — never a <pre> fallback', async () => {
+    const { campaignId } = await svc.startBulk(actor, { ...(await LIST({ customTemplate: OWN })), confirm: true }, BEFORE)
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ templateKey: 'custom', subject: OWN.subject, sendVia: 'crm', signature: '', signatureHtml: '' })
+    const approved = store.bulkEmailRecipient!.map((r) => [r.toEmail, r.subject, r.body, r.bodyHtml])
+    expect(approved.every((a) => typeof a[3] === 'string' && (a[3] as string).includes('<b>'))).toBe(true)
+    for (const t of ['10:00', '10:05', '10:10']) await svc.dispatchBulkEmails(at(t))
+    expect(crm.sends.map((x) => x.to)).toEqual(['ann@alpha.test', 'bob@bravo.test', 'cy@charlie.test'])
+    // What was stored at approval is exactly what goes.
+    for (const s of crm.sends) {
+      const r = store.bulkEmailRecipient!.find((x) => x.toEmail === s.to)!
+      expect(s.html).toBe(r.bodyHtml)
+      expect(s.subject).toBe(r.subject)
+      expect(s.text).toBe(r.body)
+      expect(s.html).not.toContain('<pre')
+      expect(s.html).toContain('<ul><li>Fast</li>')
+    }
+    expect(smtpSent).toEqual([])
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.recipients.every((r) => r.ownTemplate === true && r.version === null)).toBe(true)
+    expect(view.campaign.status).toBe('completed')
+  })
+
+  it('a send with the approved versions is unchanged: no bodyHtml is stored, versions rotate', async () => {
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    expect(store.bulkEmailRecipient!.every((r) => r.bodyHtml === null)).toBe(true)
+    expect(store.bulkEmailRecipient!.map((r) => r.templateKey)).toEqual(['static_site_v1', 'static_site_v2', 'static_site_v3'])
+  })
+
+  it('a recipient whose placeholder cannot be filled is skipped with the reason — the rest go', async () => {
+    const file = await xlsx([
+      HEADER,
+      ['Alpha Co', 'u', '', 'Owner', 'ann@alpha.test', '', '', '', ''],
+      ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', ''],
+    ])
+    const review = await svc.reviewBulk(actor, { ...(await LIST({ customTemplate: OWN })), fileBase64: file }, BEFORE)
+    expect(review.rows.map((r) => r.status)).toEqual(['skipped', 'ready'])
+    expect(review.rows[0]!.reason).toMatch(/\[First Name\]/)
+  })
+
+  it('a template with no placeholders is the very same email for everyone', async () => {
+    await svc.startBulk(actor, { ...(await LIST({ customTemplate: { subject: 'Hello', bodyHtml: '<p>Same for all.</p>' } })), confirm: true }, BEFORE)
+    const rows = store.bulkEmailRecipient!
+    expect(new Set(rows.map((r) => r.bodyHtml)).size).toBe(1)
+    expect(new Set(rows.map((r) => r.body)).size).toBe(1)
+    expect(new Set(rows.map((r) => r.subject)).size).toBe(1)
+  })
+
+  it('an unusable template is refused at review and at start — nothing is created', async () => {
+    for (const customTemplate of [
+      { subject: '', bodyHtml: OWN.bodyHtml },
+      { subject: 'two\nlines', bodyHtml: OWN.bodyHtml },
+      { subject: 'S', bodyHtml: '' },
+      { subject: 'S', bodyHtml: '<script>alert(1)</script>' },
+    ]) {
+      await expect(svc.reviewBulk(actor, await LIST({ customTemplate }), BEFORE)).rejects.toThrow()
+      await expect(svc.startBulk(actor, { ...(await LIST({ customTemplate })), confirm: true }, BEFORE)).rejects.toThrow()
+    }
+    expect(store.bulkEmailCampaign).toEqual([])
+    expect(store.bulkEmailRecipient).toEqual([])
+  })
+
+  it('attachments work with your own template: the same files on every email', async () => {
+    const att = await import('../../src/outreach/bulk/attachments.js')
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: Buffer.from('%PDF-1.4 x').toString('base64') }, BEFORE)
+    await svc.startBulk(actor, { ...(await LIST({ customTemplate: OWN, attachmentIds: [pdf.id] })), confirm: true }, BEFORE)
+    for (const t of ['10:00', '10:05', '10:10']) await svc.dispatchBulkEmails(at(t))
+    expect(crm.sends).toHaveLength(3)
+    for (const s of crm.sends) expect(s.attachments).toEqual([{ filename: 'Overview.pdf', mimeType: 'application/pdf', content: Buffer.from('%PDF-1.4 x').toString('base64') }])
+  })
+
+  it('one person: your own template is reviewed in full, and the same approved email is sent', async () => {
+    const single = { firstName: 'Ann', companyName: 'Alpha Co', toEmail: 'ann@alpha.test', templateKey: 'static_site_v1', customTemplate: OWN }
+    const review = await svc.reviewSingle(actor, single)
+    expect(review).toMatchObject({ templateKey: 'custom', version: null, subject: 'A quick idea for Alpha Co', blocked: null })
+    expect(review.html).toContain('<b>Ann</b>')
+    await svc.startSingle(actor, { ...single, confirm: true }, BEFORE)
+    expect(store.bulkEmailRecipient![0]!.bodyHtml).toBe(review.html)
+    await svc.dispatchBulkEmails(new Date(BEFORE.getTime() + 60_000))
+    expect(crm.sends).toHaveLength(1)
+    expect(crm.sends[0]).toMatchObject({ to: 'ann@alpha.test', subject: review.subject, html: review.html, text: review.text })
+    expect(store.auditEvent!.some((e) => JSON.stringify(e).includes('your own template'))).toBe(true)
+  })
+
+  it('through this platform\'s mailbox (SMTP) the reviewed HTML is also sent as it is', async () => {
+    env.BULK_SEND_VIA = 'smtp'
+    await setSender()
+    await svc.startBulk(actor, { ...(await LIST({ customTemplate: OWN })), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    expect(smtpSent).toHaveLength(1)
+    const r = store.bulkEmailRecipient!.find((x) => x.toEmail === 'ann@alpha.test')!
+    expect(smtpSent[0]!.html).toBe(r.bodyHtml)
+    expect(smtpSent[0]!.subject).toBe('A quick idea for Alpha Co')
+  })
+})
+
+describe('your own template: size guard', () => {
+  it('a very large template for many recipients is refused with a clear sentence instead of building a huge review', async () => {
+    env.BULK_SEND_VIA = 'crm'
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: null }),
+      send: async () => ({ outcome: 'sent', messageId: 'g', activityId: 'a', fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }),
+      statuses: async () => [],
+    })
+    const rows = Array.from({ length: 230 }, (_, i) => [`Co ${i}`, 'u', `Person${i} Lee`, 'Owner', `p${i}@co${i}.test`, '', '', '', ''])
+    const fileBase64 = await xlsx([HEADER, ...rows])
+    const bodyHtml = `<p>Hi [First Name],</p><p>${'x'.repeat(185_000)}</p>`
+    const setup = { fileBase64, fileName: 'many.xlsx', templateKey: 'static_site_v1', startDate: '2026-10-10', startTime: '10:00', intervalMinutes: 5, customTemplate: { subject: 'S', bodyHtml } }
+    await expect(svc.reviewBulk(actor, setup, new Date('2026-10-09T12:00:00Z'))).rejects.toThrow(/too large to send to this many people/)
+    // The same template for a few people is fine.
+    const few = await xlsx([HEADER, ...rows.slice(0, 3)])
+    const review = await svc.reviewBulk(actor, { ...setup, fileBase64: few }, new Date('2026-10-09T12:00:00Z'))
+    expect(review.rows.filter((r) => r.status === 'ready')).toHaveLength(3)
+    env.BULK_SEND_VIA = 'smtp'
+  })
+})

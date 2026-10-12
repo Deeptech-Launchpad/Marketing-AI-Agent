@@ -8,6 +8,7 @@ import { useBulkCall as useCall } from './useBulkCall'
 import { SignatureEditor, SignatureView, safeHtml, textToHtml } from './SignatureEditor'
 import { SingleSend } from './SingleSend'
 import { AttachmentsField, attachmentList, type BulkAttachment } from './AttachmentsField'
+import { customTemplateReady, EmailTemplateField, type CustomTemplateValue } from './EmailTemplateField'
 import './bulk.css'
 
 // BULK EMAIL (2026-10-08) — simple and standalone:
@@ -68,13 +69,16 @@ interface ReviewRow {
   subject: string | null
   text: string | null
   html?: string | null
-  /** The approved version this person receives (1, 2 or 3). */
+  /** The approved version this person receives (1, 2 or 3); null with templateKey 'custom' = the user's own template. */
   version?: number | null
+  templateKey?: string | null
   status: 'ready' | 'skipped'
   reason: string | null
   scheduledLocal: string | null
 }
 interface Review {
+  /** What was taken out of the pasted template for safety (2026-10-12), in words. */
+  templateNotes?: string[]
   /** The files that go with every email (2026-10-12), and why they cannot go (null = they can). */
   attachments?: BulkAttachment[]
   attachmentProblem?: string | null
@@ -111,6 +115,7 @@ interface RecipientRow {
   scheduledLocal: string | null
   sentLocal: string | null
   version?: number | null
+  ownTemplate?: boolean
   tracking?: OpenTracking | null
 }
 
@@ -509,6 +514,8 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   // Files that go with every email of this send, uploaded once below the preview.
   const [attachments, setAttachments] = useState<BulkAttachment[]>([])
   const [uploading, setUploading] = useState(false)
+  // null = the approved Versions 1, 2 and 3; otherwise the user's OWN template (2026-10-12).
+  const [ownTemplate, setOwnTemplate] = useState<CustomTemplateValue | null>(null)
   const call = useCall(() => undefined)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -537,6 +544,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     startTime,
     intervalMinutes: Number(interval),
     ...(attachments.length ? { attachmentIds: attachments.map((a) => a.id) } : {}),
+    ...(ownTemplate ? { customTemplate: { subject: ownTemplate.subject.trim(), bodyHtml: ownTemplate.bodyHtml } } : {}),
   })
   const loadReview = () =>
     void call.run('review', async () => {
@@ -612,6 +620,14 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               real customer list: only work addresses are used.
             </span>
           </label>
+          <EmailTemplateField
+            value={ownTemplate}
+            onChange={(next) => {
+              setOwnTemplate(next)
+              setReview(null)
+              setConfirmed(false)
+            }}
+          />
           {analysis && (
             <>
               <ul className="otr-list">
@@ -658,7 +674,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
           <div className="row" style={{ marginTop: 'var(--s3)' }}>
             <Button
               variant="primary"
-              disabled={!analysis || sendable.length === 0}
+              disabled={!analysis || sendable.length === 0 || !customTemplateReady(ownTemplate)}
               busy={call.busy === 'review'}
               onClick={() => {
                 setConfirmed(false)
@@ -682,6 +698,9 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                 <strong>{review.counts.validEmails} emails</strong> will be sent · {review.counts.skipped} skipped · {review.counts.noWorkAddress} rows with no usable address. Click Preview to read
                 any email exactly as it will be sent.
               </p>
+              {review.templateNotes && review.templateNotes.length > 0 && (
+                <p className="otr-warn">Taken out of your template for safety: {review.templateNotes.join('; ')}.</p>
+              )}
               <div className="otr-scroll" style={{ maxHeight: 360, overflowY: 'auto' }}>
                 <table className="otr-table">
                   <thead>
@@ -699,7 +718,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                       <tr key={r.position} aria-selected={r.position === previewPos}>
                         <td>{r.companyName}</td>
                         <td>{r.contactName ?? '—'}</td>
-                        <td>{r.version ? `Version ${r.version}` : '—'}</td>
+                        <td>{r.templateKey === 'custom' ? 'Your template' : r.version ? `Version ${r.version}` : '—'}</td>
                         <td>{r.toEmail ?? '—'}</td>
                         <td className="cell-dim">{r.ccEmails.join(', ') || '—'}</td>
                         <td>
@@ -723,7 +742,8 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                     {preview.ccEmails.length ? ` · CC: ${preview.ccEmails.join(', ')}` : ''}
                   </p>
                   <p>
-                    {preview.version && <Chip tone="info">Version {preview.version}</Chip>} <span className="field-label">Subject</span> {preview.subject}
+                    {preview.templateKey === 'custom' ? <Chip tone="info">Your template</Chip> : preview.version && <Chip tone="info">Version {preview.version}</Chip>}{' '}
+                    <span className="field-label">Subject</span> {preview.subject}
                   </p>
                   {attachments.length > 0 && <p className="cell-dim">Attachments: {attachmentList(attachments)}</p>}
                   {preview.html ? (
@@ -823,6 +843,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   From: {review.sender.fromEmail ?? 'not set'} <SenderStatus sender={review.sender} />
                   {review.sender.ccEmails.length > 0 && <span className="cell-dim"> · CC on every email: {review.sender.ccEmails.join(', ')}</span>}
                 </li>
+                {ownTemplate && <li>Your own template: every recipient gets this same email, with [First Name] and [Company Name] filled for each person.</li>}
                 {review.attachments && review.attachments.length > 0 && <li>Attachments on every email: {attachmentList(review.attachments)}</li>}
               </ul>
               <div className="otr-scroll" style={{ maxHeight: 220, overflowY: 'auto' }}>
@@ -978,7 +999,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
                     {r.companyName}
                     <div className="cell-dim">
                       {r.contactName ?? ''}
-                      {r.version ? ` · Version ${r.version}` : ''}
+                      {r.ownTemplate ? ' · Your template' : r.version ? ` · Version ${r.version}` : ''}
                     </div>
                     {r.body && (
                       <details open={open === r.id} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open ? r.id : null)}>

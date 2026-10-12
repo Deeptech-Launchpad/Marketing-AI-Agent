@@ -24,3 +24,16 @@
 .bulk-attachments {
   margin-top: var(--s3);
 }
+
+/* Your own email template (2026-10-12). */
+.bulk-template {
+  margin: var(--s3) 0;
+  border: 0;
+  padding: 0;
+}
+.bulk-template-own {
+  margin-top: var(--s2);
+}
+.bulk-template-body {
+  min-height: 220px;
+}

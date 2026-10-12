@@ -5,6 +5,7 @@ import { Button, Chip, Panel } from '../../components/ui/primitives'
 import { useBulkCall as useCall } from './useBulkCall'
 import { safeHtml } from './SignatureEditor'
 import { AttachmentsField, attachmentList, type BulkAttachment } from './AttachmentsField'
+import { customTemplateReady, EmailTemplateField, type CustomTemplateValue } from './EmailTemplateField'
 
 // SEND TO ONE PERSON (2026-10-08): the same approved Version 1, 2 or 3, sender
 // and checks as a bulk list — without an Excel file. Type the person in,
@@ -15,6 +16,8 @@ interface SingleReview {
   toEmail: string
   ccEmails: string[]
   version: number | null
+  templateKey?: string
+  templateNotes?: string[]
   subject: string
   text: string
   html: string
@@ -48,6 +51,8 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
   // Files that go with the email, uploaded below the preview (2026-10-12).
   const [attachments, setAttachments] = useState<BulkAttachment[]>([])
   const [uploading, setUploading] = useState(false)
+  // null = one of the approved versions chosen below; otherwise the user's OWN template (2026-10-12).
+  const [template, setTemplate] = useState<CustomTemplateValue | null>(null)
   // The review that follows a change of files runs on its own (so no click can be dropped by the busy guard),
   // and only the LATEST answer is used: an older answer arriving late is ignored.
   const [reviewing, setReviewing] = useState(false)
@@ -62,6 +67,7 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
     ccEmails: splitEmails(cc),
     templateKey,
     ...(attachments.length ? { attachmentIds: attachments.map((a) => a.id) } : {}),
+    ...(template ? { customTemplate: { subject: template.subject.trim(), bodyHtml: template.bodyHtml } } : {}),
   })
   // Any change means the email must be reviewed again.
   const changed = <T,>(set: (v: T) => void) => (v: T) => {
@@ -106,7 +112,7 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments])
 
-  const ready = firstName.trim() && companyName.trim() && toEmail.trim()
+  const ready = firstName.trim() && companyName.trim() && toEmail.trim() && customTemplateReady(template)
   const canSend = review && !review.blocked && !review.sending.reason && review.sender.authorized && confirmed && canApprove && !uploading && !reviewing
 
   return (
@@ -136,17 +142,20 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
           <span className="field-label">CC (optional)</span>
           <input className="otr-input" aria-label="CC" value={cc} onChange={(e) => changed(setCc)(e.target.value)} />
         </label>
-        <label>
-          <span className="field-label">Approved email</span>
-          <select className="otr-input" aria-label="Approved email" value={templateKey} onChange={(e) => changed(setTemplateKey)(e.target.value)}>
-            {VERSIONS.map((v) => (
-              <option key={v.key} value={v.key}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        {!template && (
+          <label>
+            <span className="field-label">Approved email</span>
+            <select className="otr-input" aria-label="Approved email" value={templateKey} onChange={(e) => changed(setTemplateKey)(e.target.value)}>
+              {VERSIONS.map((v) => (
+                <option key={v.key} value={v.key}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
+      <EmailTemplateField value={template} onChange={changed(setTemplate)} />
       {(call.error || refreshError) && (
         <p className="otr-err" role="alert">
           {call.error ?? refreshError}
@@ -168,12 +177,15 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
             </p>
             {review.attachments && review.attachments.length > 0 && <p className="cell-dim">Attachments: {attachmentList(review.attachments)}</p>}
             <p>
-              <Chip tone="info">Version {review.version}</Chip> <span className="field-label">Subject</span> {review.subject}
+              <Chip tone="info">{review.templateKey === 'custom' ? 'Your template' : `Version ${review.version}`}</Chip> <span className="field-label">Subject</span> {review.subject}
             </p>
             <div className="bulk-email-html" dangerouslySetInnerHTML={{ __html: safeHtml(review.html) }} />
           </article>
           <AttachmentsField value={attachments} onChange={setAttachments} onBusyChange={setUploading} />
           {review.previouslySentLocal && <p className="note">This address was last emailed on {review.previouslySentLocal}.</p>}
+          {review.templateNotes && review.templateNotes.length > 0 && (
+            <p className="otr-warn">Taken out of your template for safety: {review.templateNotes.join('; ')}.</p>
+          )}
           {review.blocked && <p className="otr-warn">{review.blocked}</p>}
           {review.sending.reason && <p className="otr-warn">{review.sending.reason}</p>}
           {!review.sending.reason && review.sender.problem && <p className="otr-warn">{review.sender.problem}</p>}
