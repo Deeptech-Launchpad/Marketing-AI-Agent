@@ -16,6 +16,7 @@ const render = (ui: ReactElement) => rtlRender(<ThemeProvider><MemoryRouter>{ui}
 
 interface Call { url: string; method: string; body: Record<string, unknown> | null }
 let calls: Call[] = []
+const uploaded = new Map<string, { id: string; fileName: string; mimeType: string; sizeBytes: number }>()
 const posts = () => calls.filter((c) => c.method === 'POST')
 
 const SENDING: { enabled: boolean; mailboxConfigured: boolean; account: { email: string; source: 'bulk' | 'system' } | null; reason: string | null } = {
@@ -111,7 +112,7 @@ const TRACKED = {
   openTracking: { enabled: true, reason: null },
 }
 
-function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string } = {}) {
+function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string; attachmentProblem?: string } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const u = String(url)
@@ -123,10 +124,25 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
     if (method === 'POST' && u.endsWith('/outreach/bulk/sender')) return json(opts.saved ?? sender)
     if (method === 'POST' && u.endsWith('/outreach/bulk/sender/check')) return json(sender)
     if (u.endsWith('/outreach/bulk/sender')) return json(sender)
-    if (method === 'POST' && u.endsWith('/outreach/bulk/single/review')) return json({ ...SINGLE_REVIEW, blocked: opts.singleBlocked ?? null, sender, sending })
+    // Attachments (2026-10-12): stored one by one; the reviews echo the files they were given.
+    const files = (ids: unknown) => ((ids as string[] | undefined) ?? []).map((id) => uploaded.get(id)).filter(Boolean)
+    if (method === 'POST' && u.endsWith('/outreach/bulk/attachments')) {
+      const b = JSON.parse(String(init.body)) as { fileName: string; contentBase64: string }
+      const a = { id: `att${uploaded.size + 1}`, fileName: b.fileName, mimeType: 'application/pdf', sizeBytes: Math.round((b.contentBase64.length * 3) / 4) }
+      uploaded.set(a.id, a)
+      return json(a, 201)
+    }
+    if (method === 'DELETE' && u.includes('/outreach/bulk/attachments/')) return json({ id: u.split('/').pop(), removed: true })
+    if (method === 'POST' && u.endsWith('/outreach/bulk/single/review')) {
+      const b = JSON.parse(String(init.body)) as { attachmentIds?: string[] }
+      return json({ ...SINGLE_REVIEW, blocked: opts.singleBlocked ?? null, sender, sending, attachments: files(b.attachmentIds) })
+    }
     if (method === 'POST' && u.endsWith('/outreach/bulk/single/start')) return json({ campaignId: 'bk1', scheduled: 1 }, 201)
     if (method === 'POST' && u.endsWith('/outreach/bulk/analyze')) return json(ANALYSIS)
-    if (method === 'POST' && u.endsWith('/outreach/bulk/review')) return json({ ...REVIEW, sender, sending })
+    if (method === 'POST' && u.endsWith('/outreach/bulk/review')) {
+      const b = JSON.parse(String(init.body)) as { attachmentIds?: string[] }
+      return json({ ...REVIEW, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null })
+    }
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
     if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending, sender })
@@ -163,6 +179,7 @@ const field = (text: string) => screen.getByText(text).closest('label')!.querySe
 
 beforeEach(() => {
   calls = []
+  uploaded.clear()
 })
 
 describe('step 1: upload Excel', () => {
@@ -471,5 +488,126 @@ describe('a standalone workflow', () => {
     for (const [file, src] of Object.entries(sources)) {
       for (const m of src.matchAll(/from '([^']+)'/g)) expect(m[1], `${file}`).not.toMatch(/outreach\/|\.\.\/Outreach/)
     }
+  })
+})
+
+describe('attachments (2026-10-12): upload once below the preview, the same files on every email', () => {
+  const pdf = () => new File(['%PDF-1.4 overview'], 'overview.pdf', { type: 'application/pdf' })
+
+  it('bulk: files added below the preview show in the preview and on the approval page, and go with Start', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    const preview = await screen.findByLabelText('Email preview')
+    const section = screen.getByRole('region', { name: 'Attachments' })
+    expect(within(section).getByText(/same files go with every email/i)).toBeInTheDocument()
+    await userEvent.upload(within(section).getByLabelText('Choose files to attach'), pdf())
+    expect(await within(section).findByRole('button', { name: /remove overview\.pdf/i })).toBeInTheDocument()
+    expect(within(preview).getByText(/Attachments: overview\.pdf/)).toBeInTheDocument()
+    expect(posts().find((c) => c.url.endsWith('/outreach/bulk/attachments'))!.body).toMatchObject({ fileName: 'overview.pdf' })
+
+    await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+    expect(await screen.findByText(/Attachments on every email: overview\.pdf/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ attachmentIds: ['att1'], confirm: true })
+  })
+
+  it('bulk: without files, nothing about attachments is sent with Start', async () => {
+    stub()
+    await toSchedule()
+    await userEvent.click(await screen.findByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect('attachmentIds' in posts().find((c) => c.url.endsWith('/start'))!.body!).toBe(false)
+  })
+
+  it('a program or script is refused on the screen and never uploaded', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    const section = screen.getByRole('region', { name: 'Attachments' })
+    await userEvent.upload(within(section).getByLabelText('Choose files to attach'), new File(['MZ'], 'setup.exe'), { applyAccept: false })
+    expect(await within(section).findByRole('alert')).toHaveTextContent(/programs and scripts cannot be attached/)
+    expect(posts().some((c) => c.url.endsWith('/outreach/bulk/attachments'))).toBe(false)
+  })
+
+  it('a file can be removed before sending', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    const section = screen.getByRole('region', { name: 'Attachments' })
+    await userEvent.upload(within(section).getByLabelText('Choose files to attach'), pdf())
+    await userEvent.click(await within(section).findByRole('button', { name: /remove overview\.pdf/i }))
+    await waitFor(() => expect(within(section).queryByText(/overview\.pdf/)).not.toBeInTheDocument())
+    expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/outreach/bulk/attachments/att1'))).toBe(true)
+  })
+
+  it('bulk: when NXT Sales cannot take attachments, the approval page says so and Start stays disabled', async () => {
+    stub({ attachmentProblem: 'NXT Sales on this server cannot send attachments yet (it needs its update).' })
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    await userEvent.upload(within(screen.getByRole('region', { name: 'Attachments' })).getByLabelText('Choose files to attach'), pdf())
+    await screen.findByText(/Attachments: overview\.pdf/)
+    await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+    expect(await screen.findByText(/cannot send attachments yet/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    expect(screen.getByRole('button', { name: /approve and start sending/i })).toBeDisabled()
+  })
+
+  it('one person: two files added quickly — the preview and Approve use the review of BOTH files, never a stale one', async () => {
+    stub()
+    const realFetch = globalThis.fetch
+    // The first re-review (one file) answers late; the second (two files) answers at once.
+    let slowOnce = true
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      const res = realFetch(url, init)
+      if (String(url).endsWith('/single/review') && JSON.parse(String(init.body)).attachmentIds?.length === 1 && slowOnce) {
+        slowOnce = false
+        await new Promise((r) => setTimeout(r, 150))
+      }
+      return res
+    })
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /send to one person/i }))
+    await userEvent.type(screen.getByLabelText('First name'), 'Priya')
+    await userEvent.type(screen.getByLabelText('Company name'), 'Acme Supply')
+    await userEvent.type(screen.getByLabelText('Email'), 'priya@acme.test')
+    await userEvent.click(screen.getByRole('button', { name: /review the email/i }))
+    await screen.findByLabelText('Email preview')
+    const input = within(screen.getByRole('region', { name: 'Attachments' })).getByLabelText('Choose files to attach')
+    await userEvent.upload(input, [pdf(), new File(['%PDF-1.4 second'], 'second.pdf', { type: 'application/pdf' })])
+    const preview = screen.getByLabelText('Email preview')
+    await waitFor(() => expect(within(preview).getByText(/Attachments: overview\.pdf.*second\.pdf/)).toBeInTheDocument())
+    await new Promise((r) => setTimeout(r, 300)) // the slow, older answer has arrived by now
+    expect(within(screen.getByLabelText('Email preview')).getByText(/Attachments: overview\.pdf.*second\.pdf/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /approve sending it now/i }))
+    expect(screen.getByRole('button', { name: /approve and send/i })).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/single/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/single/start'))!.body).toMatchObject({ attachmentIds: ['att1', 'att2'] })
+  })
+
+  it('one person: a file added below the preview is reviewed again, shown, and sent with the email', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /send to one person/i }))
+    await userEvent.type(screen.getByLabelText('First name'), 'Priya')
+    await userEvent.type(screen.getByLabelText('Company name'), 'Acme Supply')
+    await userEvent.type(screen.getByLabelText('Email'), 'priya@acme.test')
+    await userEvent.click(screen.getByRole('button', { name: /review the email/i }))
+    await screen.findByLabelText('Email preview')
+    await userEvent.upload(within(screen.getByRole('region', { name: 'Attachments' })).getByLabelText('Choose files to attach'), pdf())
+    const preview = await screen.findByLabelText('Email preview')
+    expect(await within(preview).findByText(/Attachments: overview\.pdf/)).toBeInTheDocument()
+    expect(posts().filter((c) => c.url.endsWith('/single/review')).pop()!.body).toMatchObject({ attachmentIds: ['att1'] })
+    await userEvent.click(screen.getByRole('checkbox', { name: /approve sending it now/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/single/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/single/start'))!.body).toMatchObject({ attachmentIds: ['att1'], confirm: true })
   })
 })

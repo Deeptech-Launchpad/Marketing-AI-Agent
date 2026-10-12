@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Send } from 'lucide-react'
 import { api } from '../../lib/api'
 import { Button, Chip, Panel } from '../../components/ui/primitives'
 import { useBulkCall as useCall } from './useBulkCall'
 import { safeHtml } from './SignatureEditor'
+import { AttachmentsField, attachmentList, type BulkAttachment } from './AttachmentsField'
 
 // SEND TO ONE PERSON (2026-10-08): the same approved Version 1, 2 or 3, sender
 // and checks as a bulk list — without an Excel file. Type the person in,
@@ -21,6 +22,7 @@ interface SingleReview {
   previouslySentLocal: string | null
   sender: { fromEmail: string | null; authorized: boolean; problem: string | null }
   sending: { reason: string | null }
+  attachments?: BulkAttachment[]
 }
 
 const VERSIONS = [
@@ -43,27 +45,69 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
   const [templateKey, setTemplateKey] = useState(VERSIONS[0]!.key)
   const [review, setReview] = useState<SingleReview | null>(null)
   const [confirmed, setConfirmed] = useState(false)
+  // Files that go with the email, uploaded below the preview (2026-10-12).
+  const [attachments, setAttachments] = useState<BulkAttachment[]>([])
+  const [uploading, setUploading] = useState(false)
+  // The review that follows a change of files runs on its own (so no click can be dropped by the busy guard),
+  // and only the LATEST answer is used: an older answer arriving late is ignored.
+  const [reviewing, setReviewing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  const latest = useRef(0)
   const call = useCall(() => undefined)
 
-  const body = () => ({ firstName: firstName.trim(), companyName: companyName.trim(), toEmail: toEmail.trim(), ccEmails: splitEmails(cc), templateKey })
+  const body = () => ({
+    firstName: firstName.trim(),
+    companyName: companyName.trim(),
+    toEmail: toEmail.trim(),
+    ccEmails: splitEmails(cc),
+    templateKey,
+    ...(attachments.length ? { attachmentIds: attachments.map((a) => a.id) } : {}),
+  })
   // Any change means the email must be reviewed again.
   const changed = <T,>(set: (v: T) => void) => (v: T) => {
+    latest.current += 1
+    setReviewing(false)
     set(v)
     setReview(null)
     setConfirmed(false)
   }
-  const doReview = () =>
+  const doReview = () => {
+    latest.current += 1
+    setReviewing(false)
+    setRefreshError(null)
     void call.run('review', async () => {
       setReview((await api.post('/outreach/bulk/single/review', body())) as SingleReview)
     })
+  }
   const send = () =>
     void call.run('send', async () => {
       const r = (await api.post('/outreach/bulk/single/start', { ...body(), confirm: confirmed })) as { campaignId: string }
       onStarted(r.campaignId)
     })
 
+  // Changing the files means the email is reviewed again (and approved again).
+  useEffect(() => {
+    if (!review) return
+    setConfirmed(false)
+    setRefreshError(null)
+    setReviewing(true)
+    const mine = ++latest.current
+    api
+      .post('/outreach/bulk/single/review', body())
+      .then((r) => {
+        if (latest.current === mine) setReview(r as SingleReview)
+      })
+      .catch((err) => {
+        if (latest.current === mine) setRefreshError((err as Error)?.message || 'The email could not be reviewed again.')
+      })
+      .finally(() => {
+        if (latest.current === mine) setReviewing(false)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachments])
+
   const ready = firstName.trim() && companyName.trim() && toEmail.trim()
-  const canSend = review && !review.blocked && !review.sending.reason && review.sender.authorized && confirmed && canApprove
+  const canSend = review && !review.blocked && !review.sending.reason && review.sender.authorized && confirmed && canApprove && !uploading && !reviewing
 
   return (
     <Panel
@@ -103,11 +147,12 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
           </select>
         </label>
       </div>
-      {call.error && (
+      {(call.error || refreshError) && (
         <p className="otr-err" role="alert">
-          {call.error}
+          {call.error ?? refreshError}
         </p>
       )}
+      {reviewing && <p className="note">Checking the email again with the files…</p>}
       {!review ? (
         <div className="row" style={{ marginTop: 'var(--s3)' }}>
           <Button variant="primary" disabled={!ready} busy={call.busy === 'review'} onClick={doReview}>
@@ -121,11 +166,13 @@ export function SingleSend({ canApprove, onCancel, onStarted }: { canApprove: bo
               From: {review.sender.fromEmail ?? 'not set'} · To: {review.toEmail}
               {review.ccEmails.length ? ` · CC: ${review.ccEmails.join(', ')}` : ''}
             </p>
+            {review.attachments && review.attachments.length > 0 && <p className="cell-dim">Attachments: {attachmentList(review.attachments)}</p>}
             <p>
               <Chip tone="info">Version {review.version}</Chip> <span className="field-label">Subject</span> {review.subject}
             </p>
             <div className="bulk-email-html" dangerouslySetInnerHTML={{ __html: safeHtml(review.html) }} />
           </article>
+          <AttachmentsField value={attachments} onChange={setAttachments} onBusyChange={setUploading} />
           {review.previouslySentLocal && <p className="note">This address was last emailed on {review.previouslySentLocal}.</p>}
           {review.blocked && <p className="otr-warn">{review.blocked}</p>}
           {review.sending.reason && <p className="otr-warn">{review.sending.reason}</p>}

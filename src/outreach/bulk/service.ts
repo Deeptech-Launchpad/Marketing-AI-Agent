@@ -7,6 +7,7 @@ import { checkSuppression } from '../suppression.js'
 import { readSpreadsheet } from './excel.js'
 import { extractContacts, firstNameOf, recipientsOf, strictEmail } from './extract.js'
 import { fmtIst, IST, istToUtc, planSequential } from './schedule.js'
+import { stagedAttachments, linkAttachments, campaignAttachments, campaignAttachmentInfo, type AttachmentInfo, type AttachmentFile } from './attachments.js'
 import { crmBulk, crmKeyOf, type CrmSender } from './crmSend.js'
 import { checkSender, type SenderCheck } from './senders.js'
 import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
@@ -354,6 +355,41 @@ async function crmBlocker(cache: Map<string, CrmSender>): Promise<string | null>
   return s.ready ? null : s.problem ?? 'NXT Sales cannot send yet.'
 }
 
+// ── Attachments (2026-10-12) ──────────────────────────────────────────────
+//
+// The same files go with every email of a send. Through NXT Sales they are
+// only allowed when NXT Sales says it accepts them (an older NXT Sales would
+// ignore them, and the emails would go without the files).
+
+/** The staged files a review or start names, and why they cannot go (null = they can). */
+async function sendAttachments(actor: Actor, ids: string[] | undefined): Promise<{ list: AttachmentInfo[]; problem: string | null }> {
+  const list = await stagedAttachments(actor, ids)
+  if (!list.length || !sendingViaCrm()) return { list, problem: null }
+  const cap = (await crmBulk().sender()).attachments
+  const total = list.reduce((sum, a) => sum + a.sizeBytes, 0)
+  if (!cap) return { list, problem: 'NXT Sales on this server cannot send attachments yet (it needs its update). Remove the attachments, or wait for the update.' }
+  if (list.length > cap.maxFiles || total > cap.maxBytes) {
+    return { list, problem: `NXT Sales accepts at most ${cap.maxFiles} files and ${Math.floor(cap.maxBytes / 1048576)} MB in all.` }
+  }
+  return { list, problem: null }
+}
+
+/** Links the files to a send that was just created; if that fails the send is cancelled before anything is scheduled. */
+async function linkOrCancel(actor: Actor, list: AttachmentInfo[], campaignId: string): Promise<void> {
+  if (!list.length) return
+  try {
+    await linkAttachments(actor, list.map((a) => a.id), campaignId)
+  } catch (err) {
+    await prisma.bulkEmailCampaign.update({
+      where: { id: campaignId },
+      data: { status: 'cancelled', statusReason: 'An attachment was no longer available; nothing was sent.', completedAt: new Date() },
+    })
+    throw err
+  }
+}
+
+const attachmentNames = (list: AttachmentInfo[]) => (list.length ? `; attachments: ${list.map((a) => a.fileName).join(', ')}` : '')
+
 // ── Upload ─────────────────────────────────────────────────────────────────
 
 function decodeFile(fileBase64: string): Buffer {
@@ -385,6 +421,8 @@ export interface BulkSetup {
   /** Test option: also use webmail addresses (gmail, yahoo …). Off by default. */
   allowWebmail?: boolean
   name?: string
+  /** Staged files (2026-10-12) that go with every email of the send. */
+  attachmentIds?: string[]
 }
 
 export interface ReviewRow {
@@ -422,6 +460,7 @@ function checkedSetup(s: BulkSetup) {
 /** Every company's email, its time and its status — exactly what Start would store. Nothing is written. */
 export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const setup = checkedSetup(s)
+  const attachments = await sendAttachments(actor, s.attachmentIds)
   const profile = profileOf(await tenantSettings(actor.tenantId))
   // Through NXT Sales the Gmail account's own signature is added there, not here.
   const signature = sendingViaCrm() ? '' : cleanSignature(profile.signature)
@@ -537,6 +576,8 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     from: { email: profile.fromEmail || null },
     sender: await senderView(actor.tenantId),
     sending: bulkSendingStatus(),
+    attachments: attachments.list,
+    attachmentProblem: attachments.problem,
   }
 }
 
@@ -553,6 +594,8 @@ export interface SingleSetup {
   ccEmails?: string[]
   /** static_site_v1 / v2 / v3. */
   templateKey: string
+  /** Staged files (2026-10-12) that go with the email. */
+  attachmentIds?: string[]
 }
 
 async function checkedSingle(actor: Actor, s: SingleSetup) {
@@ -578,6 +621,7 @@ async function checkedSingle(actor: Actor, s: SingleSetup) {
 /** The one email exactly as it will be sent. Nothing is written. */
 export async function reviewSingle(actor: Actor, s: SingleSetup) {
   const x = await checkedSingle(actor, s)
+  const attachments = await sendAttachments(actor, s.attachmentIds)
   const sup = await checkSuppression({
     tenantId: actor.tenantId,
     crmCompanyId: `bulk:${x.companyName.toLowerCase()}`,
@@ -606,7 +650,7 @@ export async function reviewSingle(actor: Actor, s: SingleSetup) {
         ? possiblyEmailedReason(x.toEmail, unconfirmed.crmAttemptedAt)
         : email.unfilled.length
         ? `Could not fill ${email.unfilled.join(', ')}.`
-        : null
+        : attachments.problem
   return {
     toEmail: x.toEmail,
     ccEmails: x.ccEmails,
@@ -621,6 +665,7 @@ export async function reviewSingle(actor: Actor, s: SingleSetup) {
     previouslySentLocal: lastSent?.sentAt ? fmtIst(lastSent.sentAt) : null,
     sender: await senderView(actor.tenantId),
     sending: bulkSendingStatus(),
+    attachments: attachments.list,
   }
 }
 
@@ -663,11 +708,13 @@ export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boo
       intervalMinutes: via === 'crm' ? CRM_MIN_INTERVAL_MINUTES : 1,
       dailyCap: 0,
       totalRows: 1,
+      attachmentCount: review.attachments.length,
       createdByCrmUserId: actor.crmUserId,
       approvedByCrmUserId: actor.crmUserId,
       approvedAt: now,
     },
   })
+  await linkOrCancel(actor, review.attachments, id)
   await prisma.bulkEmailRecipient.create({
     data: {
       id: newId(),
@@ -687,7 +734,11 @@ export async function startSingle(actor: Actor, s: SingleSetup & { confirm?: boo
       scheduledAt: now,
     },
   })
-  await record(actor, id, 'started', `Single email approved: Version ${review.version} to ${x.toEmail} from ${fromEmail}`, { toEmail: x.toEmail, version: review.version })
+  await record(actor, id, 'started', `Single email approved: Version ${review.version} to ${x.toEmail} from ${fromEmail}${attachmentNames(review.attachments)}`, {
+    toEmail: x.toEmail,
+    version: review.version,
+    attachments: review.attachments.map((a) => ({ fileName: a.fileName, sizeBytes: a.sizeBytes })),
+  })
   return { campaignId: id, scheduled: 1 }
 }
 
@@ -707,6 +758,7 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   const review = await reviewBulk(actor, s, now)
   const ready = review.rows.filter((r) => r.status === 'ready')
   if (!ready.length) throw new ConflictError('No email can be sent from this file — see the reason against each company.')
+  if (review.attachmentProblem) throw new ConflictError(`Not started — ${review.attachmentProblem}`)
 
   const id = newId()
   const name = (s.name ?? '').trim().slice(0, 120) || `${s.fileName?.replace(/\.xlsx$/i, '') || 'Bulk email'} — ${fmtIst(now).replace(/, \d{1,2}:\d{2} [AP]M IST$/, '')}`
@@ -737,11 +789,13 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       intervalMinutes: checked.intervalMinutes,
       dailyCap: 0,
       totalRows: review.counts.rowsWithCompany,
+      attachmentCount: review.attachments.length,
       createdByCrmUserId: actor.crmUserId,
       approvedByCrmUserId: actor.crmUserId,
       approvedAt: now,
     },
   })
+  await linkOrCancel(actor, review.attachments, id)
   await prisma.bulkEmailRecipient.createMany({
     data: review.rows.map((r, i) => ({
       id: newId(),
@@ -761,12 +815,13 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       scheduledAt: r.scheduledAt ? new Date(r.scheduledAt) : null,
     })),
   })
-  await record(actor, id, 'started', `Bulk email "${name}" approved: ${ready.length} emails from ${fromEmail}, from ${review.schedule.firstLocal}, ${checked.intervalMinutes} min apart; ${review.counts.skipped} skipped`, {
+  await record(actor, id, 'started', `Bulk email "${name}" approved: ${ready.length} emails from ${fromEmail}, from ${review.schedule.firstLocal}, ${checked.intervalMinutes} min apart; ${review.counts.skipped} skipped${attachmentNames(review.attachments)}`, {
     validEmails: ready.length,
     skipped: review.counts.skipped,
     noWorkAddress: review.counts.noWorkAddress,
     firstAt: review.schedule.firstLocal,
     estimatedCompletion: review.schedule.estimatedCompletionLocal,
+    attachments: review.attachments.map((a) => ({ fileName: a.fileName, sizeBytes: a.sizeBytes })),
   })
   return { campaignId: id, scheduled: ready.length, skipped: review.counts.skipped }
 }
@@ -865,6 +920,7 @@ export async function bulkView(tenantId: string, id: string) {
     })),
     sending: bulkSendingStatus(),
     openTracking: screenTracking(),
+    attachments: await campaignAttachmentInfo(c.id),
   }
 }
 
@@ -952,7 +1008,9 @@ export async function dispatchBulkEmails(now = new Date()): Promise<{ sent: numb
           const system = { tenantId: c.tenantId, crmUserId: 'bulk-sender' }
           if (c.sendVia === 'crm') {
             // Never sent any other way: if NXT Sales cannot send, the send pauses.
-            const why = await crmBlocker(crmCache)
+            const why =
+              (await crmBlocker(crmCache)) ??
+              (c.attachmentCount > 0 && !crmCache.get('sender')?.attachments ? 'NXT Sales on this server cannot send attachments (it needs its update).' : null)
             if (why) {
               await prisma.bulkEmailCampaign.update({ where: { id: c.id }, data: { status: 'paused', statusReason: `Paused — ${why}` } })
               await record(system, c.id, 'paused', `Bulk email "${c.name}" paused: NXT Sales cannot send`, { reason: why })
@@ -1072,6 +1130,16 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
     await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { status: 'skipped', reason: sup.suppressed ? `On the opt-out list: ${sup.detail ?? sup.reason}` : 'Nothing to send.' } })
     return 'skipped'
   }
+  // The send's files: exactly as many as were approved, or the email does not go.
+  let files: AttachmentFile[] = []
+  if (c.attachmentCount > 0) {
+    files = await campaignAttachments(c.id)
+    if (files.length !== c.attachmentCount) {
+      await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { status: 'failed', reason: 'Its attachments could not be loaded, so it was not sent.' } })
+      logger.error({ campaignId: c.id, recipientId: r.id, expected: c.attachmentCount, found: files.length }, 'bulk email: attachments missing; email not sent')
+      return 'failed'
+    }
+  }
   // The version this person was given at review.
   const template: BulkTemplate = bulkTemplate(r.templateKey ?? c.templateKey) ?? STATIC_SITE
   const email = composeBulkEmail({ template, firstName: firstNameOf(r.contactName), companyName: r.companyName, signature: c.signature, signatureHtml: c.signatureHtml })
@@ -1081,7 +1149,7 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
 
   // Through NXT Sales: its Gmail pipeline sends and tracks; this platform adds
   // no image of its own and never falls back to its own mailbox.
-  if (c.sendVia === 'crm') return sendThroughCrm(c, r, reviewedHtml, now)
+  if (c.sendVia === 'crm') return sendThroughCrm(c, r, reviewedHtml, now, files)
 
   // Open tracking: this email's own invisible image, only when a verified
   // public HTTPS address is in place. Any problem here means the email goes
@@ -1107,7 +1175,16 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
   }
 
   try {
-    const res = await bulkSender().send({ fromEmail: c.fromEmail, fromName: c.fromName, to: r.toEmail, cc: (r.ccEmails as string[]) ?? [], subject: r.subject, text: r.body, html })
+    const res = await bulkSender().send({
+      fromEmail: c.fromEmail,
+      fromName: c.fromName,
+      to: r.toEmail,
+      cc: (r.ccEmails as string[]) ?? [],
+      subject: r.subject,
+      text: r.body,
+      html,
+      ...(files.length ? { attachments: files } : {}),
+    })
     await prisma.bulkEmailRecipient.update({
       where: { id: r.id },
       data: { status: 'sent', sentAt: now, messageId: res.messageId, reason: null, trackingEnabled: tracked, trackingNote: tracked ? null : trackingNote },
@@ -1121,11 +1198,21 @@ async function sendOne(c: Campaign, r: Recipient, now: Date): Promise<'sent' | '
   }
 }
 
-async function sendThroughCrm(c: Campaign, r: Recipient, html: string, now: Date): Promise<'sent' | 'failed'> {
+async function sendThroughCrm(c: Campaign, r: Recipient, html: string, now: Date, files: AttachmentFile[] = []): Promise<'sent' | 'failed'> {
   const key = crmKeyOf(r.id)
   // The key is recorded before asking, so its outcome can always be looked up.
   await prisma.bulkEmailRecipient.update({ where: { id: r.id }, data: { crmSendKey: key, crmOutcome: null, crmAttemptedAt: now } })
-  const res = await crmBulk().send({ key, campaignId: c.id, recipientId: r.id, to: r.toEmail!, cc: (r.ccEmails as string[]) ?? [], subject: r.subject!, html, text: r.body! })
+  const res = await crmBulk().send({
+    key,
+    campaignId: c.id,
+    recipientId: r.id,
+    to: r.toEmail!,
+    cc: (r.ccEmails as string[]) ?? [],
+    subject: r.subject!,
+    html,
+    text: r.body!,
+    ...(files.length ? { attachments: files } : {}),
+  })
   if (res.outcome === 'sent') {
     await prisma.bulkEmailRecipient.update({
       where: { id: r.id },

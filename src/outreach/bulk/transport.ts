@@ -44,6 +44,8 @@ export interface BulkOutgoing {
   subject: string
   text: string
   html: string
+  /** The send's files (2026-10-12), the same on every email; raw base64. */
+  attachments?: Array<{ filename: string; mimeType: string; content: string }>
 }
 
 export interface BulkSender {
@@ -112,7 +114,14 @@ export function bulkMailOptions(account: TransportAccount, email: BulkOutgoing) 
     subject: oneLine(email.subject),
     text: email.text,
     html: inline.html,
-    ...(inline.attachments.length ? { attachments: inline.attachments } : {}),
+    ...(inline.attachments.length || email.attachments?.length
+      ? {
+          attachments: [
+            ...inline.attachments,
+            ...(email.attachments ?? []).map((a) => ({ filename: a.filename, content: Buffer.from(a.content, 'base64'), contentType: a.mimeType })),
+          ],
+        }
+      : {}),
     // Lets the recipient's mail program offer a one-click unsubscribe, to the From address.
     headers: { 'List-Unsubscribe': `<mailto:${from}?subject=unsubscribe>` },
     // The SMTP envelope is the account's own (providers require it); bounces return there.

@@ -15,7 +15,7 @@ import ExcelJS from 'exceljs'
 type Row = Record<string, unknown>
 const store: Record<string, Row[]> = {}
 const reset = () => {
-  for (const k of ['bulkEmailCampaign', 'bulkEmailRecipient', 'suppressionEntry', 'auditEvent']) store[k] = []
+  for (const k of ['bulkEmailCampaign', 'bulkEmailRecipient', 'bulkAttachment', 'suppressionEntry', 'auditEvent']) store[k] = []
   store.tenant = [{ id: 't1', settings: null }]
 }
 function matches(row: Row, where: Row = {}): boolean {
@@ -78,6 +78,11 @@ const model = (table: string) => ({
     const rows = store[table]!.filter((x) => matches(x, where))
     rows.forEach((r) => apply(r, data))
     return { count: rows.length }
+  }),
+  deleteMany: vi.fn(async ({ where }: { where: Row }) => {
+    const before = store[table]!.length
+    store[table] = store[table]!.filter((x) => !matches(x, where))
+    return { count: before - store[table]!.length }
   }),
   upsert: vi.fn(async ({ create }: { create: Row }) => {
     store[table]!.push(create)
@@ -1316,5 +1321,197 @@ describe('a standalone workflow', () => {
 describe('the email font', () => {
   it('the email text is in Verdana', () => {
     expect(composeBulkEmail({ template: STATIC_SITE, firstName: 'Ed', companyName: 'X' }).html.startsWith('<div style="font-family:Verdana,Geneva,sans-serif;')).toBe(true)
+  })
+})
+
+// ── Attachments (2026-10-12) ─────────────────────────────────────────────
+// Uploaded once, below the preview; the same files go with every email of the
+// send. Through NXT Sales they are only sent when NXT Sales says it accepts
+// them; an email never goes without the files that were approved.
+describe('attachments', async () => {
+  const att = await import('../../src/outreach/bulk/attachments.js')
+  const LIST = async (extra: Record<string, unknown> = {}) => ({
+    fileBase64: await xlsx([
+      HEADER,
+      ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''],
+      ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', ''],
+      ['Charlie Co', 'u', 'Cy Fox', 'Owner', 'cy@charlie.test', '', '', '', ''],
+    ]),
+    fileName: 'three.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-10',
+    startTime: '10:00',
+    intervalMinutes: 5,
+    ...extra,
+  })
+  const BEFORE = new Date('2026-10-09T12:00:00Z')
+  const at = (hhmm: string) => istToUtc('2026-10-10', hhmm)!
+  const PDF = Buffer.from('%PDF-1.4 AltiusNxt overview').toString('base64')
+  const PNG = Buffer.from('fake png bytes').toString('base64')
+  type Sent = { key: string; to: string; html: string; attachments?: Array<{ filename: string; mimeType: string; content: string }> }
+  let crm: { capable: boolean; sends: Sent[] }
+  const smtp: Array<{ to: string; attachments?: unknown[] }> = []
+
+  beforeEach(() => {
+    env.BULK_SEND_VIA = 'crm'
+    smtp.length = 0
+    setBulkSenderForTests({ send: async (e) => (smtp.push({ to: e.to, attachments: e.attachments }), { messageId: 'smtp' }) })
+    crm = { capable: true, sends: [] }
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: crm.capable ? { maxFiles: 5, maxBytes: 10485760 } : null }),
+      send: async (e) => {
+        crm.sends.push({ key: e.key, to: e.to, html: e.html, ...(e.attachments ? { attachments: e.attachments } : {}) })
+        return { outcome: 'sent', messageId: `gm-${crm.sends.length}`, activityId: `act-${crm.sends.length}`, fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }
+      },
+      statuses: async () => [],
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+  })
+
+  it('checks each file: name, blocked programs, size, readable content; the type comes from the extension', () => {
+    expect(att.checkFile({ fileName: 'Overview.PDF', contentBase64: PDF }).mimeType).toBe('application/pdf')
+    expect(att.checkFile({ fileName: 'notes', contentBase64: PDF }).mimeType).toBe('application/octet-stream')
+    expect(att.checkFile({ fileName: 'a.pdf', contentBase64: `data:application/pdf;base64,${PDF}` }).bytes.toString()).toContain('%PDF')
+    const bad: Array<[string, string, RegExp]> = [
+      ['run.exe', PDF, /cannot be attached/],
+      ['macro.JS', PDF, /cannot be attached/],
+      ['a\r\nb.pdf', PDF, /file name/],
+      ['../x.pdf', PDF, /file name/],
+      ['q"uote.pdf', PDF, /file name/],
+      ['a.pdf', 'not base64!', /could not be read/],
+      ['a.pdf', '', /could not be read/],
+      ['big.pdf', Buffer.alloc(att.MAX_FILE_BYTES + 1, 1).toString('base64'), /larger than 7 MB/],
+    ]
+    for (const [fileName, contentBase64, msg] of bad) {
+      expect(() => att.checkFile({ fileName, contentBase64 }), fileName).toThrow(msg)
+    }
+  })
+
+  it('a staged file can be removed; staged files older than a day are cleared at the next upload', async () => {
+    const a = await att.stageAttachment(actor, { fileName: 'a.pdf', contentBase64: PDF }, new Date('2026-10-01T00:00:00Z'))
+    store.bulkAttachment![0]!.createdAt = new Date('2026-10-01T00:00:00Z')
+    const b = await att.stageAttachment(actor, { fileName: 'b.pdf', contentBase64: PDF }, new Date('2026-10-12T00:00:00Z'))
+    expect(store.bulkAttachment!.map((r) => r.id)).toEqual([b.id]) // a was more than a day old
+    await att.removeStagedAttachment(actor, b.id)
+    expect(store.bulkAttachment).toEqual([])
+    await expect(att.removeStagedAttachment(actor, a.id)).rejects.toThrow(/not found/)
+  })
+
+  it('bulk through NXT Sales: every email carries the same files, in order, byte for byte; the HTML (pixel) is untouched', async () => {
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: PDF }, BEFORE)
+    const png = await att.stageAttachment(actor, { fileName: 'Chart.png', contentBase64: PNG }, BEFORE)
+    const review = await svc.reviewBulk(actor, await LIST({ attachmentIds: [pdf.id, png.id] }), BEFORE)
+    expect(review.attachments.map((a) => a.fileName)).toEqual(['Overview.pdf', 'Chart.png'])
+    expect(review.attachmentProblem).toBeNull()
+    const { campaignId } = await svc.startBulk(actor, { ...(await LIST({ attachmentIds: [pdf.id, png.id] })), confirm: true }, BEFORE)
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ attachmentCount: 2, sendVia: 'crm' })
+    expect(store.bulkAttachment!.map((r) => [r.fileName, r.campaignId, r.position])).toEqual([
+      ['Overview.pdf', campaignId, 0],
+      ['Chart.png', campaignId, 1],
+    ])
+    for (const t of ['10:00', '10:05', '10:10']) await svc.dispatchBulkEmails(at(t))
+    expect(crm.sends.map((x) => x.to)).toEqual(['ann@alpha.test', 'bob@bravo.test', 'cy@charlie.test'])
+    const expected = [
+      { filename: 'Overview.pdf', mimeType: 'application/pdf', content: PDF },
+      { filename: 'Chart.png', mimeType: 'image/png', content: PNG },
+    ]
+    for (const s of crm.sends) expect(s.attachments).toEqual(expected)
+    expect(new Set(crm.sends.map((x) => x.html)).size).toBe(3) // personalised HTML, no attachment content inside it
+    expect(crm.sends.every((x) => !x.html.includes(PDF))).toBe(true)
+    expect(smtp).toEqual([])
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.attachments.map((a) => a.fileName)).toEqual(['Overview.pdf', 'Chart.png'])
+    expect(store.auditEvent!.some((e) => JSON.stringify(e).includes('attachments: Overview.pdf, Chart.png'))).toBe(true)
+  })
+
+  it('without attachments nothing changes: no attachments key goes to NXT Sales', async () => {
+    await svc.startBulk(actor, { ...(await LIST()), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    expect(crm.sends).toHaveLength(1)
+    expect('attachments' in crm.sends[0]!).toBe(false)
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ attachmentCount: 0 })
+  })
+
+  it('an NXT Sales that does not accept attachments: the review says so and the send cannot start; nothing is created', async () => {
+    crm.capable = false
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: PDF }, BEFORE)
+    const review = await svc.reviewBulk(actor, await LIST({ attachmentIds: [pdf.id] }), BEFORE)
+    expect(review.attachmentProblem).toMatch(/cannot send attachments yet/)
+    await expect(svc.startBulk(actor, { ...(await LIST({ attachmentIds: [pdf.id] })), confirm: true }, BEFORE)).rejects.toThrow(
+      /Not started — NXT Sales on this server cannot send attachments/,
+    )
+    expect(store.bulkEmailCampaign).toEqual([])
+    expect(store.bulkAttachment![0]!.campaignId).toBeNull()
+  })
+
+  it('if NXT Sales stops accepting attachments while a send runs, the send pauses; no email goes without its files', async () => {
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: PDF }, BEFORE)
+    await svc.startBulk(actor, { ...(await LIST({ attachmentIds: [pdf.id] })), confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(at('10:00'))
+    expect(crm.sends).toHaveLength(1)
+    crm.capable = false
+    await svc.dispatchBulkEmails(at('10:05'))
+    expect(crm.sends).toHaveLength(1)
+    expect(store.bulkEmailCampaign![0]).toMatchObject({ status: 'paused' })
+    expect(store.bulkEmailCampaign![0]!.statusReason).toMatch(/cannot send attachments/)
+  })
+
+  it('if a file cannot be loaded at send time, that email is not sent (failed, with the reason)', async () => {
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: PDF }, BEFORE)
+    await svc.startBulk(actor, { ...(await LIST({ attachmentIds: [pdf.id] })), confirm: true }, BEFORE)
+    store.bulkAttachment = [] // the stored file is gone
+    await svc.dispatchBulkEmails(at('10:00'))
+    expect(crm.sends).toEqual([])
+    const ann = store.bulkEmailRecipient!.find((r) => r.toEmail === 'ann@alpha.test')!
+    expect(ann).toMatchObject({ status: 'failed', reason: 'Its attachments could not be loaded, so it was not sent.' })
+  })
+
+  it('an unknown, repeated or over-limit attachment is refused at review', async () => {
+    await expect(svc.reviewBulk(actor, await LIST({ attachmentIds: ['nope'] }), BEFORE)).rejects.toThrow(/no longer available/)
+    const a = await att.stageAttachment(actor, { fileName: 'a.pdf', contentBase64: PDF }, BEFORE)
+    await expect(svc.reviewBulk(actor, await LIST({ attachmentIds: [a.id, a.id] }), BEFORE)).rejects.toThrow(/listed twice/)
+    const ids: string[] = []
+    for (let i = 0; i < 6; i++) ids.push((await att.stageAttachment(actor, { fileName: `f${i}.pdf`, contentBase64: PDF }, BEFORE)).id)
+    await expect(svc.reviewBulk(actor, await LIST({ attachmentIds: ids }), BEFORE)).rejects.toThrow(/At most 5/)
+    store.bulkAttachment!.forEach((r) => (r.sizeBytes = 6 * 1024 * 1024)) // 12 MB for two
+    await expect(svc.reviewBulk(actor, await LIST({ attachmentIds: ids.slice(0, 2) }), BEFORE)).rejects.toThrow(/larger than 10 MB/)
+  })
+
+  it('one person through NXT Sales carries the files too', async () => {
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: PDF }, BEFORE)
+    const single = { firstName: 'Ann', companyName: 'Alpha Co', toEmail: 'ann@alpha.test', templateKey: 'static_site_v1', attachmentIds: [pdf.id] }
+    const review = await svc.reviewSingle(actor, single)
+    expect(review.attachments.map((a) => a.fileName)).toEqual(['Overview.pdf'])
+    expect(review.blocked).toBeNull()
+    await svc.startSingle(actor, { ...single, confirm: true }, BEFORE)
+    await svc.dispatchBulkEmails(new Date(BEFORE.getTime() + 60_000))
+    expect(crm.sends).toHaveLength(1)
+    expect(crm.sends[0]!.attachments).toEqual([{ filename: 'Overview.pdf', mimeType: 'application/pdf', content: PDF }])
+  })
+
+  it('one person: an NXT Sales without attachment support blocks the review', async () => {
+    crm.capable = false
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: PDF }, BEFORE)
+    const review = await svc.reviewSingle(actor, { firstName: 'Ann', companyName: 'Alpha Co', toEmail: 'ann@alpha.test', templateKey: 'static_site_v1', attachmentIds: [pdf.id] })
+    expect(review.blocked).toMatch(/cannot send attachments yet/)
+  })
+
+  it("through this platform's mailbox (SMTP) the same files become ordinary attachments", () => {
+    const options = bulkMailOptions(
+      { host: 'h', port: 587, secure: false, user: 'manoj@altiusnxt.test', pass: 'x', source: 'bulk' },
+      {
+        fromEmail: 'manoj@altiusnxt.test',
+        fromName: null,
+        to: 'ann@alpha.test',
+        cc: [],
+        subject: 's',
+        text: 't',
+        html: '<p>h</p>',
+        attachments: [{ filename: 'Overview.pdf', mimeType: 'application/pdf', content: PDF }],
+      },
+    )
+    expect(options.attachments).toEqual([{ filename: 'Overview.pdf', content: Buffer.from(PDF, 'base64'), contentType: 'application/pdf' }])
   })
 })

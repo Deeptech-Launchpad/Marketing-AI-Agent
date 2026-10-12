@@ -7,6 +7,7 @@ import { EmptyState, ErrorState, LoadingState } from '../../components/ui/states
 import { useBulkCall as useCall } from './useBulkCall'
 import { SignatureEditor, SignatureView, safeHtml, textToHtml } from './SignatureEditor'
 import { SingleSend } from './SingleSend'
+import { AttachmentsField, attachmentList, type BulkAttachment } from './AttachmentsField'
 import './bulk.css'
 
 // BULK EMAIL (2026-10-08) — simple and standalone:
@@ -74,6 +75,9 @@ interface ReviewRow {
   scheduledLocal: string | null
 }
 interface Review {
+  /** The files that go with every email (2026-10-12), and why they cannot go (null = they can). */
+  attachments?: BulkAttachment[]
+  attachmentProblem?: string | null
   counts: { rowsWithCompany: number; companies: number; validEmails: number; skipped: number; noWorkAddress: number }
   rows: ReviewRow[]
   noAddress: Array<{ row: number; companyName: string; reason: string }>
@@ -502,6 +506,9 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   const [review, setReview] = useState<Review | null>(null)
   const [previewPos, setPreviewPos] = useState<number | null>(null)
   const [confirmed, setConfirmed] = useState(false)
+  // Files that go with every email of this send, uploaded once below the preview.
+  const [attachments, setAttachments] = useState<BulkAttachment[]>([])
+  const [uploading, setUploading] = useState(false)
   const call = useCall(() => undefined)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -529,6 +536,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     startDate,
     startTime,
     intervalMinutes: Number(interval),
+    ...(attachments.length ? { attachmentIds: attachments.map((a) => a.id) } : {}),
   })
   const loadReview = () =>
     void call.run('review', async () => {
@@ -717,6 +725,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   <p>
                     {preview.version && <Chip tone="info">Version {preview.version}</Chip>} <span className="field-label">Subject</span> {preview.subject}
                   </p>
+                  {attachments.length > 0 && <p className="cell-dim">Attachments: {attachmentList(attachments)}</p>}
                   {preview.html ? (
                     <div className="bulk-email-html" dangerouslySetInnerHTML={{ __html: safeHtml(preview.html) }} />
                   ) : (
@@ -724,13 +733,22 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   )}
                 </article>
               )}
+              <AttachmentsField value={attachments} onChange={setAttachments} onBusyChange={setUploading} />
             </>
           )}
           <div className="row" style={{ marginTop: 'var(--s3)' }}>
             <Button variant="quiet" onClick={() => setStep('upload')}>
               Back
             </Button>
-            <Button variant="primary" disabled={!review || review.counts.validEmails === 0} onClick={() => setStep('schedule')}>
+            <Button
+              variant="primary"
+              disabled={!review || review.counts.validEmails === 0 || uploading}
+              onClick={() => {
+                setStep('schedule')
+                // Reviewed again so the sending times and the attachments shown are exactly what Start stores.
+                loadReview()
+              }}
+            >
               Next: date and time
             </Button>
           </div>
@@ -805,6 +823,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   From: {review.sender.fromEmail ?? 'not set'} <SenderStatus sender={review.sender} />
                   {review.sender.ccEmails.length > 0 && <span className="cell-dim"> · CC on every email: {review.sender.ccEmails.join(', ')}</span>}
                 </li>
+                {review.attachments && review.attachments.length > 0 && <li>Attachments on every email: {attachmentList(review.attachments)}</li>}
               </ul>
               <div className="otr-scroll" style={{ maxHeight: 220, overflowY: 'auto' }}>
                 <table className="otr-table">
@@ -827,6 +846,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               </label>
               {!canApprove && <p className="note">Starting a bulk email needs an approver or an administrator.</p>}
               <SendingNote sending={review.sending} />
+              {review.attachmentProblem && <p className="otr-warn">{review.attachmentProblem}</p>}
               {!review.sending.reason && review.sender.problem && (
                 <p className="otr-warn">
                   {review.sender.problem} Set or check the sender on the Bulk email page (Back, then Back to all bulk emails).
@@ -839,7 +859,15 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                 <Button
                   variant="primary"
                   icon={Send}
-                  disabled={review.counts.validEmails === 0 || !confirmed || !canApprove || Boolean(review.sending.reason) || !review.sender.authorized}
+                  disabled={
+                    review.counts.validEmails === 0 ||
+                    !confirmed ||
+                    !canApprove ||
+                    Boolean(review.sending.reason) ||
+                    !review.sender.authorized ||
+                    Boolean(review.attachmentProblem) ||
+                    uploading
+                  }
                   busy={call.busy === 'start'}
                   onClick={start}
                 >
