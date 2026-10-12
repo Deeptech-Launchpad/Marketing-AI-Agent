@@ -19,3 +19,8 @@
 .bulk-email-html { padding: var(--s3); border: 1px solid var(--line); margin-top: var(--s2); max-height: 480px; overflow: auto; }
 .bulk-sig-editor img, .bulk-sig-view img, .bulk-email-html img { max-width: 100%; }
 .bulk-email-html a, .bulk-sig-view a, .bulk-sig-editor a { color: #1155cc; }
+
+/* Attachments below the email preview (2026-10-12). */
+.bulk-attachments {
+  margin-top: var(--s3);
+}

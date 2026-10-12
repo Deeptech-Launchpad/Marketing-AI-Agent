@@ -2836,6 +2836,9 @@ model BulkEmailCampaign {
   intervalMinutes Int
   dailyCap        Int
   totalRows       Int @default(0)
+  // How many files go with every email (2026-10-12). The sender refuses an
+  // email when it cannot load exactly this many: never sent without them.
+  attachmentCount Int @default(0)
 
   createdByCrmUserId  String
   approvedByCrmUserId String
@@ -2844,9 +2847,34 @@ model BulkEmailCampaign {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  recipients BulkEmailRecipient[]
+  recipients  BulkEmailRecipient[]
+  attachments BulkAttachment[]
 
   @@index([tenantId, status])
+}
+
+// Files sent with EVERY email of one bulk send (2026-10-12). Uploaded once
+// below the preview ("staged": campaignId null) and linked to the send when it
+// starts; kept with it so each email carries exactly what was approved.
+model BulkAttachment {
+  id         String  @id
+  tenantId   String
+  campaignId String?
+  // Order on the email (0 = first).
+  position   Int     @default(0)
+  fileName   String
+  mimeType   String
+  sizeBytes  Int
+  sha256     String
+  content    Bytes
+
+  createdByCrmUserId String
+  createdAt          DateTime @default(now())
+
+  campaign BulkEmailCampaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, campaignId])
+  @@index([campaignId])
 }
 
 model BulkEmailRecipient {

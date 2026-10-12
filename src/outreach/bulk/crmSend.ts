@@ -18,6 +18,8 @@ export interface CrmSender {
   problem: string | null
   name: string | null
   fromEmail: string | null
+  /** What this NXT Sales accepts (2026-10-12). Absent = an older NXT Sales that would ignore attachments. */
+  attachments?: { maxFiles: number; maxBytes: number } | null
 }
 
 export interface CrmSendResult {
@@ -46,7 +48,17 @@ export interface CrmStatus {
 
 export interface CrmBulkApi {
   sender(): Promise<CrmSender>
-  send(email: { key: string; campaignId: string; recipientId: string; to: string; cc: string[]; subject: string; html: string; text: string }): Promise<CrmSendResult>
+  send(email: {
+    key: string
+    campaignId: string
+    recipientId: string
+    to: string
+    cc: string[]
+    subject: string
+    html: string
+    text: string
+    attachments?: Array<{ filename: string; mimeType: string; content: string }>
+  }): Promise<CrmSendResult>
   statuses(keys: string[]): Promise<CrmStatus[]>
 }
 
@@ -65,8 +77,13 @@ const message = (body: unknown, status: number) => {
 const realApi: CrmBulkApi = {
   async sender() {
     try {
-      const r = await crmBulkRequest<CrmSender & { message?: string }>('GET', `${BASE}/sender`)
-      if (r.status === 200 && r.body) return { ready: Boolean(r.body.ready), problem: r.body.problem ?? null, name: r.body.name ?? null, fromEmail: r.body.fromEmail ?? null }
+      const r = await crmBulkRequest<CrmSender & { message?: string; capabilities?: { attachments?: { maxFiles?: unknown; maxBytes?: unknown } } }>('GET', `${BASE}/sender`)
+      if (r.status === 200 && r.body) {
+        const a = r.body.capabilities?.attachments
+        const attachments =
+          a && Number.isInteger(a.maxFiles) && Number.isInteger(a.maxBytes) ? { maxFiles: a.maxFiles as number, maxBytes: a.maxBytes as number } : null
+        return { ready: Boolean(r.body.ready), problem: r.body.problem ?? null, name: r.body.name ?? null, fromEmail: r.body.fromEmail ?? null, attachments }
+      }
       return { ready: false, problem: `NXT Sales bulk sending is not available: ${message(r.body, r.status)}`, name: null, fromEmail: null }
     } catch (err) {
       return { ready: false, problem: `NXT Sales could not be reached: ${String((err as Error).message).split('\n')[0]}`, name: null, fromEmail: null }
@@ -76,7 +93,7 @@ const realApi: CrmBulkApi = {
   async send(e) {
     let r: { status: number; body: (Partial<CrmStatus> & { message?: string }) | null }
     try {
-      r = await crmBulkRequest('POST', `${BASE}/send`, { idempotencyKey: e.key, campaignId: e.campaignId, recipientId: e.recipientId, to: e.to, cc: e.cc, subject: e.subject, htmlBody: e.html, text: e.text }, SEND_TIMEOUT_MS)
+      r = await crmBulkRequest('POST', `${BASE}/send`, { idempotencyKey: e.key, campaignId: e.campaignId, recipientId: e.recipientId, to: e.to, cc: e.cc, subject: e.subject, htmlBody: e.html, text: e.text, ...(e.attachments?.length ? { attachments: e.attachments } : {}) }, SEND_TIMEOUT_MS)
     } catch (err) {
       // No answer: it may have been sent. Never treated as "not sent".
       return { outcome: 'unknown', messageId: null, activityId: null, fromEmail: null, tracked: false, error: `No answer from NXT Sales (${String((err as Error).message).split('\n')[0]}). The email may or may not have been sent; its status is checked with NXT Sales.` }

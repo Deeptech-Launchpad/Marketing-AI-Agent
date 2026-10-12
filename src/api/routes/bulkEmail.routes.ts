@@ -16,6 +16,7 @@ import {
   unsubscribeRecipient,
   type Actor,
 } from '../../outreach/bulk/service.js'
+import { MAX_ATTACHMENTS, MAX_FILE_BYTES, removeStagedAttachment, stageAttachment } from '../../outreach/bulk/attachments.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -45,6 +46,8 @@ const Setup = z
     startTime: z.string().max(5),
     intervalMinutes: z.number().int().min(1).max(240),
     name: z.string().max(120).optional(),
+    // Staged files that go with every email (2026-10-12).
+    attachmentIds: z.array(z.string().min(1).max(64)).max(MAX_ATTACHMENTS).optional(),
   })
   .strict()
 
@@ -136,8 +139,36 @@ const Single = z
     toEmail: z.string().max(254),
     ccEmails: z.array(z.string().max(254)).max(10).optional(),
     templateKey: z.string().min(1).max(60),
+    attachmentIds: z.array(z.string().min(1).max(64)).max(MAX_ATTACHMENTS).optional(),
   })
   .strict()
+
+// Attachments (2026-10-12): one file per request, uploaded once below the
+// preview; the review and the start name them by id. base64 of the largest
+// allowed file stays under the 10 MB request limit.
+const Attachment = z
+  .object({
+    fileName: z.string().min(1).max(200),
+    contentBase64: z.string().min(4).max(Math.ceil((MAX_FILE_BYTES * 4) / 3) + 64),
+  })
+  .strict()
+
+bulkEmailRoutes.post(
+  '/attachments',
+  requirePermission('operate'),
+  validateBody(Attachment),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await stageAttachment(actorOf(req), req.body as z.infer<typeof Attachment>))
+  }),
+)
+
+bulkEmailRoutes.delete(
+  '/attachments/:id',
+  requirePermission('operate'),
+  asyncHandler(async (req, res) => {
+    res.json(await removeStagedAttachment(actorOf(req), String(req.params.id)))
+  }),
+)
 
 bulkEmailRoutes.post(
   '/single/review',
