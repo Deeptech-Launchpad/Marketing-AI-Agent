@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanTemplateHtml, composeCustomEmail, MAX_CUSTOM_HTML, MAX_CUSTOM_SUBJECT, prepareCustomTemplate } from '../../src/outreach/bulk/customTemplate.js'
+import { cleanTemplateHtml, composeCustomEmail, customKey, customNumber, MAX_CUSTOM_HTML, MAX_CUSTOM_SUBJECT, pickTemplate, prepareCustomTemplate } from '../../src/outreach/bulk/customTemplate.js'
 
 // "USE MY OWN TEMPLATE" (2026-10-12): the user's pasted email is cleaned once
 // on the server, then every recipient gets the same email with only
@@ -128,5 +128,31 @@ describe('composing one person\'s email from the template', () => {
     const e = composeCustomEmail({ template: t, firstName: 'Ann', companyName: 'Alpha' })
     expect(e.html).toBe('<div style="font-family:Verdana,Geneva,sans-serif;font-size:14px;line-height:1.5;color:#222"><p>Please register here today.</p></div>')
     expect(e.html).not.toMatch(/b2becommerceworld|unsubscribe/i)
+  })
+})
+
+describe('several own templates: which one each email gets (2026-10-14)', () => {
+  it('in order: 1, 2, 3, 1, 2, 3 …', () => {
+    expect([0, 1, 2, 3, 4, 5, 6].map((i) => pickTemplate('sequential', 3, i, 0))).toEqual([0, 1, 2, 0, 1, 2, 0])
+    expect([0, 1, 2, 3].map((i) => pickTemplate('sequential', 2, i, 0))).toEqual([0, 1, 0, 1])
+  })
+
+  it('at random: repeatable for the same seed, different for another seed, and every template is used', () => {
+    const draw = (seed: number) => Array.from({ length: 300 }, (_, i) => pickTemplate('random', 3, i, seed))
+    expect(draw(12345)).toEqual(draw(12345))
+    expect(draw(12345)).not.toEqual(draw(999))
+    const counts = [0, 1, 2].map((t) => draw(12345).filter((x) => x === t).length)
+    for (const n of counts) expect(n).toBeGreaterThan(60) // roughly a third each
+    expect(draw(12345).every((x) => x >= 0 && x < 3)).toBe(true)
+  })
+
+  it('one template: always that one', () => {
+    expect(pickTemplate('random', 1, 7, 42)).toBe(0)
+    expect(pickTemplate('sequential', 1, 7, 0)).toBe(0)
+  })
+
+  it('keys: the first keeps "custom" (as before), then custom_2, custom_3', () => {
+    expect([1, 2, 3].map(customKey)).toEqual(['custom', 'custom_2', 'custom_3'])
+    expect(['custom', 'custom_2', 'custom_3', 'static_site_v1', null, 'custom_x'].map(customNumber)).toEqual([1, 2, 3, null, null, null])
   })
 })

@@ -8,7 +8,7 @@ import { useBulkCall as useCall } from './useBulkCall'
 import { SignatureEditor, SignatureView, safeHtml, textToHtml } from './SignatureEditor'
 import { SingleSend } from './SingleSend'
 import { AttachmentsField, attachmentList, type BulkAttachment } from './AttachmentsField'
-import { customTemplateReady, EmailTemplateField, type CustomTemplateValue } from './EmailTemplateField'
+import { EmailTemplatesField, ownTemplatesReady, ownTemplatesRequest, type OwnTemplates } from './EmailTemplateField'
 import './bulk.css'
 
 // BULK EMAIL (2026-10-08) — simple and standalone:
@@ -79,6 +79,8 @@ interface ReviewRow {
 interface Review {
   /** What was taken out of the pasted template for safety (2026-10-12), in words. */
   templateNotes?: string[]
+  /** With 2-3 own templates (2026-10-14): how they are given out. */
+  templateOrder?: 'sequential' | 'random' | null
   /** The files that go with every email (2026-10-12), and why they cannot go (null = they can). */
   attachments?: BulkAttachment[]
   attachmentProblem?: string | null
@@ -116,7 +118,21 @@ interface RecipientRow {
   sentLocal: string | null
   version?: number | null
   ownTemplate?: boolean
+  /** Which own template (1, 2 or 3) this person received (2026-10-14). */
+  ownTemplateNumber?: number | null
   tracking?: OpenTracking | null
+}
+
+/** Which own template a key is (1, 2 or 3), or null: 'custom', 'custom_2', 'custom_3'. */
+function ownNumber(key: string | null | undefined): number | null {
+  if (key === 'custom') return 1
+  const m = /^custom_([2-9])$/.exec(key ?? '')
+  return m ? Number(m[1]) : null
+}
+
+/** "Your template", or "Your template 2" when the send uses several own templates. */
+function ownLabel(n: number | null | undefined, several: boolean): string | null {
+  return n ? (several ? `Your template ${n}` : 'Your template') : null
 }
 
 // Email open tracking (2026-10-09). An "open" is the email's invisible image
@@ -514,8 +530,8 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   // Files that go with every email of this send, uploaded once below the preview.
   const [attachments, setAttachments] = useState<BulkAttachment[]>([])
   const [uploading, setUploading] = useState(false)
-  // null = the approved Versions 1, 2 and 3; otherwise the user's OWN template (2026-10-12).
-  const [ownTemplate, setOwnTemplate] = useState<CustomTemplateValue | null>(null)
+  // null = the approved Versions 1, 2 and 3; otherwise the user's OWN template(s) (2026-10-12; up to 3 since 2026-10-14).
+  const [ownTemplate, setOwnTemplate] = useState<OwnTemplates | null>(null)
   const call = useCall(() => undefined)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -544,7 +560,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     startTime,
     intervalMinutes: Number(interval),
     ...(attachments.length ? { attachmentIds: attachments.map((a) => a.id) } : {}),
-    ...(ownTemplate ? { customTemplate: { subject: ownTemplate.subject.trim(), bodyHtml: ownTemplate.bodyHtml } } : {}),
+    ...ownTemplatesRequest(ownTemplate),
   })
   const loadReview = () =>
     void call.run('review', async () => {
@@ -620,7 +636,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               real customer list: only work addresses are used.
             </span>
           </label>
-          <EmailTemplateField
+          <EmailTemplatesField
             value={ownTemplate}
             onChange={(next) => {
               setOwnTemplate(next)
@@ -674,7 +690,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
           <div className="row" style={{ marginTop: 'var(--s3)' }}>
             <Button
               variant="primary"
-              disabled={!analysis || sendable.length === 0 || !customTemplateReady(ownTemplate)}
+              disabled={!analysis || sendable.length === 0 || !ownTemplatesReady(ownTemplate)}
               busy={call.busy === 'review'}
               onClick={() => {
                 setConfirmed(false)
@@ -718,7 +734,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                       <tr key={r.position} aria-selected={r.position === previewPos}>
                         <td>{r.companyName}</td>
                         <td>{r.contactName ?? '—'}</td>
-                        <td>{r.templateKey === 'custom' ? 'Your template' : r.version ? `Version ${r.version}` : '—'}</td>
+                        <td>{ownLabel(ownNumber(r.templateKey), Boolean(review.templateOrder)) ?? (r.version ? `Version ${r.version}` : '—')}</td>
                         <td>{r.toEmail ?? '—'}</td>
                         <td className="cell-dim">{r.ccEmails.join(', ') || '—'}</td>
                         <td>
@@ -742,7 +758,11 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                     {preview.ccEmails.length ? ` · CC: ${preview.ccEmails.join(', ')}` : ''}
                   </p>
                   <p>
-                    {preview.templateKey === 'custom' ? <Chip tone="info">Your template</Chip> : preview.version && <Chip tone="info">Version {preview.version}</Chip>}{' '}
+                    {ownNumber(preview.templateKey) ? (
+                      <Chip tone="info">{ownLabel(ownNumber(preview.templateKey), Boolean(review.templateOrder))}</Chip>
+                    ) : (
+                      preview.version && <Chip tone="info">Version {preview.version}</Chip>
+                    )}{' '}
                     <span className="field-label">Subject</span> {preview.subject}
                   </p>
                   {attachments.length > 0 && <p className="cell-dim">Attachments: {attachmentList(attachments)}</p>}
@@ -843,7 +863,18 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   From: {review.sender.fromEmail ?? 'not set'} <SenderStatus sender={review.sender} />
                   {review.sender.ccEmails.length > 0 && <span className="cell-dim"> · CC on every email: {review.sender.ccEmails.join(', ')}</span>}
                 </li>
-                {ownTemplate && <li>Your own template: every recipient gets this same email, with [First Name] and [Company Name] filled for each person.</li>}
+                {ownTemplate && ownTemplate.templates.length === 1 && (
+                  <li>Your own template: every recipient gets this same email, with [First Name] and [Company Name] filled for each person.</li>
+                )}
+                {ownTemplate && ownTemplate.templates.length > 1 && (
+                  <li>
+                    Your own templates, {review.templateOrder === 'random' ? 'at random' : 'in order'}:{' '}
+                    {ownTemplate.templates
+                      .map((_, i) => `template ${i + 1} → ${review.rows.filter((r) => r.status === 'ready' && ownNumber(r.templateKey) === i + 1).length} emails`)
+                      .join(' · ')}
+                    . Each person gets exactly the email shown in the review.
+                  </li>
+                )}
                 {review.attachments && review.attachments.length > 0 && <li>Attachments on every email: {attachmentList(review.attachments)}</li>}
               </ul>
               <div className="otr-scroll" style={{ maxHeight: 220, overflowY: 'auto' }}>
@@ -999,7 +1030,11 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
                     {r.companyName}
                     <div className="cell-dim">
                       {r.contactName ?? ''}
-                      {r.ownTemplate ? ' · Your template' : r.version ? ` · Version ${r.version}` : ''}
+                      {r.ownTemplate
+                        ? ` · ${ownLabel(r.ownTemplateNumber ?? 1, recipients.some((x) => (x.ownTemplateNumber ?? 1) > 1))}`
+                        : r.version
+                          ? ` · Version ${r.version}`
+                          : ''}
                     </div>
                     {r.body && (
                       <details open={open === r.id} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open ? r.id : null)}>

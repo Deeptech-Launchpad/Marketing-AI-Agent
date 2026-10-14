@@ -17,7 +17,7 @@ import {
   type Actor,
 } from '../../outreach/bulk/service.js'
 import { MAX_ATTACHMENTS, MAX_FILE_BYTES, removeStagedAttachment, stageAttachment } from '../../outreach/bulk/attachments.js'
-import { MAX_CUSTOM_HTML, MAX_CUSTOM_SUBJECT } from '../../outreach/bulk/customTemplate.js'
+import { MAX_CUSTOM_HTML, MAX_CUSTOM_SUBJECT, MAX_CUSTOM_TEMPLATES } from '../../outreach/bulk/customTemplate.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
 import { validateBody } from '../middleware/validate.js'
@@ -59,6 +59,10 @@ const Setup = z
     // Staged files that go with every email (2026-10-12).
     attachmentIds: z.array(z.string().min(1).max(64)).max(MAX_ATTACHMENTS).optional(),
     customTemplate: CustomTemplate.optional(),
+    // Or 2-3 own templates (2026-10-14), given in order or at random (the seed fixes the random order).
+    customTemplates: z.array(CustomTemplate).min(1).max(MAX_CUSTOM_TEMPLATES).optional(),
+    templateOrder: z.enum(['sequential', 'random']).optional(),
+    shuffleSeed: z.number().int().min(0).max(0x7fffffff).optional(),
   })
   .strict()
 

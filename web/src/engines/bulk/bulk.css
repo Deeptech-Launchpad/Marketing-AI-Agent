@@ -37,3 +37,18 @@
 .bulk-template-body {
   min-height: 220px;
 }
+/* Several own templates (2026-10-14). */
+.bulk-template-item + .bulk-template-item {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+}
+.bulk-template-head {
+  justify-content: space-between;
+  align-items: center;
+}
+.bulk-template-order {
+  margin: var(--s3) 0 0;
+  border: 0;
+  padding: 0;
+}
