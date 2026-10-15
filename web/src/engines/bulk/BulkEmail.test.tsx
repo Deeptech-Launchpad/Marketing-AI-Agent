@@ -112,7 +112,7 @@ const TRACKED = {
   openTracking: { enabled: true, reason: null },
 }
 
-function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string; attachmentProblem?: string; templateNotes?: string[] } = {}) {
+function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string; attachmentProblem?: string; templateNotes?: string[]; followUp?: boolean } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const u = String(url)
@@ -164,7 +164,9 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
           })
         : REVIEW.rows
       const templateOrder = list.length > 1 ? (b.templateOrder ?? 'sequential') : null
-      return json({ ...REVIEW, rows, templateOrder, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null, templateNotes: opts.templateNotes ?? [] })
+      // A follow-up (2026-10-15): the server notes when an earlier campaign last emailed each person.
+      const withNotes = opts.followUp ? rows.map((r) => (r.status === 'ready' ? { ...r, note: 'Follow-up: last emailed on 2026-10-08.' } : r)) : rows
+      return json({ ...REVIEW, rows: withNotes, templateOrder, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null, templateNotes: opts.templateNotes ?? [] })
     }
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
@@ -898,5 +900,24 @@ describe('several own templates (2026-10-14): add 2-3 templates and choose in or
     await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
     expect(screen.getByLabelText('Template subject')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /add another template/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('follow-up campaigns (2026-10-15)', () => {
+  it('the review says how many people an earlier campaign emailed, and when, next to each person', async () => {
+    stub({ followUp: true })
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    expect(screen.getByText(/of these people were emailed by an earlier campaign/)).toHaveTextContent(/^2 of these people were emailed by an earlier campaign/)
+    expect(screen.getAllByText('Follow-up: last emailed on 2026-10-08.')).toHaveLength(2)
+  })
+
+  it('a first campaign shows no follow-up note', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    expect(screen.queryByText(/emailed by an earlier campaign/)).not.toBeInTheDocument()
   })
 })
