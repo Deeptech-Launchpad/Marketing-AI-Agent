@@ -476,6 +476,8 @@ export interface ReviewRow {
   version: number | null
   status: 'ready' | 'skipped'
   reason: string | null
+  /** For a person an earlier campaign already emailed (a follow-up): when, in words (2026-10-15). */
+  note?: string | null
   scheduledAt: string | null
   scheduledLocal: string | null
 }
@@ -510,23 +512,43 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
   const upload = await analyzeUpload({ fileBase64: s.fileBase64, fileName: s.fileName, allowWebmail: s.allowWebmail })
   if (upload.companies.length > MAX_RECIPIENTS) throw new BadRequestError(`At most ${MAX_RECIPIENTS} companies per upload.`)
 
-  // Never two sends to one address at once; and, for a real list, never an
-  // address another bulk send already emailed inside the cooldown.
+  // WHO MAY BE EMAILED AGAIN (follow-ups, 2026-10-15):
+  //   - never two sends to one address at once (queued or sending elsewhere);
+  //   - never an address whose earlier email has an unknown outcome;
+  //   - never the same address twice in this send;
+  //   - for a real list (not a webmail test): the approved Versions 1-3 (the
+  //     first-contact email) still go once per cooldown, as before; and nobody
+  //     gets the SAME email (same subject and text) twice. A separately
+  //     approved follow-up with DIFFERENT content (the user's own template) may
+  //     go to people an earlier campaign emailed.
   const since = new Date(now.getTime() - env.OUTREACH_COOLDOWN_DAYS * 86_400_000)
   const earlier = await prisma.bulkEmailRecipient.findMany({
-    where: {
-      tenantId: actor.tenantId,
-      OR: [{ status: { in: ['scheduled', 'sending'] } }, ...(s.allowWebmail ? [] : [{ status: 'sent', sentAt: { gte: since } }]), UNCONFIRMED_CRM],
-    },
+    where: { tenantId: actor.tenantId, OR: [{ status: { in: ['scheduled', 'sending'] } }, UNCONFIRMED_CRM] },
     select: { toEmail: true, companyName: true, status: true, sentAt: true, crmSendKey: true, crmOutcome: true, crmAttemptedAt: true },
   })
+  const addresses = [...new Set(upload.companies.map((c) => recipientsOf(c).to?.email).filter((e): e is string => Boolean(e)))]
+  const sentBefore = s.allowWebmail
+    ? []
+    : await prisma.bulkEmailRecipient.findMany({
+        where: { tenantId: actor.tenantId, status: 'sent', OR: [{ toEmail: { in: addresses } }, { sentAt: { gte: since } }] },
+        select: { toEmail: true, companyName: true, subject: true, body: true, templateKey: true, sentAt: true, campaign: { select: { templateKey: true } } },
+      })
+  const sameCompany = (a: string, b: string) => a.toLowerCase().trim() === b.toLowerCase().trim()
   // An address with an unknown outcome through NXT Sales may already have the email.
   const unconfirmedFor = (email: string) =>
     earlier.find(
       (e) => e.toEmail === email && Boolean(e.crmSendKey) && (e.crmOutcome === 'unknown' || e.crmOutcome === null) && !['sent', 'scheduled', 'sending'].includes(e.status),
     )
-  const earlierFor = (company: string, email: string) =>
-    earlier.find((e) => e.toEmail === email || e.companyName.toLowerCase().trim() === company.toLowerCase().trim())
+  const queuedFor = (company: string, email: string) => earlier.find((e) => ['scheduled', 'sending'].includes(e.status) && (e.toEmail === email || sameCompany(e.companyName, company)))
+  const isApprovedVersion = (key: string | null | undefined) => versionOf(key) !== null
+  // The approved first-contact email already went to this company or address inside the cooldown.
+  const introSentFor = (company: string, email: string) =>
+    sentBefore.find(
+      (e) => (e.sentAt?.getTime() ?? 0) >= since.getTime() && isApprovedVersion(e.templateKey ?? e.campaign?.templateKey) && (e.toEmail === email || sameCompany(e.companyName, company)),
+    )
+  const lastSentTo = (email: string) =>
+    sentBefore.filter((e) => e.toEmail === email).sort((a, b) => (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0))[0]
+  const usedInThisSend = new Set<string>()
 
   const rows: ReviewRow[] = []
   let readyCount = 0
@@ -548,9 +570,12 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
       skip(possiblyEmailedReason(to.email, unconfirmed.crmAttemptedAt))
       continue
     }
-    const prior = earlierFor(c.companyName, to.email)
-    if (prior) {
-      skip(prior.status === 'sent' ? `Already emailed by a bulk send on ${prior.sentAt?.toISOString().slice(0, 10)}.` : 'Already queued in another bulk send.')
+    if (usedInThisSend.has(to.email)) {
+      skip(`${to.email} is already in this send (listed under another company); it is emailed once.`)
+      continue
+    }
+    if (queuedFor(c.companyName, to.email)) {
+      skip('Already queued in another bulk send.')
       continue
     }
     const sup = await checkSuppression({
@@ -574,6 +599,12 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     }
     // The sender's CC addresses are copied on every email too.
     for (const extra of profile.ccEmails) if (!ccOk.includes(extra) && extra !== to.email) ccOk.push(extra)
+    // The approved Versions 1-3 are the first-contact email: once per cooldown, as before.
+    const intro = setup.customs.length ? null : introSentFor(c.companyName, to.email)
+    if (intro) {
+      skip(`Already emailed by a bulk send on ${intro.sentAt?.toISOString().slice(0, 10)} (the approved first email goes once per ${env.OUTREACH_COOLDOWN_DAYS} days; use your own template for a follow-up).`)
+      continue
+    }
     // Versions in sequence: 1, 2, 3, 1, 2, 3 … over the emails that go.
     // Your own template(s): one template = the same email for everyone; 2-3 = in order or at random (seeded).
     const pick = setup.customs.length ? pickTemplate(setup.order, setup.customs.length, readyCount, setup.seed) : -1
@@ -586,6 +617,12 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
       skip(`Could not fill ${email.unfilled.join(', ')}.`)
       continue
     }
+    // Nobody gets the very same email twice (same subject and text), whatever campaign sent it.
+    const same = sentBefore.find((e) => e.toEmail === to.email && e.subject === email.subject && e.body === email.text)
+    if (same) {
+      skip(`Already sent this same email on ${same.sentAt?.toISOString().slice(0, 10)}; a follow-up needs different content.`)
+      continue
+    }
     // Your own template is stored once per person: refuse a template so large, for this many people, that the review and the
     // stored emails would become enormous (a normal email is 5-15 KB).
     if (setup.custom) {
@@ -595,7 +632,10 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
       }
     }
     readyCount++
-    rows.push({ ...base, contactName: to.name, toEmail: to.email, ccEmails: ccOk, subject: email.subject, text: email.text, html: email.html, templateKey: template.key, version: versionOf(template.key), status: 'ready', reason: null })
+    usedInThisSend.add(to.email)
+    const last = lastSentTo(to.email)
+    const note = last ? `Follow-up: last emailed on ${last.sentAt?.toISOString().slice(0, 10)}.` : null
+    rows.push({ ...base, contactName: to.name, toEmail: to.email, ccEmails: ccOk, subject: email.subject, text: email.text, html: email.html, templateKey: template.key, version: versionOf(template.key), status: 'ready', reason: null, note })
   }
 
   // A start time already passed begins now.

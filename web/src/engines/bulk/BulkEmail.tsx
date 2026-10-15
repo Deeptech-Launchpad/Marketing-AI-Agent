@@ -74,6 +74,8 @@ interface ReviewRow {
   templateKey?: string | null
   status: 'ready' | 'skipped'
   reason: string | null
+  /** A follow-up: when an earlier campaign last emailed this person (2026-10-15). */
+  note?: string | null
   scheduledLocal: string | null
 }
 interface Review {
@@ -717,6 +719,12 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
               {review.templateNotes && review.templateNotes.length > 0 && (
                 <p className="otr-warn">Taken out of your template for safety: {review.templateNotes.join('; ')}.</p>
               )}
+              {review.rows.some((r) => r.status === 'ready' && r.note) && (
+                <p className="note">
+                  <strong>{review.rows.filter((r) => r.status === 'ready' && r.note).length}</strong> of these people were emailed by an earlier campaign — this send is a
+                  follow-up to them. Nobody gets the same email twice.
+                </p>
+              )}
               <div className="otr-scroll" style={{ maxHeight: 360, overflowY: 'auto' }}>
                 <table className="otr-table">
                   <thead>
@@ -733,7 +741,10 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                     {review.rows.map((r) => (
                       <tr key={r.position} aria-selected={r.position === previewPos}>
                         <td>{r.companyName}</td>
-                        <td>{r.contactName ?? '—'}</td>
+                        <td>
+                          {r.contactName ?? '—'}
+                          {r.status === 'ready' && r.note && <div className="cell-dim">{r.note}</div>}
+                        </td>
                         <td>{ownLabel(ownNumber(r.templateKey), Boolean(review.templateOrder)) ?? (r.version ? `Version ${r.version}` : '—')}</td>
                         <td>{r.toEmail ?? '—'}</td>
                         <td className="cell-dim">{r.ccEmails.join(', ') || '—'}</td>

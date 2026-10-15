@@ -1841,3 +1841,151 @@ describe('several own templates, in order or at random', () => {
     expect(review.templateOrder).toBeNull()
   })
 })
+
+// ── Follow-up campaigns (2026-10-15) ────────────────────────────────────────
+// The same Excel file, uploaded again for a separately approved follow-up with
+// DIFFERENT content: the people an earlier campaign emailed are no longer
+// skipped. Still blocked: the same email twice, the approved first email again
+// inside the cooldown, the same address twice in one send, an address queued
+// elsewhere, an unknown outcome, and anyone on the opt-out list.
+describe('follow-up campaigns to people an earlier campaign emailed', () => {
+  const FILE = async () =>
+    xlsx([
+      HEADER,
+      ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''],
+      ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', ''],
+      ['Charlie Co', 'u', 'Cy Fox', 'Owner', 'cy@charlie.test', '', '', '', ''],
+    ])
+  const FOLLOW_UP = { subject: 'Following up, [Company Name]', bodyHtml: '<p>Hi [First Name], following up on my earlier note — the overview is attached.</p>' }
+  const OTHER = { subject: 'One more idea for [Company Name]', bodyHtml: '<p>Hi [First Name], one more idea for you.</p>' }
+  const setup = async (day: string, extra: Record<string, unknown> = {}) => ({
+    fileBase64: await FILE(),
+    fileName: 'leads.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: day,
+    startTime: '10:00',
+    intervalMinutes: 5,
+    ...extra,
+  })
+  const run = async (day: string, n: number) => {
+    for (let m = 0; m < n * 5; m += 5) await svc.dispatchBulkEmails(new Date(istToUtc(day, '10:00')!.getTime() + m * 60_000))
+  }
+  let sends: Array<{ key: string; to: string; subject: string; attachments?: unknown[] }>
+  let outcomeFor: (to: string) => 'sent' | 'unknown'
+
+  beforeEach(() => {
+    env.BULK_SEND_VIA = 'crm'
+    sends = []
+    outcomeFor = () => 'sent'
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: { maxFiles: 5, maxBytes: 10485760 } }),
+      send: async (e) => {
+        sends.push({ key: e.key, to: e.to, subject: e.subject, ...(e.attachments ? { attachments: e.attachments } : {}) })
+        return outcomeFor(e.to) === 'sent'
+          ? { outcome: 'sent', messageId: `gm-${sends.length}`, activityId: `act-${sends.length}`, fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }
+          : { outcome: 'unknown', messageId: null, activityId: null, fromEmail: null, tracked: false, error: 'timeout' }
+      },
+      statuses: async () => [],
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+  })
+
+  /** Campaign 1: the approved Versions 1-3 to all three, sent. */
+  const firstCampaign = async () => {
+    const { campaignId } = await svc.startBulk(actor, { ...(await setup('2026-10-10')), confirm: true }, new Date('2026-10-09T12:00:00Z'))
+    await run('2026-10-10', 3)
+    return campaignId
+  }
+
+  it('the same Excel file, a follow-up with different content and an attachment: everyone an earlier campaign emailed gets it; each campaign counts its own', async () => {
+    const first = await firstCampaign()
+    expect(sends.map((s) => s.to)).toEqual(['ann@alpha.test', 'bob@bravo.test', 'cy@charlie.test'])
+
+    const att = await import('../../src/outreach/bulk/attachments.js')
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: Buffer.from('%PDF-1.4 f').toString('base64') }, new Date('2026-10-11T12:00:00Z'))
+    const followUp = await setup('2026-10-12', { customTemplate: FOLLOW_UP, attachmentIds: [pdf.id] })
+    const review = await svc.reviewBulk(actor, followUp, new Date('2026-10-11T12:00:00Z'))
+    expect(review.rows.map((r) => [r.toEmail, r.status, r.reason])).toEqual([
+      ['ann@alpha.test', 'ready', null],
+      ['bob@bravo.test', 'ready', null],
+      ['cy@charlie.test', 'ready', null],
+    ])
+    expect(review.rows.every((r) => r.note === 'Follow-up: last emailed on 2026-10-10.')).toBe(true)
+
+    const { campaignId: second } = await svc.startBulk(actor, { ...followUp, confirm: true }, new Date('2026-10-11T12:00:00Z'))
+    await run('2026-10-12', 3)
+    const followUps = sends.slice(3)
+    expect(followUps.map((s) => s.to)).toEqual(['ann@alpha.test', 'bob@bravo.test', 'cy@charlie.test'])
+    expect(followUps.map((s) => s.subject)).toEqual(['Following up, Alpha Co', 'Following up, Bravo Co', 'Following up, Charlie Co'])
+    for (const s of followUps) expect(s.attachments).toEqual([{ filename: 'Overview.pdf', mimeType: 'application/pdf', content: Buffer.from('%PDF-1.4 f').toString('base64') }])
+    // Each email has its own send key (its own NXT Sales record and tracking), none shared with the first campaign.
+    expect(new Set(sends.map((s) => s.key)).size).toBe(6)
+
+    const v1 = await svc.bulkView('t1', first)
+    const v2 = await svc.bulkView('t1', second)
+    expect(v1.counts).toMatchObject({ sent: 3, failed: 0, skipped: 0, total: 3 })
+    expect(v2.counts).toMatchObject({ sent: 3, failed: 0, skipped: 0, total: 3 })
+  })
+
+  it('the very same email is never sent twice: repeating the follow-up skips everyone who already got it', async () => {
+    await firstCampaign()
+    await svc.startBulk(actor, { ...(await setup('2026-10-12', { customTemplate: FOLLOW_UP })), confirm: true }, new Date('2026-10-11T12:00:00Z'))
+    await run('2026-10-12', 3)
+    const again = await svc.reviewBulk(actor, await setup('2026-10-14', { customTemplate: FOLLOW_UP }), new Date('2026-10-13T12:00:00Z'))
+    expect(again.rows.every((r) => r.status === 'skipped' && /^Already sent this same email on 2026-10-12; a follow-up needs different content\.$/.test(r.reason!))).toBe(true)
+    // …while a second follow-up with different content may go.
+    const other = await svc.reviewBulk(actor, await setup('2026-10-14', { customTemplate: OTHER }), new Date('2026-10-13T12:00:00Z'))
+    expect(other.rows.every((r) => r.status === 'ready')).toBe(true)
+  })
+
+  it('the approved first email (Versions 1-3) still goes once per cooldown: re-running it skips everyone, as before', async () => {
+    await firstCampaign()
+    const rerun = await svc.reviewBulk(actor, await setup('2026-10-12'), new Date('2026-10-11T12:00:00Z'))
+    expect(rerun.rows.every((r) => r.status === 'skipped' && /^Already emailed by a bulk send on 2026-10-10/.test(r.reason!))).toBe(true)
+  })
+
+  it('within one send, the same address listed under two companies is emailed once', async () => {
+    const file = await xlsx([
+      HEADER,
+      ['Alpha Co', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''],
+      ['Alpha Holdings', 'u', 'Ann Lee', 'Owner', 'ann@alpha.test', '', '', '', ''],
+      ['Bravo Co', 'u', 'Bob Ray', 'Owner', 'bob@bravo.test', '', '', '', ''],
+    ])
+    const s = { ...(await setup('2026-10-12', { customTemplate: FOLLOW_UP })), fileBase64: file }
+    const review = await svc.reviewBulk(actor, s, new Date('2026-10-11T12:00:00Z'))
+    expect(review.rows.map((r) => [r.companyName, r.status])).toEqual([['Alpha Co', 'ready'], ['Alpha Holdings', 'skipped'], ['Bravo Co', 'ready']])
+    expect(review.rows[1]!.reason).toMatch(/already in this send/)
+    await svc.startBulk(actor, { ...s, confirm: true }, new Date('2026-10-11T12:00:00Z'))
+    await run('2026-10-12', 3)
+    expect(sends.filter((x) => x.to === 'ann@alpha.test')).toHaveLength(1)
+  })
+
+  it('an earlier email with an unknown outcome still blocks that address in a follow-up (never resent blindly)', async () => {
+    outcomeFor = (to) => (to === 'bob@bravo.test' ? 'unknown' : 'sent')
+    await firstCampaign()
+    const review = await svc.reviewBulk(actor, await setup('2026-10-12', { customTemplate: FOLLOW_UP }), new Date('2026-10-11T12:00:00Z'))
+    expect(review.rows.find((r) => r.toEmail === 'bob@bravo.test')).toMatchObject({ status: 'skipped' })
+    expect(review.rows.find((r) => r.toEmail === 'bob@bravo.test')!.reason).toMatch(/^Possibly already emailed/)
+    expect(review.rows.filter((r) => r.status === 'ready').map((r) => r.toEmail)).toEqual(['ann@alpha.test', 'cy@charlie.test'])
+  })
+
+  it('an address still queued in another send is not added to a second one; the opt-out list still applies to follow-ups', async () => {
+    await firstCampaign()
+    await svc.startBulk(actor, { ...(await setup('2026-10-20', { customTemplate: FOLLOW_UP })), confirm: true }, new Date('2026-10-11T12:00:00Z')) // queued, not sent yet
+    suppressed.add('cy@charlie.test')
+    const review = await svc.reviewBulk(actor, await setup('2026-10-21', { customTemplate: OTHER }), new Date('2026-10-11T12:00:00Z'))
+    expect(review.rows.find((r) => r.toEmail === 'ann@alpha.test')!.reason).toBe('Already queued in another bulk send.')
+    expect(review.rows.find((r) => r.toEmail === 'cy@charlie.test')!.reason).toMatch(/^Already queued|^On the opt-out list/)
+    suppressed.clear()
+  })
+
+  it('opt-out applies to a follow-up even when nothing else blocks it', async () => {
+    await firstCampaign()
+    suppressed.add('bob@bravo.test')
+    const review = await svc.reviewBulk(actor, await setup('2026-10-12', { customTemplate: FOLLOW_UP }), new Date('2026-10-11T12:00:00Z'))
+    expect(review.rows.find((r) => r.toEmail === 'bob@bravo.test')!.reason).toMatch(/^On the opt-out list/)
+    suppressed.clear()
+  })
+})
