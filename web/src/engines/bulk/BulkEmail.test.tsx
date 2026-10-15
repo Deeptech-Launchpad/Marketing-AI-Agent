@@ -147,11 +147,24 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
     if (method === 'POST' && u.endsWith('/outreach/bulk/single/start')) return json({ campaignId: 'bk1', scheduled: 1 }, 201)
     if (method === 'POST' && u.endsWith('/outreach/bulk/analyze')) return json(ANALYSIS)
     if (method === 'POST' && u.endsWith('/outreach/bulk/review')) {
-      const b = JSON.parse(String(init.body)) as { attachmentIds?: string[]; customTemplate?: { subject: string; bodyHtml: string } }
-      const rows = b.customTemplate
-        ? REVIEW.rows.map((r) => (r.status === 'ready' ? { ...r, ...ownFill(b.customTemplate!, r.contactName!.split(' ')[0]!, r.companyName), templateKey: 'custom', version: null } : r))
+      const b = JSON.parse(String(init.body)) as {
+        attachmentIds?: string[]
+        customTemplate?: { subject: string; bodyHtml: string }
+        customTemplates?: Array<{ subject: string; bodyHtml: string }>
+        templateOrder?: 'sequential' | 'random'
+      }
+      // Several own templates (2026-10-14): the fake server gives them out in order over the ready rows.
+      const list = b.customTemplates ?? (b.customTemplate ? [b.customTemplate] : [])
+      let k = 0
+      const rows = list.length
+        ? REVIEW.rows.map((r) => {
+            if (r.status !== 'ready') return r
+            const n = k++ % list.length
+            return { ...r, ...ownFill(list[n]!, r.contactName!.split(' ')[0]!, r.companyName), templateKey: n === 0 ? 'custom' : `custom_${n + 1}`, version: null }
+          })
         : REVIEW.rows
-      return json({ ...REVIEW, rows, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null, templateNotes: opts.templateNotes ?? [] })
+      const templateOrder = list.length > 1 ? (b.templateOrder ?? 'sequential') : null
+      return json({ ...REVIEW, rows, templateOrder, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null, templateNotes: opts.templateNotes ?? [] })
     }
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
@@ -751,5 +764,139 @@ describe('your own template (2026-10-12): paste it, see the complete email, appr
     await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/single/start'))).toBe(true))
     expect(posts().find((c) => c.url.endsWith('/single/start'))!.body).toMatchObject({ confirm: true, customTemplate: { subject: 'Idea for [Company Name]', bodyHtml: BODY } })
+  })
+})
+
+describe('several own templates (2026-10-14): add 2-3 templates and choose in order or random', () => {
+  const body = (n: number) => `<p>Hi <b>[First Name]</b>, this is template ${n}.</p>`
+  const fill = async (n: number, label: string) => {
+    await userEvent.type(screen.getByLabelText(`${label} subject`), `T${n} for [[Company Name]`) // [[ types a literal [
+    const box = screen.getByRole('textbox', { name: `${label} body` })
+    box.innerHTML = body(n)
+    fireEvent.input(box)
+  }
+  const twoTemplates = async () => {
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    await fill(1, 'Template')
+    await userEvent.click(screen.getByRole('button', { name: /add another template/i }))
+    await fill(2, 'Template 2')
+  }
+  const lastReview = () => posts().filter((c) => c.url.endsWith('/outreach/bulk/review')).pop()!.body!
+
+  it('one own template works as before; "Add another template" adds up to 3, each with its own subject and body; Remove takes one away', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    expect(screen.queryByRole('radio', { name: /^in order/i })).not.toBeInTheDocument() // no order choice for one template
+    await userEvent.click(screen.getByRole('button', { name: /add another template/i }))
+    expect(screen.getByLabelText('Template 1 subject')).toBeInTheDocument()
+    expect(screen.getByLabelText('Template 2 subject')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /add another template/i }))
+    expect(screen.getByLabelText('Template 3 subject')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add another template/i })).not.toBeInTheDocument() // at most 3
+    await userEvent.click(screen.getByRole('button', { name: /remove template 2/i }))
+    expect(screen.queryByLabelText('Template 3 subject')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add another template/i })).toBeInTheDocument()
+  })
+
+  it('removing a template keeps what was typed in the others', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    await userEvent.click(screen.getByRole('button', { name: /add another template/i }))
+    await userEvent.click(screen.getByRole('button', { name: /add another template/i }))
+    await fill(3, 'Template 3')
+    await userEvent.click(screen.getByRole('button', { name: /remove template 1/i }))
+    expect(screen.getByLabelText('Template 2 subject')).toHaveValue('T3 for [Company Name]')
+    expect(screen.getByRole('textbox', { name: 'Template 2 body' }).innerHTML).toContain('this is template 3')
+  })
+
+  it('cannot review until every template has a subject and a body', async () => {
+    stub()
+    await upload()
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    await fill(1, 'Template')
+    await userEvent.click(screen.getByRole('button', { name: /add another template/i }))
+    const next = screen.getByRole('button', { name: /next: review emails/i })
+    expect(next).toBeDisabled() // template 2 is empty
+    await fill(2, 'Template 2')
+    expect(next).toBeEnabled()
+  })
+
+  it('in order (the default): the request carries both templates and the order; the review and approval show which template each person gets', async () => {
+    stub()
+    await upload()
+    await twoTemplates()
+    expect(screen.getByRole('radio', { name: /^in order/i })).toBeChecked()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    expect(lastReview()).toMatchObject({
+      customTemplates: [
+        { subject: 'T1 for [Company Name]', bodyHtml: body(1) },
+        { subject: 'T2 for [Company Name]', bodyHtml: body(2) },
+      ],
+      templateOrder: 'sequential',
+    })
+    expect('customTemplate' in lastReview()).toBe(false)
+    expect('shuffleSeed' in lastReview()).toBe(false)
+    expect(screen.getByRole('cell', { name: 'Your template 1' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: 'Your template 2' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+    expect(await screen.findByText(/Your own templates, in order:\s*template 1 → 1 emails · template 2 → 1 emails/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ confirm: true, customTemplates: lastReview().customTemplates, templateOrder: 'sequential' })
+  })
+
+  it('random: the same random order (seed) is used for the review and the start — what was reviewed is what is sent', async () => {
+    stub()
+    await upload()
+    await twoTemplates()
+    await userEvent.click(screen.getByRole('radio', { name: /^random/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    const seed = lastReview().shuffleSeed
+    expect(lastReview()).toMatchObject({ templateOrder: 'random' })
+    expect(Number.isInteger(seed)).toBe(true)
+    await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+    expect(await screen.findByText(/Your own templates, at random/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ templateOrder: 'random', shuffleSeed: seed })
+  })
+
+  it('changing the order after a review clears the review: the next one is asked for again', async () => {
+    stub()
+    await upload()
+    await twoTemplates()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    await userEvent.click(screen.getAllByRole('button', { name: /^back$/i }).pop()!)
+    await userEvent.click(screen.getByRole('radio', { name: /^random/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    expect(lastReview()).toMatchObject({ templateOrder: 'random' })
+  })
+
+  it('back to one template: the request is exactly the single-template one again', async () => {
+    stub()
+    await upload()
+    await twoTemplates()
+    await userEvent.click(screen.getByRole('button', { name: /remove template 2/i }))
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    expect(lastReview()).toMatchObject({ customTemplate: { subject: 'T1 for [Company Name]', bodyHtml: body(1) } })
+    for (const k of ['customTemplates', 'templateOrder', 'shuffleSeed']) expect(k in lastReview()).toBe(false)
+  })
+
+  it('send to one person still has one template (no "Add another")', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /send to one person/i }))
+    await userEvent.click(screen.getByRole('radio', { name: /use my own template/i }))
+    expect(screen.getByLabelText('Template subject')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add another template/i })).not.toBeInTheDocument()
   })
 })

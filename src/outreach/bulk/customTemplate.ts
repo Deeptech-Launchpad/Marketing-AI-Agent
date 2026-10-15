@@ -21,6 +21,39 @@ export const MAX_CUSTOM_SUBJECT = 200
 /** The pasted email, as HTML. */
 export const MAX_CUSTOM_HTML = 200_000
 
+// SEVERAL OWN TEMPLATES (2026-10-14): a bulk send may use up to 3 of the user's
+// own templates, given in order (1 → 2 → 3 → 1 …) or at random. The first keeps
+// the key 'custom' (so a send with one template is exactly as before); the
+// others are 'custom_2' and 'custom_3'. Random is SEEDED by the browser, so the
+// review and the start give every person the same template: what was reviewed
+// is what is sent.
+export const MAX_CUSTOM_TEMPLATES = 3
+export type TemplateOrder = 'sequential' | 'random'
+
+/** The key of own template number n (1-based). */
+export function customKey(n: number): string {
+  return n <= 1 ? CUSTOM_TEMPLATE_KEY : `${CUSTOM_TEMPLATE_KEY}_${n}`
+}
+
+/** Which own template a key is (1, 2 or 3), or null for anything else. */
+export function customNumber(key: string | null | undefined): number | null {
+  if (key === CUSTOM_TEMPLATE_KEY) return 1
+  const m = /^custom_([2-9])$/.exec(key ?? '')
+  return m ? Number(m[1]) : null
+}
+
+/** Which template (0-based) the email with this index gets. Pure: the same inputs always give the same answer. */
+export function pickTemplate(order: TemplateOrder, count: number, index: number, seed: number): number {
+  if (count <= 1) return 0
+  if (order === 'sequential') return index % count
+  // mulberry32, one step from a seed mixed with the index: an independent, repeatable draw per email.
+  let t = ((seed >>> 0) + Math.imul(index + 1, 0x9e3779b9)) >>> 0
+  t = Math.imul(t ^ (t >>> 15), t | 1)
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+  const r = ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  return Math.floor(r * count)
+}
+
 export interface CustomTemplate {
   subject: string
   /** The cleaned body, still with its [First Name] / [Company Name] placeholders. */

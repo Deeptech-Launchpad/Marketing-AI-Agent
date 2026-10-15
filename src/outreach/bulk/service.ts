@@ -11,7 +11,7 @@ import { stagedAttachments, linkAttachments, campaignAttachments, campaignAttach
 import { crmBulk, crmKeyOf, type CrmSender } from './crmSend.js'
 import { checkSender, type SenderCheck } from './senders.js'
 import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
-import { composeCustomEmail, CUSTOM_TEMPLATE_KEY, prepareCustomTemplate, type CustomTemplate } from './customTemplate.js'
+import { composeCustomEmail, customKey, customNumber, MAX_CUSTOM_TEMPLATES, pickTemplate, prepareCustomTemplate, type CustomTemplate, type TemplateOrder } from './customTemplate.js'
 import { BULK_ROTATION, bulkTemplate, cleanSignature, composeBulkEmail, rotationTemplate, STATIC_SITE, versionOf, type BulkTemplate } from './template.js'
 import { addPixel, hashToken, newTrackingToken, pixelUrl, trackingReady, trackingStatusForScreen } from './tracking.js'
 import { bulkSender, bulkSendingStatus, bulkTransportAccount } from './transport.js'
@@ -426,11 +426,39 @@ export interface BulkSetup {
   attachmentIds?: string[]
   /** The user's OWN template instead of Versions 1-3 (2026-10-12): every recipient gets this same email. */
   customTemplate?: { subject: string; bodyHtml: string }
+  /** Or 2-3 of the user's own templates (2026-10-14), given in order or at random. */
+  customTemplates?: Array<{ subject: string; bodyHtml: string }>
+  templateOrder?: TemplateOrder
+  /** Fixes the random order chosen in the browser, so the start sends exactly what was reviewed. */
+  shuffleSeed?: number
 }
 
-/** A template the user pasted, as the one "template" of a send (key 'custom'); its text and HTML stay with it. */
-function customAsTemplate(c: CustomTemplate): BulkTemplate {
-  return { key: CUSTOM_TEMPLATE_KEY, label: 'Your own template', subject: c.subject, body: c.text }
+/** A template the user pasted, as a "template" of a send (key 'custom', 'custom_2' …); its text and HTML stay with it. */
+function customAsTemplate(c: CustomTemplate, n = 1): BulkTemplate {
+  return { key: customKey(n), label: n > 1 ? `Your own template ${n}` : 'Your own template', subject: c.subject, body: c.text }
+}
+
+/** The own templates of a bulk send, checked and cleaned (empty = the approved versions). */
+function checkedCustoms(s: BulkSetup): { customs: CustomTemplate[]; order: TemplateOrder; seed: number } {
+  if (s.customTemplate && s.customTemplates) throw new BadRequestError('Send either one template or a list of templates, not both.')
+  const list = s.customTemplates ?? (s.customTemplate ? [s.customTemplate] : [])
+  if (s.customTemplates && list.length === 0) throw new BadRequestError('Add at least one template.')
+  if (list.length > MAX_CUSTOM_TEMPLATES) throw new BadRequestError(`At most ${MAX_CUSTOM_TEMPLATES} templates.`)
+  const customs = list.map((t, i) => {
+    try {
+      return prepareCustomTemplate(t)
+    } catch (e) {
+      if (e instanceof BadRequestError && list.length > 1) throw new BadRequestError(`Template ${i + 1}: ${e.message}`)
+      throw e
+    }
+  })
+  const order: TemplateOrder = s.templateOrder ?? 'sequential'
+  if (order !== 'sequential' && order !== 'random') throw new BadRequestError('Choose in order or random.')
+  const seed = order === 'random' ? Number(s.shuffleSeed) : 0
+  if (order === 'random' && customs.length > 1 && !(Number.isInteger(seed) && seed >= 0 && seed <= 0x7fffffff)) {
+    throw new BadRequestError('The random order is missing. Choose Random again.')
+  }
+  return { customs, order, seed }
 }
 
 export interface ReviewRow {
@@ -453,7 +481,8 @@ export interface ReviewRow {
 }
 
 function checkedSetup(s: BulkSetup) {
-  const custom = s.customTemplate ? prepareCustomTemplate(s.customTemplate) : null
+  const { customs, order, seed } = checkedCustoms(s)
+  const custom = customs[0] ?? null
   const template = custom ? customAsTemplate(custom) : bulkTemplate(s.templateKey)
   if (!template) throw new BadRequestError('Unknown template.')
   const start = istToUtc(s.startDate, s.startTime)
@@ -463,7 +492,7 @@ function checkedSetup(s: BulkSetup) {
   if (sendingViaCrm() && intervalMinutes < CRM_MIN_INTERVAL_MINUTES) {
     throw new BadRequestError(`Through NXT Sales, emails go at least ${CRM_MIN_INTERVAL_MINUTES} minutes apart — choose ${CRM_MIN_INTERVAL_MINUTES} or more minutes between emails.`)
   }
-  return { template, custom, start, intervalMinutes }
+  return { template, custom, customs, order, seed, start, intervalMinutes }
 }
 
 /** Every company's email, its time and its status — exactly what Start would store. Nothing is written. */
@@ -546,10 +575,12 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     // The sender's CC addresses are copied on every email too.
     for (const extra of profile.ccEmails) if (!ccOk.includes(extra) && extra !== to.email) ccOk.push(extra)
     // Versions in sequence: 1, 2, 3, 1, 2, 3 … over the emails that go.
-    // Your own template: the same email for everyone, no rotation.
-    const template = setup.custom ? setup.template : rotationTemplate(readyCount)
-    const email = setup.custom
-      ? composeCustomEmail({ template: setup.custom, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
+    // Your own template(s): one template = the same email for everyone; 2-3 = in order or at random (seeded).
+    const pick = setup.customs.length ? pickTemplate(setup.order, setup.customs.length, readyCount, setup.seed) : -1
+    const own = pick >= 0 ? setup.customs[pick]! : null
+    const template = own ? customAsTemplate(own, pick + 1) : rotationTemplate(readyCount)
+    const email = own
+      ? composeCustomEmail({ template: own, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
       : composeBulkEmail({ template, firstName: firstNameOf(to.name), companyName: c.companyName, signature, signatureHtml })
     if (email.unfilled.length) {
       skip(`Could not fill ${email.unfilled.join(', ')}.`)
@@ -602,8 +633,10 @@ export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
     sending: bulkSendingStatus(),
     attachments: attachments.list,
     attachmentProblem: attachments.problem,
-    /** What was taken out of the pasted template, in words (empty = kept whole). */
-    templateNotes: setup.custom?.removed ?? [],
+    /** What was taken out of the pasted template(s), in words (empty = kept whole). */
+    templateNotes: setup.customs.length > 1 ? setup.customs.flatMap((c, i) => c.removed.map((r) => `template ${i + 1}: ${r}`)) : (setup.custom?.removed ?? []),
+    /** With 2-3 own templates: how they are given out (null otherwise). */
+    templateOrder: setup.customs.length > 1 ? setup.order : null,
   }
 }
 
@@ -840,14 +873,16 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
       sourceRows: r.rows as never,
       subject: r.subject,
       body: r.status === 'ready' ? r.text : null,
-      bodyHtml: r.status === 'ready' && r.templateKey === CUSTOM_TEMPLATE_KEY ? r.html : null,
+      bodyHtml: r.status === 'ready' && customNumber(r.templateKey) !== null ? r.html : null,
       templateKey: r.templateKey,
       status: r.status === 'ready' ? 'scheduled' : 'skipped',
       reason: r.reason,
       scheduledAt: r.scheduledAt ? new Date(r.scheduledAt) : null,
     })),
   })
-  await record(actor, id, 'started', `Bulk email "${name}" approved: ${ready.length} emails from ${fromEmail}, from ${review.schedule.firstLocal}, ${checked.intervalMinutes} min apart; ${review.counts.skipped} skipped${attachmentNames(review.attachments)}`, {
+  const ownNote = checked.customs.length > 1 ? `; ${checked.customs.length} own templates, ${checked.order === 'random' ? 'at random' : 'in order'}` : checked.custom ? '; own template' : ''
+  await record(actor, id, 'started', `Bulk email "${name}" approved: ${ready.length} emails from ${fromEmail}, from ${review.schedule.firstLocal}, ${checked.intervalMinutes} min apart; ${review.counts.skipped} skipped${ownNote}${attachmentNames(review.attachments)}`, {
+    ...(checked.customs.length > 1 ? { ownTemplates: checked.customs.length, templateOrder: checked.order } : {}),
     validEmails: ready.length,
     skipped: review.counts.skipped,
     noWorkAddress: review.counts.noWorkAddress,
@@ -944,7 +979,9 @@ export async function bulkView(tenantId: string, id: string) {
       subject: r.subject,
       body: r.body,
       version: versionOf(r.templateKey ?? c.templateKey),
-      ownTemplate: (r.templateKey ?? c.templateKey) === CUSTOM_TEMPLATE_KEY,
+      ownTemplate: customNumber(r.templateKey ?? c.templateKey) !== null,
+      /** Which own template (1, 2 or 3) this person received; null for the approved versions. */
+      ownTemplateNumber: customNumber(r.templateKey ?? c.templateKey),
       status: r.status,
       reason: r.reason,
       scheduledLocal: r.scheduledAt ? fmtIst(r.scheduledAt) : null,

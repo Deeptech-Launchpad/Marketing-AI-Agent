@@ -1701,3 +1701,143 @@ describe('your own template: size guard', () => {
     env.BULK_SEND_VIA = 'smtp'
   })
 })
+
+// ── Several own templates (2026-10-14) ──────────────────────────────────────
+// 2-3 of the user's own templates, given in order (1 → 2 → 3 → 1 …) or at
+// random (seeded in the browser, so the start sends exactly what was reviewed).
+describe('several own templates, in order or at random', () => {
+  const T = [1, 2, 3].map((n) => ({ subject: `T${n} for [Company Name]`, bodyHtml: `<p>Hi [First Name], this is <b>template ${n}</b>.</p>` }))
+  const people = (n: number) =>
+    Array.from({ length: n }, (_, i) => [`Co ${i + 1}`, 'u', `Person${i + 1} Lee`, 'Owner', `p${i + 1}@co${i + 1}.test`, '', '', '', ''])
+  const LIST = async (n: number, extra: Record<string, unknown> = {}) => ({
+    fileBase64: await xlsx([HEADER, ...people(n)]),
+    fileName: 'list.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-10',
+    startTime: '10:00',
+    intervalMinutes: 5,
+    ...extra,
+  })
+  const BEFORE = new Date('2026-10-09T12:00:00Z')
+  const at = (m: number) => new Date(istToUtc('2026-10-10', '10:00')!.getTime() + m * 60_000)
+  let sends: Array<{ to: string; subject: string; html: string; text: string; attachments?: unknown[] }>
+
+  beforeEach(() => {
+    env.BULK_SEND_VIA = 'crm'
+    sends = []
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: { maxFiles: 5, maxBytes: 10485760 } }),
+      send: async (e) => {
+        sends.push({ to: e.to, subject: e.subject, html: e.html, text: e.text, ...(e.attachments ? { attachments: e.attachments } : {}) })
+        return { outcome: 'sent', messageId: `gm-${sends.length}`, activityId: `act-${sends.length}`, fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }
+      },
+      statuses: async () => [],
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+  })
+
+  it('in order: template 1 → 2 → 3 → 1 → 2 → 3 down the list, each filled for its person', async () => {
+    const review = await svc.reviewBulk(actor, await LIST(6, { customTemplates: T, templateOrder: 'sequential' }), BEFORE)
+    const ready = review.rows.filter((r) => r.status === 'ready')
+    expect(ready.map((r) => r.templateKey)).toEqual(['custom', 'custom_2', 'custom_3', 'custom', 'custom_2', 'custom_3'])
+    expect(ready.map((r) => r.subject)).toEqual(['T1 for Co 1', 'T2 for Co 2', 'T3 for Co 3', 'T1 for Co 4', 'T2 for Co 5', 'T3 for Co 6'])
+    expect(ready[1]!.html).toContain('Hi Person, this is <b>template 2</b>.') // first names keep letters only ("Person2" → "Person"), as before
+    expect(ready.every((r) => r.version === null)).toBe(true)
+    expect(review.templateOrder).toBe('sequential')
+    expect(store.bulkEmailCampaign).toEqual([]) // a review writes nothing
+  })
+
+  it('two templates in order: 1, 2, 1, 2', async () => {
+    const review = await svc.reviewBulk(actor, await LIST(4, { customTemplates: T.slice(0, 2), templateOrder: 'sequential' }), BEFORE)
+    expect(review.rows.map((r) => r.templateKey)).toEqual(['custom', 'custom_2', 'custom', 'custom_2'])
+  })
+
+  it('at random: the review and the start give every person the same template, and each person is sent exactly what was reviewed', async () => {
+    const setup = await LIST(12, { customTemplates: T, templateOrder: 'random', shuffleSeed: 424242 })
+    const review = await svc.reviewBulk(actor, setup, BEFORE)
+    const again = await svc.reviewBulk(actor, setup, BEFORE)
+    const keys = review.rows.map((r) => r.templateKey)
+    expect(again.rows.map((r) => r.templateKey)).toEqual(keys)
+    expect(new Set(keys).size).toBeGreaterThan(1) // really mixed, not one template for all
+    expect(keys.join()).not.toBe('custom,custom_2,custom_3,custom,custom_2,custom_3,custom,custom_2,custom_3,custom,custom_2,custom_3')
+    expect(review.templateOrder).toBe('random')
+
+    await svc.startBulk(actor, { ...setup, confirm: true }, BEFORE)
+    const stored = store.bulkEmailRecipient!
+    expect(stored.map((r) => r.templateKey)).toEqual(keys)
+    for (const [i, r] of review.rows.entries()) {
+      expect(stored[i]!.bodyHtml).toBe(r.html)
+      expect(stored[i]!.subject).toBe(r.subject)
+    }
+    for (let m = 0; m < 12 * 5; m += 5) await svc.dispatchBulkEmails(at(m))
+    expect(sends).toHaveLength(12)
+    for (const s of sends) {
+      const r = stored.find((x) => x.toEmail === s.to)!
+      expect(s.html).toBe(r.bodyHtml)
+      expect(s.subject).toBe(r.subject)
+      expect(s.text).toBe(r.body)
+      expect(s.html).not.toContain('<pre')
+    }
+  })
+
+  it('a different random order gives a different assignment (the browser picks a new seed for "Random")', async () => {
+    const a = await svc.reviewBulk(actor, await LIST(12, { customTemplates: T, templateOrder: 'random', shuffleSeed: 1 }), BEFORE)
+    const b = await svc.reviewBulk(actor, await LIST(12, { customTemplates: T, templateOrder: 'random', shuffleSeed: 2 }), BEFORE)
+    expect(a.rows.map((r) => r.templateKey)).not.toEqual(b.rows.map((r) => r.templateKey))
+  })
+
+  it('a person who cannot be filled is skipped and does not use up a turn: the order continues with the next person', async () => {
+    const file = await xlsx([HEADER, ['Co 1', 'u', 'Ann Lee', 'Owner', 'a@co1.test', '', '', '', ''], ['Co 2', 'u', '', 'Owner', 'b@co2.test', '', '', '', ''], ['Co 3', 'u', 'Cy Fox', 'Owner', 'c@co3.test', '', '', '', '']])
+    const review = await svc.reviewBulk(actor, { ...(await LIST(1, { customTemplates: T, templateOrder: 'sequential' })), fileBase64: file }, BEFORE)
+    expect(review.rows.map((r) => [r.status, r.templateKey])).toEqual([['ready', 'custom'], ['skipped', null], ['ready', 'custom_2']])
+  })
+
+  it('the files go on every email, whichever template it is; the campaign view says which template each person got', async () => {
+    const att = await import('../../src/outreach/bulk/attachments.js')
+    const pdf = await att.stageAttachment(actor, { fileName: 'Overview.pdf', contentBase64: Buffer.from('%PDF-1.4 y').toString('base64') }, BEFORE)
+    const { campaignId } = await svc.startBulk(actor, { ...(await LIST(3, { customTemplates: T, templateOrder: 'sequential', attachmentIds: [pdf.id] })), confirm: true }, BEFORE)
+    for (const m of [0, 5, 10]) await svc.dispatchBulkEmails(at(m))
+    expect(sends).toHaveLength(3)
+    for (const s of sends) expect(s.attachments).toEqual([{ filename: 'Overview.pdf', mimeType: 'application/pdf', content: Buffer.from('%PDF-1.4 y').toString('base64') }])
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.recipients.map((r) => r.ownTemplateNumber)).toEqual([1, 2, 3])
+    expect(store.auditEvent!.some((e) => JSON.stringify(e).includes('3 own templates, in order'))).toBe(true)
+  })
+
+  it('one template in the list is exactly the single own template (as before)', async () => {
+    const a = await svc.reviewBulk(actor, await LIST(3, { customTemplates: [T[0]] }), BEFORE)
+    const b = await svc.reviewBulk(actor, await LIST(3, { customTemplate: T[0] }), BEFORE)
+    expect(a.rows).toEqual(b.rows)
+    expect(a.templateOrder).toBeNull()
+  })
+
+  it('what was taken out is said per template', async () => {
+    const dirty = [T[0], { ...T[1]!, bodyHtml: T[1]!.bodyHtml + '<script>alert(1)</script>' }]
+    const review = await svc.reviewBulk(actor, await LIST(2, { customTemplates: dirty, templateOrder: 'sequential' }), BEFORE)
+    expect(review.templateNotes).toEqual(['template 2: scripts and active content'])
+  })
+
+  it('refused: more than 3 templates, both forms at once, random without its seed, an empty template (named by number) — nothing is created', async () => {
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ customTemplates: [...T, T[0]] }, /At most 3 templates/],
+      [{ customTemplates: T, customTemplate: T[0] }, /either one template or a list/],
+      [{ customTemplates: T, templateOrder: 'random' }, /random order is missing/],
+      [{ customTemplates: [T[0], { subject: 'S', bodyHtml: '' }] }, /^Template 2: Paste the body/],
+      [{ customTemplates: [] }, /at least one template/],
+    ]
+    for (const [extra, msg] of cases) {
+      await expect(svc.reviewBulk(actor, await LIST(2, extra), BEFORE)).rejects.toThrow(msg)
+      await expect(svc.startBulk(actor, { ...(await LIST(2, extra)), confirm: true }, BEFORE)).rejects.toThrow(msg)
+    }
+    expect(store.bulkEmailCampaign).toEqual([])
+    expect(store.bulkEmailRecipient).toEqual([])
+  })
+
+  it('the approved versions still rotate 1, 2, 3 as before', async () => {
+    const review = await svc.reviewBulk(actor, await LIST(4), BEFORE)
+    expect(review.rows.map((r) => r.templateKey)).toEqual(['static_site_v1', 'static_site_v2', 'static_site_v3', 'static_site_v1'])
+    expect(review.templateOrder).toBeNull()
+  })
+})
