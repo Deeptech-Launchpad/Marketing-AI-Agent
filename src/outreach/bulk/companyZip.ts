@@ -1,28 +1,40 @@
 import { createHash } from 'node:crypto'
-import { inflateRawSync } from 'node:zlib'
+import { open } from 'node:fs/promises'
+import * as zlib from 'node:zlib'
 import { BadRequestError } from '../../platform/errors.js'
 
-// ZIP OF COMPANY-WISE PDFs (2026-10-17).
+// ZIP OF COMPANY-WISE PDFs (2026-10-17; up to 1 GB since 2026-10-18).
 //
 // The user uploads ONE ZIP holding one PDF per company, each file named after
 // its company ("ABC Limited.pdf"). Each recipient's email gets only the PDF
 // whose name matches that recipient's company. This file reads the ZIP and
 // matches files to companies; it touches no database and sends nothing.
 //
+// A ZIP of up to 1 GB is never held in memory: it is read through a
+// "source" that returns any part of it on request (a file on disk, or a
+// Buffer in tests). The directory at the end of the ZIP is read first; then
+// each PDF is unpacked, checked and forgotten, one at a time, in small steps
+// that let the server carry on with other requests. A scan keeps each file's
+// name, size and SHA-256 but never its content: the content of a matched PDF
+// is read again, and checked against the scan, only when a send starts.
+//
 // The ZIP is untrusted input, so it is read with hard limits and never written
-// to disk: a ZIP is refused whole when it is not a plain ZIP, is encrypted,
-// needs ZIP64, has too many entries, or would expand past a size cap; a single
-// file is marked invalid when it is empty, too large, damaged (its size or
-// CRC-32 does not match), not a real PDF, or has an unsafe name. Only PDFs are
-// used. Nothing is guessed: a company with no matching file, or with several,
-// is reported and must be fixed or excluded before anything is sent.
+// anywhere else: a ZIP is refused whole when it is not a plain ZIP, is
+// encrypted, needs ZIP64, has too many entries, or would expand past a size
+// cap; a single file is marked invalid when it is empty, too large, damaged
+// (its size or CRC-32 does not match), not a real PDF, or has an unsafe name.
+// Only PDFs are used. Nothing is guessed: a company with no matching file, or
+// with several, is reported and must be fixed or excluded before anything is
+// sent.
 
-/** The ZIP itself (uploaded as raw bytes). Under the 25 MB the web server accepts. */
-export const MAX_ZIP_BYTES = 20 * 1024 * 1024
+/** The ZIP itself: 1 GB (uploaded in pieces, kept on disk). */
+export const MAX_ZIP_BYTES = 1024 * 1024 * 1024
 /** Entries in the ZIP's directory (files, folders and junk together). */
-export const MAX_ZIP_ENTRIES = 5000
+export const MAX_ZIP_ENTRIES = 20_000
 /** All PDFs of one ZIP together, unpacked — stops a small ZIP expanding into a huge one. */
-export const MAX_ZIP_UNPACKED_BYTES = 100 * 1024 * 1024
+export const MAX_ZIP_UNPACKED_BYTES = 4 * 1024 * 1024 * 1024
+/** The directory at the end of the ZIP (names and sizes), read in one piece. */
+const MAX_DIRECTORY_BYTES = 16 * 1024 * 1024
 /** One company's PDF. Same as the limit for any attachment. */
 export const COMPANY_FILE_MAX_BYTES = 7 * 1024 * 1024
 
@@ -33,7 +45,62 @@ export const NAME_RE = /^[^\x00-\x1f\x7f"\\/<>:*?|]{1,150}$/
 const NOT_A_ZIP = 'This is not a ZIP file (or it is damaged). Make the ZIP again and upload it.'
 const JUNK_NAMES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini'])
 
+// ── Where the bytes come from ──────────────────────────────────────────────
+
+/** Any part of a ZIP on request. `read` returns at most `length` bytes (fewer only at the end). */
+export interface ZipSource {
+  size: number
+  read(offset: number, length: number): Promise<Buffer>
+}
+
+/** A ZIP that is already in memory (tests, and small files). */
+export const bufferSource = (buf: Buffer): ZipSource => ({
+  size: buf.length,
+  read: async (offset, length) => buf.subarray(offset, offset + length),
+})
+
+/** Opens a ZIP file on disk for reading, runs `fn` with it, and always closes it. */
+export async function withFileSource<T>(path: string, fn: (src: ZipSource) => Promise<T>): Promise<T> {
+  let handle
+  try {
+    handle = await open(path, 'r')
+  } catch {
+    throw new BadRequestError('The company ZIP is no longer available. Upload it again.')
+  }
+  try {
+    const size = (await handle.stat()).size
+    return await fn({
+      size,
+      read: async (offset, length) => {
+        const want = Math.max(0, Math.min(length, size - offset))
+        const buf = Buffer.alloc(want)
+        let got = 0
+        while (got < want) {
+          const r = await handle.read(buf, got, want - got, offset + got)
+          if (r.bytesRead === 0) break
+          got += r.bytesRead
+        }
+        return got === want ? buf : buf.subarray(0, got)
+      },
+    })
+  } finally {
+    await handle.close()
+  }
+}
+
+// ── What a scan returns ────────────────────────────────────────────────────
+
 export type ZipFileStatus = 'ok' | 'invalid' | 'unsupported'
+
+interface DirEntry {
+  name: string
+  flags: number
+  method: number
+  crc: number
+  compressedSize: number
+  size: number
+  offset: number
+}
 
 export interface ZipFile {
   /** As stored in the ZIP, folders included (forward slashes). */
@@ -46,9 +113,10 @@ export interface ZipFile {
   status: ZipFileStatus
   /** Why it cannot be used (null for a usable PDF). */
   reason: string | null
+  /** SHA-256 of the unpacked PDF (a usable PDF only). Its content is read again, and checked against this, when a send starts. */
   sha256: string | null
-  /** The file's content, for a usable PDF only. */
-  bytes: Buffer | null
+  /** Where the file is in the ZIP (a usable PDF only), for extractFile. */
+  entry: DirEntry | null
 }
 
 export interface ZipScan {
@@ -61,8 +129,9 @@ export interface ZipScan {
 
 /**
  * The name a company is matched by: letters and digits only, lower case, single
- * spaces (letters keep their accents and marks). So "ABC Ltd.", "abc  ltd" and "ABC_Ltd" are the same name — and
- * "ABC Limited" is not "ABC Ltd" (nothing is guessed).
+ * spaces (letters keep their accents and marks). So "ABC Ltd.", "abc  ltd" and
+ * "ABC_Ltd" are the same name — and "ABC Limited" is not "ABC Ltd" (nothing is
+ * guessed).
  */
 export function companyFileKey(name: string): string {
   return String(name ?? '')
@@ -77,16 +146,6 @@ export const fileKey = (fileName: string) => companyFileKey(fileName.replace(/\.
 
 // ── The ZIP container ──────────────────────────────────────────────────────
 
-interface DirEntry {
-  name: string
-  flags: number
-  method: number
-  crc: number
-  compressedSize: number
-  size: number
-  offset: number
-}
-
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256)
   for (let n = 0; n < 256; n++) {
@@ -97,7 +156,11 @@ const CRC_TABLE = (() => {
   return t
 })()
 
+// Node's own CRC-32 (fast, native) when this Node has it; otherwise the same sum in plain code.
+const nativeCrc32 = (zlib as unknown as { crc32?: (data: Buffer) => number }).crc32
+
 function crc32(b: Buffer): number {
+  if (nativeCrc32) return nativeCrc32(b) >>> 0
   let c = 0xffffffff
   for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]!) & 0xff]! ^ (c >>> 8)
   return (c ^ 0xffffffff) >>> 0
@@ -113,88 +176,98 @@ function decodeName(raw: Buffer, flags: number): string {
 }
 
 /** The directory of a ZIP: every entry's name, sizes, CRC and position. Throws BadRequestError when it is not a plain, readable ZIP. */
-function readDirectory(buf: Buffer): DirEntry[] {
-  if (buf.length < 22) throw new BadRequestError(NOT_A_ZIP)
+async function readDirectory(src: ZipSource): Promise<DirEntry[]> {
+  if (src.size < 22) throw new BadRequestError(NOT_A_ZIP)
   // The end-of-directory record: the LAST one whose comment length reaches exactly the end of the file.
+  const tailStart = Math.max(0, src.size - 22 - 0xffff)
+  const tail = await src.read(tailStart, src.size - tailStart)
   let eocd = -1
-  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i--) {
-    if (buf.readUInt32LE(i) === 0x06054b50 && i + 22 + buf.readUInt16LE(i + 20) === buf.length) {
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (tail.readUInt32LE(i) === 0x06054b50 && i + 22 + tail.readUInt16LE(i + 20) === tail.length) {
       eocd = i
       break
     }
   }
   if (eocd < 0) throw new BadRequestError(NOT_A_ZIP)
-  const disk = buf.readUInt16LE(eocd + 4)
-  const dirDisk = buf.readUInt16LE(eocd + 6)
-  const onDisk = buf.readUInt16LE(eocd + 8)
-  const total = buf.readUInt16LE(eocd + 10)
-  const dirSize = buf.readUInt32LE(eocd + 12)
-  const dirOffset = buf.readUInt32LE(eocd + 16)
+  const eocdAt = tailStart + eocd
+  const disk = tail.readUInt16LE(eocd + 4)
+  const dirDisk = tail.readUInt16LE(eocd + 6)
+  const onDisk = tail.readUInt16LE(eocd + 8)
+  const total = tail.readUInt16LE(eocd + 10)
+  const dirSize = tail.readUInt32LE(eocd + 12)
+  const dirOffset = tail.readUInt32LE(eocd + 16)
   if (disk !== 0 || dirDisk !== 0 || onDisk !== total) throw new BadRequestError('Multi-part ZIP files are not supported. Make a single ZIP file.')
   if (total === 0xffff || dirSize === 0xffffffff || dirOffset === 0xffffffff) {
-    throw new BadRequestError('ZIP64 archives are not supported. Make a normal ZIP file (it should stay under 20 MB).')
+    throw new BadRequestError('ZIP64 archives are not supported. Make a normal ZIP file (it should stay under 1 GB).')
   }
   if (total === 0) throw new BadRequestError('The ZIP is empty.')
   if (total > MAX_ZIP_ENTRIES) throw new BadRequestError(`The ZIP has more than ${MAX_ZIP_ENTRIES} entries.`)
   const dirEnd = dirOffset + dirSize
-  if (dirEnd > eocd) throw new BadRequestError(NOT_A_ZIP)
+  if (dirEnd > eocdAt || dirSize > MAX_DIRECTORY_BYTES) throw new BadRequestError(NOT_A_ZIP)
 
+  const dir = await src.read(dirOffset, dirSize)
+  if (dir.length !== dirSize) throw new BadRequestError(NOT_A_ZIP)
   const out: DirEntry[] = []
-  let p = dirOffset
+  let p = 0
   for (let i = 0; i < total; i++) {
-    if (p + 46 > dirEnd || buf.readUInt32LE(p) !== 0x02014b50) throw new BadRequestError(NOT_A_ZIP)
-    const flags = buf.readUInt16LE(p + 8)
-    const method = buf.readUInt16LE(p + 10)
-    const crc = buf.readUInt32LE(p + 16)
-    const compressedSize = buf.readUInt32LE(p + 20)
-    const size = buf.readUInt32LE(p + 24)
-    const nameLen = buf.readUInt16LE(p + 28)
-    const extraLen = buf.readUInt16LE(p + 30)
-    const commentLen = buf.readUInt16LE(p + 32)
-    const offset = buf.readUInt32LE(p + 42)
+    if (p + 46 > dir.length || dir.readUInt32LE(p) !== 0x02014b50) throw new BadRequestError(NOT_A_ZIP)
+    const flags = dir.readUInt16LE(p + 8)
+    const method = dir.readUInt16LE(p + 10)
+    const crc = dir.readUInt32LE(p + 16)
+    const compressedSize = dir.readUInt32LE(p + 20)
+    const size = dir.readUInt32LE(p + 24)
+    const nameLen = dir.readUInt16LE(p + 28)
+    const extraLen = dir.readUInt16LE(p + 30)
+    const commentLen = dir.readUInt16LE(p + 32)
+    const offset = dir.readUInt32LE(p + 42)
     if (compressedSize === 0xffffffff || size === 0xffffffff || offset === 0xffffffff) {
-      throw new BadRequestError('ZIP64 archives are not supported. Make a normal ZIP file (it should stay under 20 MB).')
+      throw new BadRequestError('ZIP64 archives are not supported. Make a normal ZIP file (it should stay under 1 GB).')
     }
     const next = p + 46 + nameLen + extraLen + commentLen
-    if (next > dirEnd) throw new BadRequestError(NOT_A_ZIP)
-    out.push({ name: decodeName(buf.subarray(p + 46, p + 46 + nameLen), flags), flags, method, crc, compressedSize, size, offset })
+    if (next > dir.length) throw new BadRequestError(NOT_A_ZIP)
+    out.push({ name: decodeName(dir.subarray(p + 46, p + 46 + nameLen), flags), flags, method, crc, compressedSize, size, offset })
     p = next
   }
   return out
 }
 
 /** One entry's content, checked against its declared size and CRC-32. Throws Error with a short reason. */
-function unpack(buf: Buffer, e: DirEntry): Buffer {
-  if (e.offset + 30 > buf.length || buf.readUInt32LE(e.offset) !== 0x04034b50) throw new Error('its position in the ZIP is damaged')
-  const start = e.offset + 30 + buf.readUInt16LE(e.offset + 26) + buf.readUInt16LE(e.offset + 28)
-  const end = start + e.compressedSize
-  if (end > buf.length) throw new Error('the ZIP is cut short')
-  const data = buf.subarray(start, end)
-  let out: Buffer
-  if (e.method === 0) {
-    if (e.compressedSize !== e.size) throw new Error('its size is inconsistent')
-    out = Buffer.from(data)
-  } else {
-    // Never inflates beyond the declared size, so a lying header cannot expand into memory.
-    out = inflateRawSync(data, { maxOutputLength: e.size })
-  }
+async function unpack(src: ZipSource, e: DirEntry): Promise<Buffer> {
+  // The compressed bytes can never be much larger than the file itself; a header that says otherwise is lying.
+  if (e.method === 0 ? e.compressedSize !== e.size : e.compressedSize > e.size + (e.size >> 4) + 1024) throw new Error('its size is inconsistent')
+  const head = await src.read(e.offset, 30)
+  if (head.length < 30 || head.readUInt32LE(0) !== 0x04034b50) throw new Error('its position in the ZIP is damaged')
+  const start = e.offset + 30 + head.readUInt16LE(26) + head.readUInt16LE(28)
+  if (start + e.compressedSize > src.size) throw new Error('the ZIP is cut short')
+  const data = await src.read(start, e.compressedSize)
+  if (data.length !== e.compressedSize) throw new Error('the ZIP is cut short')
+  // Never inflates beyond the declared size, so a lying header cannot expand into memory.
+  const out = e.method === 0 ? data : zlib.inflateRawSync(data, { maxOutputLength: e.size })
   if (out.length !== e.size) throw new Error('its size does not match')
   if (crc32(out) !== e.crc) throw new Error('its content is damaged (checksum mismatch)')
   return out
 }
+
+/** Lets the server carry on with other requests between files. */
+const breathe = () => new Promise<void>((resolve) => setImmediate(resolve))
 
 // ── Reading and checking the files ─────────────────────────────────────────
 
 const isUnsafePath = (path: string) => path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.split('/').includes('..')
 
 /** Reads the ZIP and checks every file in it. Throws BadRequestError when the ZIP as a whole cannot be used. */
-export function readCompanyZip(buf: Buffer): ZipScan {
-  const entries = readDirectory(buf)
+export async function readCompanyZip(src: ZipSource): Promise<ZipScan> {
+  const entries = await readDirectory(src)
   const files: ZipFile[] = []
   let ignored = 0
   let unpacked = 0
+  let lastBreath = Date.now()
 
   for (const e of entries) {
+    if (Date.now() - lastBreath > 20) {
+      await breathe()
+      lastBreath = Date.now()
+    }
     const path = e.name.replace(/\\/g, '/')
     if (path.endsWith('/')) continue // a folder
     const segments = path.split('/')
@@ -206,7 +279,7 @@ export function readCompanyZip(buf: Buffer): ZipScan {
     const ext = fileName.includes('.') ? fileName.split('.').pop()!.toLowerCase() : ''
     // A PDF is matched by its name without .pdf; any other file by its name without its own extension (to hint "found a .docx").
     const key = ext === 'pdf' ? fileKey(fileName) : companyFileKey(fileName.replace(/\.[^./]*$/, ''))
-    const file: ZipFile = { path, fileName, key, sizeBytes: e.size, status: 'invalid', reason: null, sha256: null, bytes: null }
+    const file: ZipFile = { path, fileName, key, sizeBytes: e.size, status: 'invalid', reason: null, sha256: null, entry: null }
     const reject = (status: ZipFileStatus, reason: string) => {
       files.push({ ...file, status, reason })
     }
@@ -241,11 +314,11 @@ export function readCompanyZip(buf: Buffer): ZipScan {
     }
     unpacked += e.size
     if (unpacked > MAX_ZIP_UNPACKED_BYTES) {
-      throw new BadRequestError(`The files in this ZIP are larger than ${MAX_ZIP_UNPACKED_BYTES / 1024 / 1024} MB when unpacked. Split them into smaller ZIPs.`)
+      throw new BadRequestError(`The PDFs in this ZIP add up to more than ${MAX_ZIP_UNPACKED_BYTES / 1024 / 1024 / 1024} GB when unpacked. Split them into smaller ZIPs.`)
     }
     let bytes: Buffer
     try {
-      bytes = unpack(buf, e)
+      bytes = await unpack(src, e)
     } catch (err) {
       reject('invalid', `it could not be unpacked — ${String((err as Error).message ?? err).slice(0, 120)}`)
       continue
@@ -254,10 +327,35 @@ export function readCompanyZip(buf: Buffer): ZipScan {
       reject('invalid', 'it is not a valid PDF file')
       continue
     }
-    files.push({ ...file, status: 'ok', reason: null, sha256: createHash('sha256').update(bytes).digest('hex'), bytes })
+    files.push({ ...file, status: 'ok', reason: null, sha256: createHash('sha256').update(bytes).digest('hex'), entry: e })
   }
 
   return { files, ignored, problems: nameProblems(files) }
+}
+
+/**
+ * One usable PDF's content, read from the ZIP again and checked against its scan:
+ * the same size, the same CRC-32 and the same SHA-256. If the ZIP changed since
+ * the scan, this throws and the file is not used.
+ */
+export async function extractFile(src: ZipSource, f: ZipFile): Promise<Buffer> {
+  if (f.status !== 'ok' || !f.entry || !f.sha256) throw new BadRequestError(`"${f.fileName}" cannot be used.`)
+  let bytes: Buffer
+  try {
+    bytes = await unpack(src, f.entry)
+  } catch (err) {
+    throw new BadRequestError(`"${f.fileName}" could not be read from the ZIP again (${String((err as Error).message ?? err).slice(0, 100)}). Upload the ZIP again.`)
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== f.sha256) throw new BadRequestError(`"${f.fileName}" is not the same file the review checked. Upload the ZIP again.`)
+  return bytes
+}
+
+/** The matched PDFs of one send are all kept with it (in the database): together they stay within the size of one ZIP. */
+export function checkMatchedTotal(files: ZipFile[]): void {
+  const total = files.reduce((n, f) => n + f.sizeBytes, 0)
+  if (total > MAX_ZIP_BYTES) {
+    throw new BadRequestError(`The matched PDFs add up to ${(total / 1024 / 1024 / 1024).toFixed(1)} GB; at most ${MAX_ZIP_BYTES / 1024 / 1024 / 1024} GB can go in one send. Send the list in parts.`)
+  }
 }
 
 /** Duplicate file names, and different names that would match the same company. */
@@ -280,16 +378,17 @@ function nameProblems(files: ZipFile[]): string[] {
 
 // ── A remembered scan ──────────────────────────────────────────────────────
 //
-// Unpacking and checking a ZIP of up to 20 MB takes a moment, and the screen reviews again on every change.
-// A scan is remembered by the hash of the ZIP's bytes (without the PDF contents — they are read again, from the
-// stored ZIP, only when a send starts), so a review of an unchanged ZIP does not unpack it again.
+// Checking a ZIP of up to 1 GB takes a while, and the screen reviews again on every change. A scan is remembered by the
+// hash of the whole ZIP, so a review of an unchanged ZIP does not read it again; two reviews at once share one scan.
+// (Only names, sizes and hashes are kept — never PDF content.)
 
 const SCAN_CACHE = new Map<string, ZipScan>()
 const SCAN_CACHE_MAX = 8
+const SCANS_RUNNING = new Map<string, Promise<ZipScan>>()
 
 export function rememberScan(sha256: string, scan: ZipScan): void {
   SCAN_CACHE.delete(sha256)
-  SCAN_CACHE.set(sha256, { ...scan, files: scan.files.map((f) => ({ ...f, bytes: null })) })
+  SCAN_CACHE.set(sha256, scan)
   while (SCAN_CACHE.size > SCAN_CACHE_MAX) SCAN_CACHE.delete(SCAN_CACHE.keys().next().value as string)
 }
 
@@ -302,9 +401,26 @@ export function recallScan(sha256: string): ZipScan | undefined {
   return scan
 }
 
+/** The scan of the ZIP with this hash: remembered, or being made right now, or made by `produce` (once). */
+export function scanOnce(sha256: string, produce: () => Promise<ZipScan>): Promise<ZipScan> {
+  const known = recallScan(sha256)
+  if (known) return Promise.resolve(known)
+  const running = SCANS_RUNNING.get(sha256)
+  if (running) return running
+  const p = produce()
+    .then((scan) => {
+      rememberScan(sha256, scan)
+      return scan
+    })
+    .finally(() => SCANS_RUNNING.delete(sha256))
+  SCANS_RUNNING.set(sha256, p)
+  return p
+}
+
 /** For tests. */
 export function forgetScans(): void {
   SCAN_CACHE.clear()
+  SCANS_RUNNING.clear()
 }
 
 // ── Matching files to companies ────────────────────────────────────────────

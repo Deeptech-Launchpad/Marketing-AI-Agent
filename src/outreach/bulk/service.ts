@@ -8,10 +8,10 @@ import { readSpreadsheet } from './excel.js'
 import { extractContacts, firstNameOf, recipientsOf, strictEmail } from './extract.js'
 import { fmtIst, IST, istToUtc, planSequential } from './schedule.js'
 import {
-  stagedAttachments, linkAttachments, campaignAttachments, campaignAttachmentInfo, companyFileForSend, companyFileInfos, discardCompanyFiles, dropStagedZip, linkCompanyFiles, stagedCompanyZip, stagedCompanyZipInfo, storeCompanyFile,
+  stagedAttachments, linkAttachments, campaignAttachments, campaignAttachmentInfo, companyFileForSend, companyFileInfos, discardCompanyFiles, dropStagedZip, linkCompanyFiles, scanStagedZip, stagedCompanyZipInfo, storeCompanyFile, withStagedZip,
   MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, type AttachmentInfo, type AttachmentFile,
 } from './attachments.js'
-import { companyFileKey, fileKey, matchCompanyFiles, readCompanyZip, recallScan, rememberScan, type CompanyMatch, type ZipFile } from './companyZip.js'
+import { companyFileKey, extractFile, fileKey, checkMatchedTotal, matchCompanyFiles, type CompanyMatch, type ZipFile } from './companyZip.js'
 import { crmBulk, crmKeyOf, type CrmSender } from './crmSend.js'
 import { checkSender, type SenderCheck } from './senders.js'
 import { cleanSignatureHtml, MAX_SIGNATURE_HTML } from './signature.js'
@@ -555,13 +555,13 @@ const MAX_CUSTOM_TOTAL_CHARS = 40_000_000
 
 /** Every company's email, its time and its status — exactly what Start would store. Nothing is written. */
 export async function reviewBulk(actor: Actor, s: BulkSetup, now = new Date()) {
-  const { companyFiles: _files, ...review } = await prepareReview(actor, s, now, false)
+  const { companyFiles: _files, ...review } = await prepareReview(actor, s, now)
   void _files
   return review
 }
 
-/** The review; with `withFiles` (Start only) the ZIP is unpacked in full and each matched company PDF's bytes come back by row position. */
-async function prepareReview(actor: Actor, s: BulkSetup, now: Date, withFiles: boolean) {
+/** The review, plus (for Start) which ZIP file each matched row will carry, by row position. */
+async function prepareReview(actor: Actor, s: BulkSetup, now: Date) {
   const setup = checkedSetup(s)
   let customBytes = 0
   const zipStaged = s.companyZipId ? await stagedCompanyZipInfo(actor, s.companyZipId) : null
@@ -573,13 +573,9 @@ async function prepareReview(actor: Actor, s: BulkSetup, now: Date, withFiles: b
   const upload = await analyzeUpload({ fileBase64: s.fileBase64, fileName: s.fileName, allowWebmail: s.allowWebmail })
   if (upload.companies.length > MAX_RECIPIENTS) throw new BadRequestError(`At most ${MAX_RECIPIENTS} companies per upload.`)
 
-  // The ZIP of company-wise PDFs, read afresh: its files matched to the companies of this Excel.
-  // A review of an unchanged ZIP reuses its earlier scan; only Start unpacks it again, for the PDFs' bytes.
-  let scan = zipStaged && !withFiles ? (recallScan(zipStaged.sha256) ?? null) : null
-  if (zipStaged && !scan) {
-    scan = readCompanyZip((await stagedCompanyZip(actor, zipStaged.id)).bytes)
-    if (!withFiles) rememberScan(zipStaged.sha256, scan)
-  }
+  // The ZIP of company-wise PDFs: its files matched to the companies of this Excel. A review of an unchanged ZIP reuses its
+  // earlier scan (names, sizes and hashes — never content); Start reads each matched PDF from the ZIP again and checks it against that scan.
+  const scan = zipStaged ? await scanStagedZip(zipStaged) : null
   // Only a company that can be emailed needs a file (one skipped for its Status, for example, does not count).
   const eligible = upload.companies.map((c) => !c.skip && c.people.length > 0 && Boolean(recipientsOf(c).to))
   const matches = scan ? matchCompanyFiles(upload.companies.map((c) => c.companyName), scan.files, eligible) : null
@@ -724,6 +720,9 @@ async function prepareReview(actor: Actor, s: BulkSetup, now: Date, withFiles: b
     const note = last ? `Follow-up: last emailed on ${last.sentAt?.toISOString().slice(0, 10)}.` : null
     rows.push({ ...base, contactName: to.name, toEmail: to.email, ccEmails: ccOk, subject: email.subject, text: email.text, html: email.html, templateKey: template.key, version: versionOf(template.key), status: 'ready', reason: null, note, companyFile })
   }
+
+  // Every matched PDF is kept with the send (in the database), so together they stay within the size of one ZIP.
+  checkMatchedTotal([...companyFiles.values()])
 
   // A start time already passed begins now.
   const begin = setup.start.getTime() < now.getTime() ? now : setup.start
@@ -978,7 +977,7 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   // Checked again now: never started on an old answer.
   const fromEmail = await startingFrom(actor, profile.fromEmail, now, 'Not started')
 
-  const review = await prepareReview(actor, s, now, true)
+  const review = await prepareReview(actor, s, now)
   const ready = review.rows.filter((r) => r.status === 'ready')
   if (review.counts.blocked > 0) throw new ConflictError(`Not started — ${review.companyFileProblem}`)
   if (!ready.length) throw new ConflictError('No email can be sent from this file — see the reason against each company.')
@@ -988,7 +987,12 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   // sender) while its files are still being stored. If one cannot be stored nothing is created.
   const fileIds = new Map<number, string>()
   try {
-    for (const [position, file] of review.companyFiles) fileIds.set(position, await storeCompanyFile(actor, null, file))
+    if (s.companyZipId && review.companyFiles.size) {
+      // One PDF at a time: read from the ZIP, checked against the review, stored. Never more than one in memory.
+      await withStagedZip(s.companyZipId, async (src) => {
+        for (const [position, file] of review.companyFiles) fileIds.set(position, await storeCompanyFile(actor, null, file, await extractFile(src, file)))
+      })
+    }
   } catch (err) {
     await discardCompanyFiles([...fileIds.values()])
     throw err
@@ -998,67 +1002,80 @@ export async function startBulk(actor: Actor, s: BulkSetup & { confirm?: boolean
   const name = (s.name ?? '').trim().slice(0, 120) || `${s.fileName?.replace(/\.xlsx$/i, '') || 'Bulk email'} — ${fmtIst(now).replace(/, \d{1,2}:\d{2} [AP]M IST$/, '')}`
   // The columns kept from the first version (sending hours, days, daily limit,
   // footer) are stored as "none": every day, all day, no limit.
-  await prisma.bulkEmailCampaign.create({
-    data: {
-      id,
-      tenantId: actor.tenantId,
-      name,
-      status: 'running',
-      templateKey: checked.template.key,
-      subject: checked.template.subject,
-      body: checked.template.body,
-      fromEmail,
-      fromName: null,
-      ccEmails: profile.ccEmails as never,
-      signature: via === 'crm' ? '' : cleanSignature(profile.signature),
-      signatureHtml: via === 'crm' ? '' : profile.signatureHtml,
-      sendVia: via,
-      postalAddress: '',
-      sourceFileName: s.fileName ?? null,
-      timezone: IST,
-      startAt: checked.start,
-      sendDays: [1, 2, 3, 4, 5, 6, 7] as never,
-      sendStartMinute: 0,
-      sendEndMinute: 1440,
-      intervalMinutes: checked.intervalMinutes,
-      dailyCap: 0,
-      totalRows: review.counts.rowsWithCompany,
-      attachmentCount: review.attachments.length,
-      createdByCrmUserId: actor.crmUserId,
-      approvedByCrmUserId: actor.crmUserId,
-      approvedAt: now,
-    },
-  })
-  await linkOrCancel(actor, review.attachments, id)
-  // The stored company PDFs are tied to the send in one step; if any is gone the send is cancelled before anything is scheduled.
+  // From here on, any failure undoes what was stored: the company PDFs not yet tied to a send are removed, and a campaign that
+  // was already created is cancelled (with its files) before anything is scheduled.
+  let created = false
   try {
-    await linkCompanyFiles(actor, [...fileIds.values()], id)
+    await prisma.bulkEmailCampaign.create({
+      data: {
+        id,
+        tenantId: actor.tenantId,
+        name,
+        status: 'running',
+        templateKey: checked.template.key,
+        subject: checked.template.subject,
+        body: checked.template.body,
+        fromEmail,
+        fromName: null,
+        ccEmails: profile.ccEmails as never,
+        signature: via === 'crm' ? '' : cleanSignature(profile.signature),
+        signatureHtml: via === 'crm' ? '' : profile.signatureHtml,
+        sendVia: via,
+        postalAddress: '',
+        sourceFileName: s.fileName ?? null,
+        timezone: IST,
+        startAt: checked.start,
+        sendDays: [1, 2, 3, 4, 5, 6, 7] as never,
+        sendStartMinute: 0,
+        sendEndMinute: 1440,
+        intervalMinutes: checked.intervalMinutes,
+        dailyCap: 0,
+        totalRows: review.counts.rowsWithCompany,
+        attachmentCount: review.attachments.length,
+        createdByCrmUserId: actor.crmUserId,
+        approvedByCrmUserId: actor.crmUserId,
+        approvedAt: now,
+      },
+    })
+    created = true
+    await linkOrCancel(actor, review.attachments, id)
+    // The stored company PDFs are tied to the send in one step; if any is gone the send is cancelled before anything is scheduled.
+    try {
+      await linkCompanyFiles(actor, [...fileIds.values()], id)
+    } catch (err) {
+      await discardCompanyFiles([...fileIds.values()])
+      await prisma.bulkEmailCampaign.update({ where: { id }, data: { status: 'cancelled', statusReason: 'A company PDF was no longer available; nothing was sent.', completedAt: new Date() } })
+      throw err
+    }
+    await prisma.bulkEmailRecipient.createMany({
+      data: review.rows.map((r, i) => ({
+        id: newId(),
+        tenantId: actor.tenantId,
+        campaignId: id,
+        position: i,
+        companyName: r.companyName,
+        contactName: r.contactName,
+        toEmail: r.toEmail,
+        ccEmails: r.ccEmails as never,
+        sourceRows: r.rows as never,
+        subject: r.subject,
+        body: r.status === 'ready' ? r.text : null,
+        bodyHtml: r.status === 'ready' && customNumber(r.templateKey) !== null ? r.html : null,
+        attachmentId: fileIds.get(r.position) ?? null,
+        templateKey: r.templateKey,
+        status: r.status === 'ready' ? 'scheduled' : 'skipped',
+        reason: r.reason,
+        scheduledAt: r.scheduledAt ? new Date(r.scheduledAt) : null,
+      })),
+    })
   } catch (err) {
-    await discardCompanyFiles([...fileIds.values()])
-    await prisma.bulkEmailCampaign.update({ where: { id }, data: { status: 'cancelled', statusReason: 'A company PDF was no longer available; nothing was sent.', completedAt: new Date() } })
+    await discardCompanyFiles([...fileIds.values()]).catch(() => undefined)
+    if (created) {
+      await prisma.bulkEmailCampaign.update({ where: { id }, data: { status: 'cancelled', statusReason: 'It could not be started; nothing was sent.', completedAt: new Date() } }).catch(() => undefined)
+      await prisma.bulkAttachment.deleteMany({ where: { campaignId: id, kind: 'company_file' } }).catch(() => undefined)
+    }
     throw err
   }
-  await prisma.bulkEmailRecipient.createMany({
-    data: review.rows.map((r, i) => ({
-      id: newId(),
-      tenantId: actor.tenantId,
-      campaignId: id,
-      position: i,
-      companyName: r.companyName,
-      contactName: r.contactName,
-      toEmail: r.toEmail,
-      ccEmails: r.ccEmails as never,
-      sourceRows: r.rows as never,
-      subject: r.subject,
-      body: r.status === 'ready' ? r.text : null,
-      bodyHtml: r.status === 'ready' && customNumber(r.templateKey) !== null ? r.html : null,
-      attachmentId: fileIds.get(r.position) ?? null,
-      templateKey: r.templateKey,
-      status: r.status === 'ready' ? 'scheduled' : 'skipped',
-      reason: r.reason,
-      scheduledAt: r.scheduledAt ? new Date(r.scheduledAt) : null,
-    })),
-  })
   const ownNote = checked.customs.length > 1 ? `; ${checked.customs.length} own templates, ${checked.order === 'random' ? 'at random' : 'in order'}` : checked.custom ? '; own template' : ''
   await record(actor, id, 'started', `Bulk email "${name}" approved: ${ready.length} emails from ${fromEmail}, from ${review.schedule.firstLocal}, ${checked.intervalMinutes} min apart; ${review.counts.skipped} skipped${ownNote}${attachmentNames(review.attachments)}${review.companyZip ? `; company-wise PDFs from "${review.companyZip.fileName}": ${fileIds.size} matched${review.companyZip.counts.excluded ? `, ${review.companyZip.counts.excluded} excluded` : ''}` : ''}`, {
     ...(review.companyZip ? { companyPdfs: { zip: review.companyZip.fileName, matched: fileIds.size, excluded: review.companyZip.counts.excluded } } : {}),
