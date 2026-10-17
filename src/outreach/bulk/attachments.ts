@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
+import { createReadStream } from 'node:fs'
+import { mkdir, open, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { env } from '../../config/env.js'
 import { prisma, newId } from '../../platform/db.js'
 import { BadRequestError, ConflictError, NotFoundError } from '../../platform/errors.js'
-import { MAX_ZIP_BYTES, NAME_RE, readCompanyZip, rememberScan, type ZipFile } from './companyZip.js'
+import { MAX_ZIP_BYTES, NAME_RE, readCompanyZip, scanOnce, withFileSource, type ZipFile, type ZipScan, type ZipSource } from './companyZip.js'
 
 // ATTACHMENTS FOR BULK EMAIL (2026-10-12).
 //
@@ -93,7 +97,7 @@ const info = (r: { id: string; fileName: string; mimeType: string; sizeBytes: nu
 /** Stores one file for a send that has not started yet. Staged files older than a day are cleared first. */
 export async function stageAttachment(actor: Actor, input: { fileName: string; contentBase64: string }, now = new Date()): Promise<AttachmentInfo> {
   const f = checkFile(input)
-  await prisma.bulkAttachment.deleteMany({ where: { tenantId: actor.tenantId, campaignId: null, createdAt: { lt: new Date(now.getTime() - STAGED_KEEP_MS) } } })
+  await prisma.bulkAttachment.deleteMany({ where: { tenantId: actor.tenantId, campaignId: null, kind: { not: 'company_zip' }, createdAt: { lt: new Date(now.getTime() - STAGED_KEEP_MS) } } })
   const row = await prisma.bulkAttachment.create({
     data: {
       id: newId(),
@@ -112,10 +116,18 @@ export async function stageAttachment(actor: Actor, input: { fileName: string; c
   return info(row)
 }
 
-/** Removes a staged file (a file already linked to a send stays with it). */
+/** Removes a staged file (a file already linked to a send stays with it). A staged ZIP's file on disk goes with it. */
 export async function removeStagedAttachment(actor: Actor, id: string): Promise<{ id: string; removed: true }> {
-  const row = await prisma.bulkAttachment.findFirst({ where: { id, tenantId: actor.tenantId, campaignId: null }, select: { id: true } })
+  const row = await prisma.bulkAttachment.findFirst({ where: { id, tenantId: actor.tenantId, campaignId: null }, select: { id: true, kind: true } })
   if (!row) throw new NotFoundError('Attachment not found.')
+  if (row.kind === 'company_zip') {
+    // After any piece or check that is running on this upload, so a piece can never recreate the file that was just removed.
+    return locked(id, async () => {
+      await prisma.bulkAttachment.deleteMany({ where: { id, tenantId: actor.tenantId, campaignId: null } })
+      await rmFile(zipPath(id))
+      return { id, removed: true as const }
+    })
+  }
   await prisma.bulkAttachment.deleteMany({ where: { id, tenantId: actor.tenantId, campaignId: null } })
   return { id, removed: true }
 }
@@ -162,15 +174,28 @@ export async function campaignAttachmentInfo(campaignId: string): Promise<Attach
   return rows.map(info)
 }
 
-// ── ZIP of company-wise PDFs (2026-10-17) ──────────────────────────────────
+// ── ZIP of company-wise PDFs (2026-10-17; up to 1 GB since 2026-10-18) ──────
 //
-// The ZIP is staged as ONE row (kind 'company_zip', never an attachment itself).
-// The review reads it again every time, so what is shown is what is in the ZIP.
-// When the send starts, each matched company's PDF is stored as its own row
-// (kind 'company_file') kept with the send and named by that recipient, and the
-// staged ZIP is dropped. At sending time the recipient's own file is loaded,
-// checked against its stored hash and against the recipient's company, and
-// attached next to the send's common files.
+// A ZIP of up to 1 GB is uploaded in pieces of ZIP_CHUNK_BYTES (so no request is large, and a dropped connection
+// loses one piece, not the whole file) and kept as a FILE on disk, never in the database or in memory. Its row
+// (kind 'company_zip', no content) holds its name, its size and — once the upload is complete and checked — the
+// SHA-256 of the whole file; a row with no hash is an upload still in progress. The review reads the ZIP's
+// directory and PDFs through companyZip.ts (remembered by that hash). When the send starts, each matched company's
+// PDF is read from the ZIP again (checked against the review's hash), stored as its own row (kind 'company_file')
+// kept with the send and named by that recipient, and the ZIP file is removed. At sending time the recipient's own
+// file is loaded, checked against its stored hash and against the recipient's company, and attached next to the
+// send's common files.
+
+/** One piece of an upload. Under the web server's 25 MB request limit. */
+export const ZIP_CHUNK_BYTES = 16 * 1024 * 1024
+/** Staged ZIPs of one tenant together (a ZIP being replaced is removed by the screen). */
+const MAX_STAGED_ZIP_TOTAL_BYTES = 2 * MAX_ZIP_BYTES
+/** Free disk space that must remain after a ZIP is stored. */
+const DISK_MARGIN_BYTES = 5 * 1024 * 1024 * 1024
+/** A ZIP file nobody started a send with. */
+const ORPHAN_ZIP_KEEP_MS = 36 * 60 * 60 * 1000
+/** An upload that has received no piece for this long is abandoned (the tab was closed, the connection was lost for good). */
+const UPLOAD_IDLE_MS = 60 * 60 * 1000
 
 export interface StagedZip {
   id: string
@@ -178,59 +203,226 @@ export interface StagedZip {
   sizeBytes: number
 }
 
-/** The ZIP's own name must be usable and end in .zip; its size is checked here, its content by readCompanyZip. */
-export async function stageCompanyZip(actor: Actor, input: { fileName: string; bytes: Buffer }, now = new Date()): Promise<StagedZip> {
-  const fileName = String(input.fileName ?? '').trim()
-  if (!NAME_RE.test(fileName) || !/\.zip$/i.test(fileName)) throw new BadRequestError('Upload a file whose name ends in .zip (letters, digits, spaces, - _ . ( ) are fine).')
-  if (!input.bytes?.length) throw new BadRequestError('The ZIP is empty.')
-  if (input.bytes.length > MAX_ZIP_BYTES) throw new BadRequestError(`The ZIP is larger than ${MAX_ZIP_BYTES / 1024 / 1024} MB. Split the files into two ZIPs and send them in two campaigns.`)
-  const scan = readCompanyZip(input.bytes) // refuses a ZIP that cannot be read at all
-  if (!scan.files.some((f) => f.status === 'ok')) {
-    const why = scan.files.slice(0, 3).map((f) => `${f.fileName}: ${f.reason}`).join('; ')
-    throw new BadRequestError(`The ZIP has no usable PDF files${why ? ` (${why})` : ''}. It should hold one PDF per company, named after the company.`)
-  }
-  await prisma.bulkAttachment.deleteMany({ where: { tenantId: actor.tenantId, campaignId: null, createdAt: { lt: new Date(now.getTime() - STAGED_KEEP_MS) } } })
-  const row = await prisma.bulkAttachment.create({
-    data: {
-      id: newId(),
-      tenantId: actor.tenantId,
-      campaignId: null,
-      position: 0,
-      fileName,
-      mimeType: 'application/zip',
-      sizeBytes: input.bytes.length,
-      sha256: createHash('sha256').update(input.bytes).digest('hex'),
-      kind: 'company_zip',
-      content: input.bytes,
-      createdByCrmUserId: actor.crmUserId,
-    },
-  })
-  rememberScan(row.sha256, scan)
-  return { id: row.id, fileName: row.fileName, sizeBytes: row.sizeBytes }
+/** The folder the ZIPs are kept in. */
+const zipDir = () => env.BULK_ZIP_DIR || path.resolve(process.cwd(), 'storage', 'bulk-zips')
+
+/** The file of one staged ZIP. The id is checked, so it can never point outside the folder. */
+function zipPath(id: string): string {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new BadRequestError('The company ZIP is no longer available. Upload it again.')
+  return path.join(zipDir(), `${id}.zip`)
 }
 
-/** A staged ZIP without its bytes: name, size and the hash of its content. */
-export async function stagedCompanyZipInfo(actor: Actor, id: string): Promise<StagedZip & { sha256: string }> {
+const rmFile = (p: string) => rm(p, { force: true }).catch(() => undefined)
+
+/** Pieces of one upload arrive one at a time; this keeps two requests for the same upload from interleaving. */
+const UPLOAD_LOCKS = new Map<string, Promise<unknown>>()
+function locked<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const run = (UPLOAD_LOCKS.get(id) ?? Promise.resolve()).then(fn)
+  // What is kept for the next request in line never fails: a request that was refused (the normal "continue from here" answer,
+  // a bad ZIP) must not become an unhandled rejection, which would stop the whole server. The caller still gets the real result.
+  const tail: Promise<void> = run
+    .then(
+      () => undefined,
+      () => undefined,
+    )
+    .then(() => {
+      if (UPLOAD_LOCKS.get(id) === tail) UPLOAD_LOCKS.delete(id)
+    })
+  UPLOAD_LOCKS.set(id, tail)
+  return run
+}
+
+/**
+ * Removes what nobody will use: ZIPs staged for more than a day, uploads that have received nothing for an hour (a closed tab
+ * must not keep the space of a gigabyte), and old files of ours that no row points at. It only ever touches files named like
+ * this app's own (<id>.zip) in the ZIP folder, so that folder should be one nothing else uses. Best effort.
+ */
+async function sweepStaleZips(now: Date): Promise<void> {
+  try {
+    const rows = await prisma.bulkAttachment.findMany({ where: { campaignId: null, kind: 'company_zip' }, select: { id: true, sha256: true, createdAt: true } })
+    const live = new Set<string>()
+    const gone: string[] = []
+    for (const r of rows) {
+      const file = zipPath(r.id)
+      const st = await stat(file).catch(() => null)
+      const old = now.getTime() - (r.createdAt?.getTime() ?? now.getTime()) > STAGED_KEEP_MS
+      const abandoned = r.sha256 === '' && (!st || now.getTime() - st.mtimeMs > UPLOAD_IDLE_MS)
+      if (old || abandoned) {
+        gone.push(r.id)
+        await rmFile(file)
+      } else {
+        live.add(r.id)
+      }
+    }
+    if (gone.length) await prisma.bulkAttachment.deleteMany({ where: { id: { in: gone }, campaignId: null, kind: 'company_zip' } })
+    for (const name of await readdir(zipDir()).catch(() => [] as string[])) {
+      const mine = /^([A-Za-z0-9_-]{1,64})\.zip$/.exec(name)
+      if (!mine || live.has(mine[1]!)) continue
+      const file = path.join(zipDir(), name)
+      const st = await stat(file).catch(() => null)
+      if (st && now.getTime() - st.mtimeMs > ORPHAN_ZIP_KEEP_MS) await rmFile(file)
+    }
+  } catch {
+    // Clearing old files must never stop a new upload.
+  }
+}
+
+/** Starts an upload: checks the name, the size and the free disk space, and makes the (empty) file and its row. */
+export async function startCompanyZipUpload(actor: Actor, input: { fileName: string; sizeBytes: number }, now = new Date()): Promise<StagedZip & { chunkBytes: number }> {
+  const fileName = String(input.fileName ?? '').trim()
+  if (!NAME_RE.test(fileName) || !/\.zip$/i.test(fileName)) throw new BadRequestError('Upload a file whose name ends in .zip (letters, digits, spaces, - _ . ( ) are fine).')
+  const sizeBytes = Number(input.sizeBytes)
+  if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) throw new BadRequestError('The ZIP is empty.')
+  if (sizeBytes > MAX_ZIP_BYTES) throw new BadRequestError(`The ZIP is larger than ${MAX_ZIP_BYTES / 1024 / 1024 / 1024} GB. Split the PDFs into two ZIPs and send them in two campaigns.`)
+  await sweepStaleZips(now)
+  const staged = await prisma.bulkAttachment.findMany({ where: { tenantId: actor.tenantId, campaignId: null, kind: 'company_zip' }, select: { sizeBytes: true } })
+  if (staged.reduce((n, r) => n + r.sizeBytes, 0) + sizeBytes > MAX_STAGED_ZIP_TOTAL_BYTES) {
+    throw new ConflictError('Too many ZIP files are waiting to be used. Remove the earlier ZIP (or start its send) and try again.')
+  }
+  await mkdir(zipDir(), { recursive: true, mode: 0o700 })
+  const free = await statfs(zipDir()).then((s) => Number(s.bavail) * Number(s.bsize)).catch(() => Number.POSITIVE_INFINITY)
+  if (free < sizeBytes + DISK_MARGIN_BYTES) throw new ConflictError('The server does not have enough free disk space for this ZIP. Ask an administrator.')
+
+  const id = newId()
+  await writeFile(zipPath(id), Buffer.alloc(0), { flag: 'wx', mode: 0o600 })
+  try {
+    await prisma.bulkAttachment.create({
+      data: {
+        id,
+        tenantId: actor.tenantId,
+        campaignId: null,
+        position: 0,
+        fileName,
+        mimeType: 'application/zip',
+        sizeBytes,
+        sha256: '', // still uploading
+        kind: 'company_zip',
+        content: Buffer.alloc(0),
+        createdByCrmUserId: actor.crmUserId,
+      },
+    })
+  } catch (err) {
+    await rmFile(zipPath(id))
+    throw err
+  }
+  return { id, fileName, sizeBytes, chunkBytes: ZIP_CHUNK_BYTES }
+}
+
+/** An upload that is still in progress. */
+async function pendingZip(actor: Actor, id: string) {
   const row = await prisma.bulkAttachment.findFirst({ where: { id, tenantId: actor.tenantId, campaignId: null, kind: 'company_zip' }, select: { id: true, fileName: true, sizeBytes: true, sha256: true } })
+  if (!row) throw new NotFoundError('Upload not found. Choose the ZIP again.')
+  return row
+}
+
+/**
+ * Adds the next piece. `offset` must be exactly where the file ends: a piece that was already received (a retry after a lost
+ * answer) or one that skips ahead is answered with a 409 carrying how many bytes the server really has, so the screen carries on from there.
+ */
+export function appendZipChunk(actor: Actor, id: string, offset: number, bytes: Buffer): Promise<{ receivedBytes: number }> {
+  return locked(id, async () => {
+    const row = await pendingZip(actor, id)
+    if (row.sha256 !== '') throw new ConflictError('This ZIP is already complete.', { receivedBytes: row.sizeBytes })
+    if (!Number.isInteger(offset) || offset < 0) throw new BadRequestError('The position of this piece is missing.')
+    if (!bytes.length) throw new BadRequestError('This piece is empty.')
+    const have = (await stat(zipPath(id)).catch(() => null))?.size
+    if (have === undefined) throw new NotFoundError('Upload not found. Choose the ZIP again.')
+    if (offset !== have) throw new ConflictError(`The server has ${have} bytes of this ZIP; continue from there.`, { receivedBytes: have })
+    if (have + bytes.length > row.sizeBytes) throw new BadRequestError('More data arrived than the size of the ZIP.')
+    const handle = await open(zipPath(id), 'r+').catch(() => null)
+    if (!handle) throw new NotFoundError('Upload not found. Choose the ZIP again.')
+    try {
+      let written = 0
+      while (written < bytes.length) written += (await handle.write(bytes, written, bytes.length - written, have + written)).bytesWritten
+    } finally {
+      await handle.close()
+    }
+    return { receivedBytes: have + bytes.length }
+  })
+}
+
+/** SHA-256 of a whole file, read in pieces. */
+async function hashFile(file: string): Promise<string> {
+  const h = createHash('sha256')
+  for await (const part of createReadStream(file)) h.update(part as Buffer)
+  return h.digest('hex')
+}
+
+/** Scans a staged ZIP's file (remembered by its hash): names, sizes and hashes of its PDFs, never their content. */
+export function scanStagedZip(zip: StagedZip & { sha256: string }): Promise<ZipScan> {
+  return scanOnce(zip.sha256, () => withFileSource(zipPath(zip.id), readCompanyZip))
+}
+
+/**
+ * Completes an upload: the file must be all there; it is hashed, read as a ZIP, and refused (and removed) if it has no usable PDF.
+ * Safe to repeat: an upload already completed answers again with the same result.
+ */
+export function finishCompanyZipUpload(actor: Actor, id: string): Promise<StagedZip> {
+  return locked(id, async () => {
+    const row = await pendingZip(actor, id)
+    if (row.sha256 !== '') return { id: row.id, fileName: row.fileName, sizeBytes: row.sizeBytes }
+    const have = (await stat(zipPath(id)).catch(() => null))?.size
+    if (have === undefined) throw new NotFoundError('Upload not found. Choose the ZIP again.')
+    if (have !== row.sizeBytes) throw new ConflictError(`Only ${have} of ${row.sizeBytes} bytes arrived. Continue the upload.`, { receivedBytes: have })
+    let sha256: string
+    try {
+      sha256 = await hashFile(zipPath(id))
+      const scan: ZipScan = await scanOnce(sha256, () => withFileSource(zipPath(id), readCompanyZip))
+      if (!scan.files.some((f) => f.status === 'ok')) {
+        const why = scan.files.slice(0, 3).map((f) => `${f.fileName}: ${f.reason}`).join('; ')
+        throw new BadRequestError(`The ZIP has no usable PDF files${why ? ` (${why})` : ''}. It should hold one PDF per company, named after the company.`)
+      }
+    } catch (err) {
+      // Only a ZIP that is itself unusable is thrown away; a hiccup of the server (disk, database) keeps the upload so finishing can be repeated.
+      if (err instanceof BadRequestError) {
+        await rmFile(zipPath(id))
+        await prisma.bulkAttachment.deleteMany({ where: { id, tenantId: actor.tenantId, campaignId: null, kind: 'company_zip' } })
+      } else if ((err as { code?: string })?.code === 'ENOENT') {
+        throw new NotFoundError('Upload not found. Choose the ZIP again.')
+      }
+      throw err
+    }
+    await prisma.bulkAttachment.updateMany({ where: { id, tenantId: actor.tenantId, kind: 'company_zip', campaignId: null }, data: { sha256 } })
+    return { id: row.id, fileName: row.fileName, sizeBytes: row.sizeBytes }
+  })
+}
+
+/** Stages a ZIP that is already complete in memory (the same steps as an upload in pieces). */
+export async function stageCompanyZip(actor: Actor, input: { fileName: string; bytes: Buffer }, now = new Date()): Promise<StagedZip> {
+  const { id, chunkBytes } = await startCompanyZipUpload(actor, { fileName: input.fileName, sizeBytes: input.bytes.length }, now)
+  try {
+    for (let offset = 0; offset < input.bytes.length; offset += chunkBytes) await appendZipChunk(actor, id, offset, input.bytes.subarray(offset, offset + chunkBytes))
+    return await finishCompanyZipUpload(actor, id)
+  } catch (err) {
+    await removeStagedAttachment(actor, id).catch(() => undefined)
+    throw err
+  }
+}
+
+/** A completed, staged ZIP: its name, size and the hash of its content. */
+export async function stagedCompanyZipInfo(actor: Actor, id: string): Promise<StagedZip & { sha256: string }> {
+  const row = await prisma.bulkAttachment.findFirst({
+    where: { id, tenantId: actor.tenantId, campaignId: null, kind: 'company_zip', sha256: { not: '' } },
+    select: { id: true, fileName: true, sizeBytes: true, sha256: true },
+  })
   if (!row) throw new BadRequestError('The company ZIP is no longer available. Upload it again.')
   return { id: row.id, fileName: row.fileName, sizeBytes: row.sizeBytes, sha256: row.sha256 }
 }
 
-/** A staged ZIP, as its bytes. */
-export async function stagedCompanyZip(actor: Actor, id: string): Promise<StagedZip & { bytes: Buffer }> {
-  const row = await prisma.bulkAttachment.findFirst({ where: { id, tenantId: actor.tenantId, campaignId: null, kind: 'company_zip' } })
-  if (!row) throw new BadRequestError('The company ZIP is no longer available. Upload it again.')
-  return { id: row.id, fileName: row.fileName, sizeBytes: row.sizeBytes, bytes: Buffer.from(row.content) }
+/** Opens a staged ZIP's file for reading while `fn` runs. */
+export function withStagedZip<T>(id: string, fn: (src: ZipSource) => Promise<T>): Promise<T> {
+  return withFileSource(zipPath(id), fn)
 }
 
-/** Drops a staged ZIP once its send has started (best effort: a day-old staged file is cleared anyway). */
+/** Drops a staged ZIP once its send has started (best effort: an old staged file is cleared anyway). */
 export async function dropStagedZip(actor: Actor, id: string): Promise<void> {
   await prisma.bulkAttachment.deleteMany({ where: { id, tenantId: actor.tenantId, campaignId: null, kind: 'company_zip' } })
+  await rmFile(zipPath(id))
 }
 
 /** Keeps one company's PDF; returns its id for the recipient. Stored first with no send (campaignId null), tied to its send in one step by linkCompanyFiles. */
-export async function storeCompanyFile(actor: Actor, campaignId: string | null, f: ZipFile): Promise<string> {
-  if (f.status !== 'ok' || !f.bytes || !f.sha256) throw new BadRequestError(`"${f.fileName}" cannot be used.`)
+export async function storeCompanyFile(actor: Actor, campaignId: string | null, f: ZipFile, bytes: Buffer): Promise<string> {
+  if (f.status !== 'ok' || !f.sha256 || createHash('sha256').update(bytes).digest('hex') !== f.sha256) throw new BadRequestError(`"${f.fileName}" cannot be used.`)
   const row = await prisma.bulkAttachment.create({
     data: {
       id: newId(),
@@ -239,10 +431,10 @@ export async function storeCompanyFile(actor: Actor, campaignId: string | null, 
       position: 0,
       fileName: f.fileName,
       mimeType: 'application/pdf',
-      sizeBytes: f.bytes.length,
+      sizeBytes: bytes.length,
       sha256: f.sha256,
       kind: 'company_file',
-      content: f.bytes,
+      content: bytes,
       createdByCrmUserId: actor.crmUserId,
     },
   })

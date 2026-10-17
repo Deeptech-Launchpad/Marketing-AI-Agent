@@ -88,3 +88,59 @@ export function makeZip(entries: ZipEntry[], opts: { comment?: Buffer; total?: n
   eocd.writeUInt16LE(comment.length, 20)
   return Buffer.concat([...parts, cdBuf, eocd, comment])
 }
+
+/**
+ * Writes a big ZIP of stored (not compressed) files straight to disk, one file at a time, so a ZIP of a gigabyte never
+ * sits in memory. `make(i)` returns file i's content.
+ */
+export async function writeStoredZip(file: string, names: string[], make: (i: number) => Buffer): Promise<void> {
+  const { createWriteStream } = await import('node:fs')
+  const zlib = await import('node:zlib')
+  const nativeCrc = (zlib as unknown as { crc32?: (d: Buffer) => number }).crc32
+  const out = createWriteStream(file)
+  const write = (b: Buffer) => new Promise<void>((res, rej) => out.write(b, (e) => (e ? rej(e) : res())))
+  const dir: Buffer[] = []
+  let offset = 0
+  for (const [i, n] of names.entries()) {
+    const data = make(i)
+    const name = Buffer.from(n, 'utf8')
+    const crc = nativeCrc ? nativeCrc(data) >>> 0 : crc32(data)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0x800, 6)
+    local.writeUInt16LE(0, 8)
+    local.writeUInt16LE(0x21, 12)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    await write(local)
+    await write(name)
+    await write(data)
+    const cd = Buffer.alloc(46)
+    cd.writeUInt32LE(0x02014b50, 0)
+    cd.writeUInt16LE(20, 4)
+    cd.writeUInt16LE(20, 6)
+    cd.writeUInt16LE(0x800, 8)
+    cd.writeUInt16LE(0, 10)
+    cd.writeUInt16LE(0x21, 14)
+    cd.writeUInt32LE(crc, 16)
+    cd.writeUInt32LE(data.length, 20)
+    cd.writeUInt32LE(data.length, 24)
+    cd.writeUInt16LE(name.length, 28)
+    cd.writeUInt32LE(offset, 42)
+    dir.push(cd, name)
+    offset += 30 + name.length + data.length
+  }
+  const cdBuf = Buffer.concat(dir)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(names.length, 8)
+  eocd.writeUInt16LE(names.length, 10)
+  eocd.writeUInt32LE(cdBuf.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  await write(cdBuf)
+  await write(eocd)
+  await new Promise<void>((res) => out.end(() => res()))
+}

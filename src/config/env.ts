@@ -472,6 +472,10 @@ const schema = z.object({
   // account may genuinely send as it (src/outreach/bulk/senders.ts).
   // Off until an administrator switches it on.
   BULK_EMAIL_ENABLED: bool.default('false'),
+  // Where the ZIP of company-wise PDFs (up to 1 GB) is kept on disk between its upload and the start of the send.
+  // Empty = the app's own storage/bulk-zips folder (ignored by git). Needs free disk space, never memory.
+  // Use a folder of its own: old files named <id>.zip in it that no upload points at are removed.
+  BULK_ZIP_DIR: z.string().default(''),
   BULK_SMTP_HOST: z.string().default(''),
   BULK_SMTP_PORT: z.coerce.number().int().positive().default(587),
   BULK_SMTP_SECURE: bool.default('false'),

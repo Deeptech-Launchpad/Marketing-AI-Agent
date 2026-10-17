@@ -16,7 +16,16 @@ import {
   unsubscribeRecipient,
   type Actor,
 } from '../../outreach/bulk/service.js'
-import { MAX_ATTACHMENTS, MAX_FILE_BYTES, removeStagedAttachment, stageAttachment, stageCompanyZip } from '../../outreach/bulk/attachments.js'
+import {
+  appendZipChunk,
+  finishCompanyZipUpload,
+  MAX_ATTACHMENTS,
+  MAX_FILE_BYTES,
+  removeStagedAttachment,
+  stageAttachment,
+  startCompanyZipUpload,
+  ZIP_CHUNK_BYTES,
+} from '../../outreach/bulk/attachments.js'
 import { MAX_ZIP_BYTES } from '../../outreach/bulk/companyZip.js'
 import { BadRequestError } from '../../platform/errors.js'
 import { MAX_CUSTOM_HTML, MAX_CUSTOM_SUBJECT, MAX_CUSTOM_TEMPLATES } from '../../outreach/bulk/customTemplate.js'
@@ -183,29 +192,53 @@ bulkEmailRoutes.post(
   }),
 )
 
-// ZIP of company-wise PDFs (2026-10-17): the ZIP's own bytes are the request body (no base64, so up to
-// MAX_ZIP_BYTES fits under the web server's 25 MB), its name in the X-File-Name header. Only this route reads
-// application/zip; the JSON parser ignores it. A body that is too large or unreadable is answered in words.
-const zipBody = (req: Request, res: Response, next: NextFunction) =>
-  express.raw({ type: ['application/zip', 'application/x-zip-compressed'], limit: MAX_ZIP_BYTES + 64 * 1024 })(req, res, (err?: unknown) => {
+// ZIP of company-wise PDFs (2026-10-17; up to 1 GB since 2026-10-18), uploaded in pieces so that no request is large
+// (the web server accepts 25 MB), a dropped connection costs one piece, and nothing is held in memory:
+//   start  → the name and size; the server checks them and the free disk space and answers with the upload's id and piece size;
+//   chunk  → the next piece (raw bytes, application/octet-stream) with its offset; a piece the server already has, or one that skips
+//            ahead, is answered 409 with the number of bytes it really has, so the screen carries on from there;
+//   finish → the server checks the whole file is there, hashes it and reads it as a ZIP; refused (and removed) if it is not a usable ZIP.
+const ZipStart = z
+  .object({
+    fileName: z.string().min(1).max(200),
+    sizeBytes: z.number().int().min(1).max(MAX_ZIP_BYTES),
+  })
+  .strict()
+
+/** The raw bytes of one piece. A body that is too large or unreadable is answered in words. */
+const pieceBody = (req: Request, res: Response, next: NextFunction) =>
+  express.raw({ type: 'application/octet-stream', limit: ZIP_CHUNK_BYTES + 64 * 1024 })(req, res, (err?: unknown) => {
     if (!err) return next()
     const tooLarge = (err as { type?: string }).type === 'entity.too.large'
-    next(new BadRequestError(tooLarge ? `The ZIP is larger than ${MAX_ZIP_BYTES / 1024 / 1024} MB. Split the files into two ZIPs and send them in two campaigns.` : 'The ZIP could not be read. Upload it again.'))
+    next(new BadRequestError(tooLarge ? `A piece of the ZIP is larger than ${ZIP_CHUNK_BYTES / 1024 / 1024} MB.` : 'A piece of the ZIP could not be read. Upload it again.'))
   })
 
 bulkEmailRoutes.post(
-  '/attachments/zip',
+  '/attachments/zip/start',
   requirePermission('operate'),
-  zipBody,
+  validateBody(ZipStart),
   asyncHandler(async (req, res) => {
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new BadRequestError('Send the ZIP file itself (Content-Type: application/zip).')
-    let fileName = ''
-    try {
-      fileName = decodeURIComponent(String(req.header('x-file-name') ?? ''))
-    } catch {
-      throw new BadRequestError('The ZIP file name could not be read.')
-    }
-    res.status(201).json(await stageCompanyZip(actorOf(req), { fileName, bytes: req.body }))
+    res.status(201).json(await startCompanyZipUpload(actorOf(req), req.body as z.infer<typeof ZipStart>))
+  }),
+)
+
+bulkEmailRoutes.post(
+  '/attachments/zip/:id/chunk',
+  requirePermission('operate'),
+  pieceBody,
+  asyncHandler(async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new BadRequestError('Send the piece of the ZIP itself (Content-Type: application/octet-stream).')
+    const offset = Number(req.query.offset)
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new BadRequestError('The position of this piece is missing.')
+    res.json(await appendZipChunk(actorOf(req), String(req.params.id), offset, req.body))
+  }),
+)
+
+bulkEmailRoutes.post(
+  '/attachments/zip/:id/finish',
+  requirePermission('operate'),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await finishCompanyZipUpload(actorOf(req), String(req.params.id)))
   }),
 )
 

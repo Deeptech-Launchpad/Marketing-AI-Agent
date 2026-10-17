@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import ExcelJS from 'exceljs'
 import { makeZip, pdf } from '../helpers/makeZip.js'
 
@@ -100,7 +104,11 @@ reset()
 
 let n = 0
 vi.mock('../../src/platform/db.js', () => ({ prisma, newId: () => `id_${++n}` }))
+// Where this test run keeps the ZIPs it uploads (removed at the end).
+const ZIP_DIR = mkdtempSync(join(tmpdir(), 'bulk-zips-test-'))
+afterAll(() => rmSync(ZIP_DIR, { recursive: true, force: true }))
 const env = {
+  BULK_ZIP_DIR: ZIP_DIR,
   BULK_EMAIL_ENABLED: true,
   BULK_SMTP_HOST: 'smtp.example.test',
   BULK_SMTP_PORT: 587,
@@ -2290,7 +2298,7 @@ describe('ZIP of company-wise PDFs', () => {
     await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: Buffer.from('not a zip at all, only text bytes here') })).rejects.toThrow(/not a ZIP/)
     await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: makeZip([{ name: 'notes.txt', data: Buffer.from('x') }]) })).rejects.toThrow(/no usable PDF files/)
     await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: makeZip([{ name: 'a.pdf', data: Buffer.from('not a pdf') }]) })).rejects.toThrow(/no usable PDF files.*not a valid PDF/)
-    await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: Buffer.alloc(20 * 1024 * 1024 + 1) })).rejects.toThrow(/larger than 20 MB/)
+    await expect(a.startCompanyZipUpload(actor, { fileName: 'pdfs.zip', sizeBytes: 1024 * 1024 * 1024 + 1 })).rejects.toThrow(/larger than 1 GB/)
     expect(store.bulkAttachment).toEqual([])
 
     const zip = await stageZip(GOOD_ZIP())
@@ -2313,12 +2321,13 @@ describe('ZIP of company-wise PDFs', () => {
   })
 })
 
-// ── The ZIP upload route, over real HTTP (2026-10-17) ───────────────────────
-describe('ZIP upload route', () => {
+// ── The ZIP upload routes, over real HTTP (2026-10-17; in pieces since 2026-10-18) ──
+describe('ZIP upload routes (start, pieces, finish)', () => {
   let server: import('node:http').Server
   let base = ''
   let principal: Record<string, unknown> | undefined
   const OPERATOR = { crmUserId: 'u1', tenantId: 't1', email: 'op@x.test', name: 'Op', role: 'operator', permissions: ['view', 'operate', 'approve'] }
+  const diskFile = (id: string) => join(ZIP_DIR, `${id}.zip`)
 
   beforeEach(async () => {
     reset()
@@ -2343,71 +2352,171 @@ describe('ZIP upload route', () => {
     await new Promise<void>((res) => server.close(() => res()))
   })
 
-  const upload = (body: Buffer | string, headers: Record<string, string> = {}) =>
-    fetch(`${base}/attachments/zip`, { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-File-Name': encodeURIComponent('pdfs.zip'), ...headers }, body })
-  const good = () => makeZip([{ name: 'ABC Limited.pdf', data: pdf('abc') }])
+  const start = (body: unknown) => fetch(`${base}/attachments/zip/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const piece = (id: string, offset: number | string, bytes: Buffer | string, type = 'application/octet-stream') =>
+    fetch(`${base}/attachments/zip/${id}/chunk${offset === '' ? '' : `?offset=${offset}`}`, { method: 'POST', headers: { 'Content-Type': type }, body: bytes })
+  const finish = (id: string) => fetch(`${base}/attachments/zip/${id}/finish`, { method: 'POST' })
+  const say = async (r: Response) => ((await r.json()) as { error: { message: string; details?: { receivedBytes?: number } } }).error
+  const good = () => makeZip([{ name: 'ABC Limited.pdf', data: pdf('abc') }, { name: 'XYZ Industries.pdf', data: pdf('xyz'.repeat(300)) }])
+  const begin = async (bytes: Buffer, fileName = 'pdfs.zip') => ((await (await start({ fileName, sizeBytes: bytes.length })).json()) as { id: string; chunkBytes: number })
 
-  it('stores the ZIP exactly as sent, with its name (spaces, accents and brackets survive)', async () => {
+  it('uploads a ZIP in pieces: the file on disk is exactly what was sent, the row holds no content, and the whole-file hash is set at the end', async () => {
     const bytes = good()
-    const res = await upload(bytes, { 'X-File-Name': encodeURIComponent('Société PDFs (final).zip') })
-    expect(res.status).toBe(201)
-    const out = (await res.json()) as { id: string; fileName: string; sizeBytes: number }
-    expect(out).toMatchObject({ fileName: 'Société PDFs (final).zip', sizeBytes: bytes.length })
-    const row = store.bulkAttachment!.find((r) => r.id === out.id)!
-    expect(row).toMatchObject({ kind: 'company_zip', campaignId: null, tenantId: 't1', mimeType: 'application/zip' })
-    expect(Buffer.from(row.content as Buffer).equals(bytes)).toBe(true)
+    const { id, chunkBytes } = await begin(bytes, 'Société PDFs (final).zip')
+    expect(chunkBytes).toBe(16 * 1024 * 1024)
+    expect(store.bulkAttachment![0]).toMatchObject({ id, kind: 'company_zip', campaignId: null, tenantId: 't1', mimeType: 'application/zip', sha256: '', sizeBytes: bytes.length })
+    expect(existsSync(diskFile(id))).toBe(true)
+    const cuts = [0, Math.floor(bytes.length / 3), Math.floor((bytes.length * 2) / 3), bytes.length]
+    for (let i = 0; i < 3; i++) {
+      const r = await piece(id, cuts[i]!, bytes.subarray(cuts[i], cuts[i + 1]))
+      expect(((await r.json()) as { receivedBytes: number }).receivedBytes).toBe(cuts[i + 1])
+    }
+    const done = await finish(id)
+    expect(done.status).toBe(201)
+    expect(await done.json()).toMatchObject({ id, fileName: 'Société PDFs (final).zip', sizeBytes: bytes.length })
+    expect(readFileSync(diskFile(id)).equals(bytes)).toBe(true)
+    const row = store.bulkAttachment![0]!
+    expect(row.sha256).toBe(createHash('sha256').update(bytes).digest('hex'))
+    expect(Buffer.from(row.content as Buffer).length).toBe(0) // never in the database
   })
 
-  it('needs a login and the "operate" permission', async () => {
+  it('a dropped connection costs one piece: a piece sent twice, or one that skips ahead, is answered with what the server really has, and the upload carries on from there', async () => {
+    const bytes = good()
+    const { id } = await begin(bytes)
+    const half = Math.floor(bytes.length / 2)
+    expect((await piece(id, 0, bytes.subarray(0, half))).status).toBe(200)
+    const again = await piece(id, 0, bytes.subarray(0, half)) // the answer was lost; the screen sends it again
+    expect(again.status).toBe(409)
+    expect((await say(again)).details).toEqual({ receivedBytes: half })
+    const ahead = await piece(id, half + 40, bytes.subarray(half))
+    expect(ahead.status).toBe(409)
+    expect((await say(ahead)).details).toEqual({ receivedBytes: half })
+    expect(statSync(diskFile(id)).size).toBe(half) // neither changed the file
+    expect((await piece(id, half, bytes.subarray(half))).status).toBe(200)
+    expect((await finish(id)).status).toBe(201)
+    expect(readFileSync(diskFile(id)).equals(bytes)).toBe(true)
+  })
+
+  it('pieces sent at the same time are taken one after the other: none is lost, none is doubled', async () => {
+    const bytes = good()
+    const { id } = await begin(bytes)
+    const rs = await Promise.all([piece(id, 0, bytes.subarray(0, 300)), piece(id, 0, bytes.subarray(0, 300)), piece(id, 0, bytes.subarray(0, 300))])
+    expect(rs.map((r) => r.status).sort()).toEqual([200, 409, 409])
+    expect(statSync(diskFile(id)).size).toBe(300)
+  })
+
+  it('finishing too early says how much arrived; finishing twice gives the same answer without checking again', async () => {
+    const bytes = good()
+    const { id } = await begin(bytes)
+    await piece(id, 0, bytes.subarray(0, 100))
+    const early = await finish(id)
+    expect(early.status).toBe(409)
+    expect((await say(early)).details).toEqual({ receivedBytes: 100 })
+    await piece(id, 100, bytes.subarray(100))
+    const a = await finish(id)
+    const b = await finish(id)
+    expect([a.status, b.status]).toEqual([201, 201])
+    expect(await b.json()).toEqual(await a.json())
+    expect((await piece(id, bytes.length, Buffer.from('more'))).status).toBe(409) // a finished upload takes nothing more
+  })
+
+  it('refuses a bad piece in words: missing position, empty, more than the ZIP\'s size, wrong content type, too large', async () => {
+    const bytes = good()
+    const { id } = await begin(bytes)
+    expect([(await piece(id, '', bytes.subarray(0, 10))).status, (await piece(id, 'x', bytes.subarray(0, 10))).status, (await piece(id, -5, bytes.subarray(0, 10))).status]).toEqual([400, 400, 400])
+    expect((await piece(id, 0, Buffer.alloc(0))).status).toBe(400)
+    const over = await piece(id, 0, Buffer.concat([bytes, Buffer.from('extra')]))
+    expect([over.status, (await say(over)).message]).toEqual([400, expect.stringMatching(/More data arrived than the size of the ZIP/)])
+    const wrong = await piece(id, 0, bytes.subarray(0, 10), 'application/zip')
+    expect([wrong.status, (await say(wrong)).message]).toEqual([400, expect.stringMatching(/Send the piece of the ZIP itself/)])
+    const huge = await piece(id, 0, Buffer.alloc(17 * 1024 * 1024))
+    expect([huge.status, (await say(huge)).message]).toEqual([400, expect.stringMatching(/larger than 16 MB/)])
+    expect(statSync(diskFile(id)).size).toBe(0) // none of them was added
+  })
+
+  it('needs a login and the "operate" permission, and an upload belongs to its own tenant', async () => {
+    const { id } = await begin(good())
     principal = undefined
-    expect((await upload(good())).status).toBe(401)
+    expect((await start({ fileName: 'a.zip', sizeBytes: 10 })).status).toBe(401)
+    expect((await piece(id, 0, Buffer.from('x'))).status).toBe(401)
+    expect((await finish(id)).status).toBe(401)
     principal = { ...OPERATOR, permissions: ['view'] }
-    expect((await upload(good())).status).toBe(403)
+    expect((await start({ fileName: 'a.zip', sizeBytes: 10 })).status).toBe(403)
+    expect((await piece(id, 0, Buffer.from('x'))).status).toBe(403)
+    expect((await finish(id)).status).toBe(403)
+    principal = { ...OPERATOR, tenantId: 't2' }
+    expect((await piece(id, 0, Buffer.from('x'))).status).toBe(404) // someone else's upload does not exist for this tenant
+    expect((await finish(id)).status).toBe(404)
+    expect(statSync(diskFile(id)).size).toBe(0)
+  })
+
+  it('start refuses in words: not a .zip, empty, over 1 GB, unknown fields — and creates nothing', async () => {
+    const before = readdirSync(ZIP_DIR).length
+    expect((await say(await start({ fileName: 'pdfs.rar', sizeBytes: 100 }))).message).toMatch(/ends in \.zip/)
+    expect((await start({ fileName: 'pdfs.zip', sizeBytes: 0 })).status).toBe(400)
+    expect((await start({ fileName: 'a/b.zip', sizeBytes: 5 })).status).toBe(400)
+    const big = await start({ fileName: 'pdfs.zip', sizeBytes: 1024 * 1024 * 1024 + 1 })
+    expect([big.status, (await say(big)).message]).toEqual([400, expect.any(String)])
+    expect((await start({ fileName: 'pdfs.zip', sizeBytes: 5, extra: 1 })).status).toBe(400)
+    expect(store.bulkAttachment).toEqual([])
+    expect(readdirSync(ZIP_DIR).length).toBe(before)
+  })
+
+  it('exactly 1 GB is accepted at the start; ZIPs waiting to be used are limited to 2 GB together', async () => {
+    const GB = 1024 * 1024 * 1024
+    const first = await start({ fileName: 'one.zip', sizeBytes: GB })
+    expect(first.status).toBe(201)
+    expect((await start({ fileName: 'two.zip', sizeBytes: GB })).status).toBe(201)
+    const third = await start({ fileName: 'three.zip', sizeBytes: 1000 })
+    expect([third.status, (await say(third)).message]).toEqual([409, expect.stringMatching(/Too many ZIP files are waiting/)])
+  })
+
+  it('a file that is not a usable ZIP is refused at the end and removed (row and file)', async () => {
+    const text = Buffer.from('this is just text, not a zip file at all')
+    const { id } = await begin(text)
+    await piece(id, 0, text)
+    const r = await finish(id)
+    expect([r.status, (await say(r)).message]).toEqual([400, expect.stringMatching(/not a ZIP/)])
+    expect(store.bulkAttachment).toEqual([])
+    expect(existsSync(diskFile(id))).toBe(false)
+
+    const noPdf = makeZip([{ name: 'notes.txt', data: Buffer.from('x') }])
+    const two = await begin(noPdf)
+    await piece(two.id, 0, noPdf)
+    expect((await say(await finish(two.id))).message).toMatch(/no usable PDF files/)
     expect(store.bulkAttachment).toEqual([])
   })
 
-  it('answers in words: wrong type, empty body, not a ZIP, no PDFs, bad name, too large', async () => {
-    const say = async (r: Response) => ((await r.json()) as { error: { message: string } }).error.message
-    let r = await fetch(`${base}/attachments/zip`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-File-Name': 'a.zip' }, body: '{}' })
-    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/Send the ZIP file itself/)])
-    r = await upload(Buffer.alloc(0))
-    expect(r.status).toBe(400)
-    r = await upload(Buffer.from('just some text, not a zip file'))
-    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/not a ZIP/)])
-    r = await upload(makeZip([{ name: 'notes.txt', data: Buffer.from('x') }]))
-    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/no usable PDF files/)])
-    r = await upload(good(), { 'X-File-Name': encodeURIComponent('pdfs.rar') })
-    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/ends in \.zip/)])
-    r = await upload(good(), { 'X-File-Name': '%E0%A4%A' }) // a broken escape
-    expect(r.status).toBe(400)
-    r = await upload(Buffer.alloc(21 * 1024 * 1024))
-    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/larger than 20 MB/)])
-    expect(store.bulkAttachment).toEqual([])
-  })
-
-  it('the review and start accept the new fields; unknown fields are still refused', async () => {
-    const staged = (await (await upload(good())).json()) as { id: string }
+  it('the review and start accept the ZIP\'s id; unknown fields are still refused', async () => {
+    const bytes = makeZip([{ name: 'ABC Limited.pdf', data: pdf('abc') }])
+    const { id } = await begin(bytes)
+    await piece(id, 0, bytes)
+    await finish(id)
     const body = { fileBase64: await xlsx([HEADER, ['ABC Limited', 'u', 'Ann Lee', 'Owner', 'abc@company.com', '', '', '', '']]), templateKey: 'static_site_v1', startDate: '2026-10-17', startTime: '10:00', intervalMinutes: 5, allowWebmail: true }
-    const ok = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZipId: staged.id, excludeUnmatched: false }) })
+    const ok = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZipId: id, excludeUnmatched: false }) })
     expect(ok.status).toBe(200)
     const review = (await ok.json()) as { rows: Array<{ companyFile: { fileName: string; status: string } }>; companyZip: { fileName: string } }
     expect(review.rows[0]!.companyFile).toMatchObject({ fileName: 'ABC Limited.pdf', status: 'matched' })
     expect(review.companyZip.fileName).toBe('pdfs.zip')
-    const bad = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZip: 'x' }) })
-    expect(bad.status).toBe(400)
-    const bigId = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZipId: 'x'.repeat(65) }) })
-    expect(bigId.status).toBe(400)
+    expect((await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZip: 'x' }) })).status).toBe(400)
+    expect((await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZipId: 'x'.repeat(65) }) })).status).toBe(400)
   })
 
-  it('the ZIP can be removed again with the same Remove route as other attachments', async () => {
-    const staged = (await (await upload(good())).json()) as { id: string }
-    const del = await fetch(`${base}/attachments/${staged.id}`, { method: 'DELETE' })
+  it('a ZIP that is still uploading cannot be used for a review; Remove works at any time and takes the file off the disk too', async () => {
+    const bytes = good()
+    const { id } = await begin(bytes)
+    await piece(id, 0, bytes.subarray(0, 100))
+    const body = { fileBase64: await xlsx([HEADER, ['ABC Limited', 'u', 'Ann Lee', 'Owner', 'abc@company.com', '', '', '', '']]), templateKey: 'static_site_v1', startDate: '2026-10-17', startTime: '10:00', intervalMinutes: 5, allowWebmail: true }
+    const early = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZipId: id }) })
+    expect([early.status, (await say(early)).message]).toEqual([400, expect.stringMatching(/no longer available/)])
+    const del = await fetch(`${base}/attachments/${id}`, { method: 'DELETE' })
     expect(del.status).toBe(200)
     expect(store.bulkAttachment).toEqual([])
+    expect(existsSync(diskFile(id))).toBe(false)
   })
 })
 
-describe('ZIP of company-wise PDFs: hardening after review (2026-10-17)', () => {
+describe('ZIP of company-wise PDFs: kept on disk, checked again at the start (2026-10-18)', () => {
   const ABC = pdf('abc')
   const XYZ = pdf('xyz')
   const PEOPLE = [
@@ -2419,6 +2528,7 @@ describe('ZIP of company-wise PDFs: hardening after review (2026-10-17)', () => 
   const BEFORE = new Date('2026-10-16T12:00:00Z')
   const att = () => import('../../src/outreach/bulk/attachments.js')
   const zipMod = () => import('../../src/outreach/bulk/companyZip.js')
+  const diskFile = (id: string) => join(ZIP_DIR, `${id}.zip`)
   const setup = async (extra: Record<string, unknown> = {}) => ({
     fileBase64: await xlsx([HEADER, ...PEOPLE]),
     fileName: 'recipients.xlsx',
@@ -2443,7 +2553,7 @@ describe('ZIP of company-wise PDFs: hardening after review (2026-10-17)', () => 
     env.BULK_SEND_VIA = 'smtp'
   })
 
-  it('if a company PDF cannot be stored, NOTHING is created: no campaign for the sender to see, no recipients, no half-stored files', async () => {
+  it('if a company PDF cannot be stored, NOTHING is created: no campaign for the sender to see, no recipients, no half-stored files — and the ZIP stays to try again', async () => {
     const zip = await (await att()).stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIP() }, BEFORE)
     // The second company PDF fails to store (as a full disk would).
     class FailingArray extends Array<Record<string, unknown>> {
@@ -2456,60 +2566,312 @@ describe('ZIP of company-wise PDFs: hardening after review (2026-10-17)', () => 
     await expect(svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, BEFORE)).rejects.toThrow(/disk full/)
     expect(store.bulkEmailCampaign).toEqual([]) // never live while its files were being stored
     expect(store.bulkEmailRecipient).toEqual([])
-    expect([...store.bulkAttachment!].map((r) => r.kind)).toEqual(['company_zip']) // the first stored file was cleaned up; the ZIP stays to retry
+    expect([...store.bulkAttachment!].map((r) => r.kind)).toEqual(['company_zip']) // the first stored file was cleaned up
+    expect(existsSync(diskFile(zip.id))).toBe(true) // the ZIP is still there to retry
   })
 
-  it('the files are stored before the campaign exists and tied to it in one step; a missing one cancels the send before anything is scheduled', async () => {
+  it('the files are stored before the campaign exists and tied to it in one step; the ZIP file is removed from the disk once its send has started', async () => {
     const a = await att()
     await expect(a.linkCompanyFiles(actor, ['nope'], 'c1')).rejects.toThrow(/no longer available/)
     const zip = await a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIP() }, BEFORE)
+    expect(existsSync(diskFile(zip.id))).toBe(true)
     const { campaignId } = await svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, BEFORE)
     const files = store.bulkAttachment!.filter((r) => r.kind === 'company_file')
     expect(files).toHaveLength(3)
     expect(files.every((r) => r.campaignId === campaignId)).toBe(true)
     expect(store.bulkEmailRecipient!.every((r) => files.some((f) => f.id === r.attachmentId))).toBe(true)
+    expect(store.bulkAttachment!.some((r) => r.kind === 'company_zip')).toBe(false)
+    expect(existsSync(diskFile(zip.id))).toBe(false)
   })
 
-  it('a review of an unchanged ZIP does not unpack it again (remembered by its content hash); Start always reads the real bytes', async () => {
+  it('a review of an unchanged ZIP does not read it again; and if the ZIP file changes after the review, Start refuses and creates nothing', async () => {
     const a = await att()
     const z = await zipMod()
     const zip = await a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIP() }, BEFORE)
     const s = await setup({ companyZipId: zip.id })
     const first = await svc.reviewBulk(actor, s, BEFORE)
     expect(first.companyZip!.files.map((f) => f.name)).toEqual(['ABC Limited.pdf', 'XYZ Industries.pdf', 'Test Corporation.pdf'])
-    expect(z.recallScan(String(store.bulkAttachment![0]!.sha256))!.files.every((f) => f.bytes === null)).toBe(true) // no PDF contents kept in memory
-    // The stored content is swapped under the same hash: the remembered scan is still what the review shows…
-    store.bulkAttachment![0]!.content = makeZip([{ name: 'Other.pdf', data: pdf('o') }])
+    // The file on the disk is swapped for another ZIP: the remembered scan is still what the review shows (it was not read again)…
+    writeFileSync(diskFile(zip.id), makeZip([{ name: 'Other.pdf', data: pdf('o') }]))
     expect((await svc.reviewBulk(actor, s, BEFORE)).companyZip!.files.map((f) => f.name)).toEqual(['ABC Limited.pdf', 'XYZ Industries.pdf', 'Test Corporation.pdf'])
-    // …but Start reads the stored ZIP itself, never the remembered scan: what it finds there is what it uses.
-    await expect(svc.startBulk(actor, { ...s, confirm: true }, BEFORE)).rejects.toThrow(/Not started — 3 recipients have no usable company PDF/)
+    // …but Start reads each PDF from the ZIP again and checks it against the review: what is there now is not what was checked.
+    await expect(svc.startBulk(actor, { ...s, confirm: true }, BEFORE)).rejects.toThrow(/could not be read from the ZIP again|not the same file the review checked/)
+    expect(store.bulkEmailCampaign).toEqual([])
+    expect(store.bulkEmailRecipient).toEqual([])
+    expect(store.bulkAttachment!.filter((r) => r.kind === 'company_file')).toEqual([])
+    // Once the remembered scan is gone, a review reads the file as it is now.
     z.forgetScans()
     expect((await svc.reviewBulk(actor, s, BEFORE)).companyZip!.files.map((f) => f.name)).toEqual(['Other.pdf'])
   })
 
-  it('the scan memory keeps a few ZIPs, forgets the oldest, and never holds PDF bytes', async () => {
-    const z = await zipMod()
-    const scan = z.readCompanyZip(ZIP())
-    for (let i = 0; i < 10; i++) z.rememberScan(`sha-${i}`, scan)
-    expect(z.recallScan('sha-0')).toBeUndefined()
-    expect(z.recallScan('sha-1')).toBeUndefined()
-    expect(z.recallScan('sha-9')!.files.map((f) => f.bytes)).toEqual([null, null, null])
-    expect(scan.files.every((f) => f.bytes !== null)).toBe(true) // the original scan is untouched
+  it('old uploads are cleared when a new one starts: a ZIP row older than a day with its file, and a stray file nothing points at', async () => {
+    const a = await att()
+    const old = await a.stageCompanyZip(actor, { fileName: 'old.zip', bytes: ZIP() }, BEFORE)
+    store.bulkAttachment!.find((r) => r.id === old.id)!.createdAt = new Date('2026-10-01T00:00:00Z')
+    const stray = join(ZIP_DIR, 'stray-file.zip')
+    writeFileSync(stray, 'x')
+    utimesSync(stray, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'))
+    const fresh = await a.stageCompanyZip(actor, { fileName: 'new.zip', bytes: ZIP() }, new Date('2026-10-17T12:00:00Z'))
+    expect(store.bulkAttachment!.map((r) => r.id)).toEqual([fresh.id]) // the old row is gone
+    expect(existsSync(diskFile(old.id))).toBe(false)
+    expect(existsSync(stray)).toBe(false)
+    expect(existsSync(diskFile(fresh.id))).toBe(true)
   })
 
   it('names are matched with their combining marks, so different non-Latin names never share a key', async () => {
     const z = await zipMod()
     expect(z.companyFileKey('रमा')).not.toBe(z.companyFileKey('राम'))
-    expect(z.companyFileKey('Société Générale')).toBe(z.companyFileKey('societe generale'.replace('societe', 'Société').replace('generale', 'Générale')))
-    const files = z.readCompanyZip(makeZip([{ name: 'रमा Ltd.pdf', data: pdf('1') }])).files
+    expect(z.companyFileKey('Société Générale')).toBe(z.companyFileKey('société générale'))
+    const files = (await z.readCompanyZip(z.bufferSource(makeZip([{ name: 'रमा Ltd.pdf', data: pdf('1') }])))).files
     expect(z.matchCompanyFiles(['राम Ltd', 'रमा Ltd'], files).map((m) => m.status)).toEqual(['missing', 'matched'])
   })
 
   it('only companies that can be emailed count when one file matches two names', async () => {
     const z = await zipMod()
-    const files = z.readCompanyZip(makeZip([{ name: 'ABC Ltd.pdf', data: pdf('1') }])).files
+    const files = (await z.readCompanyZip(z.bufferSource(makeZip([{ name: 'ABC Ltd.pdf', data: pdf('1') }])))).files
     expect(z.matchCompanyFiles(['ABC Ltd', 'ABC Ltd.'], files).map((m) => m.status)).toEqual(['ambiguous', 'ambiguous'])
     expect(z.matchCompanyFiles(['ABC Ltd', 'ABC Ltd.'], files, [true, false]).map((m) => m.status)).toEqual(['matched', 'matched']) // the second is skipped anyway
     expect(z.matchCompanyFiles(['ABC Ltd', 'ABC Ltd.'], files, [true, true]).map((m) => m.status)).toEqual(['ambiguous', 'ambiguous'])
+  })
+
+  it('the matched PDFs of one send may add up to at most 1 GB (they are kept with the send)', async () => {
+    const z = await zipMod()
+    const file = (n: number): import('../../src/outreach/bulk/companyZip.js').ZipFile => ({ path: 'a.pdf', fileName: 'a.pdf', key: 'a', sizeBytes: n, status: 'ok', reason: null, sha256: 'x', entry: null })
+    expect(() => z.checkMatchedTotal([file(600 * 1024 * 1024), file(424 * 1024 * 1024)])).not.toThrow() // exactly 1 GB
+    expect(() => z.checkMatchedTotal([file(600 * 1024 * 1024), file(425 * 1024 * 1024)])).toThrow(/add up to 1.0 GB; at most 1 GB can go in one send/)
+  })
+})
+
+// A real ZIP of about 1 GB through the real code (run on request: RUN_BIG_ZIP=1 npx vitest run tests/unit/bulkEmail.test.ts -t "about 1 GB").
+// 143 PDFs of just under 7 MB each, stored (not compressed), written to disk without ever holding the ZIP in memory.
+const BIG = process.env.RUN_BIG_ZIP === '1' ? it : it.skip
+describe('a ZIP of about 1 GB', () => {
+  BIG('is uploaded in pieces, scanned, reviewed and started without holding it in memory, and without freezing the server', async () => {
+    const { randomBytes } = await import('node:crypto')
+    const { open, stat } = await import('node:fs/promises')
+    const { writeStoredZip } = await import('../helpers/makeZip.js')
+    const a = await import('../../src/outreach/bulk/attachments.js')
+    await setSender()
+    env.BULK_SEND_VIA = 'crm'
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: { maxFiles: 5, maxBytes: 10485760 } }),
+      send: async () => ({ outcome: 'sent', messageId: 'g', activityId: 'a', fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }),
+      statuses: async () => [],
+    })
+    const COUNT = 143
+    const shared = randomBytes(7 * 1024 * 1024 - 2048)
+    const src = join(ZIP_DIR, 'big-source.zip')
+    const t0 = Date.now()
+    await writeStoredZip(src, Array.from({ length: COUNT }, (_, i) => `Company ${i}.pdf`), (i) => Buffer.concat([Buffer.from(`%PDF-1.4\n% company ${i}\n`), shared]))
+    const size = (await stat(src)).size
+    console.log(`big zip: ${(size / 1e6).toFixed(0)} MB, ${COUNT} PDFs, written in ${Date.now() - t0} ms`)
+    expect(size).toBeGreaterThan(1_000_000_000)
+    expect(size).toBeLessThanOrEqual(1024 * 1024 * 1024)
+
+    // Upload it in 16 MB pieces, as the browser does.
+    let maxLag = 0
+    let last = Date.now()
+    const timer = setInterval(() => {
+      const now = Date.now()
+      maxLag = Math.max(maxLag, now - last - 10)
+      last = now
+    }, 10)
+    const rss0 = process.memoryUsage().rss
+    let peak = rss0
+    const watch = setInterval(() => (peak = Math.max(peak, process.memoryUsage().rss)), 20)
+    const t1 = Date.now()
+    const started = await a.startCompanyZipUpload(actor, { fileName: 'big.zip', sizeBytes: size })
+    const fh = await open(src, 'r')
+    for (let offset = 0; offset < size; offset += started.chunkBytes) {
+      const len = Math.min(started.chunkBytes, size - offset)
+      const buf = Buffer.alloc(len)
+      await fh.read(buf, 0, len, offset)
+      await a.appendZipChunk(actor, started.id, offset, buf)
+    }
+    await fh.close()
+    const t2 = Date.now()
+    const staged = await a.finishCompanyZipUpload(actor, started.id) // hash + scan of every PDF
+    const t3 = Date.now()
+    console.log(`upload in pieces: ${t2 - t1} ms; hash + scan: ${t3 - t2} ms`)
+    expect(staged.sizeBytes).toBe(size)
+
+    const rows = Array.from({ length: COUNT }, (_, i) => [`Company ${i}`, 'u', `Person${i} Lee`, 'Owner', `p${i}@co${i}.test`, '', '', '', ''])
+    const s = {
+      fileBase64: await xlsx([HEADER, ...rows]),
+      fileName: 'big.xlsx',
+      templateKey: 'static_site_v1',
+      startDate: '2026-10-19',
+      startTime: '10:00',
+      intervalMinutes: 5,
+      allowWebmail: true,
+      companyZipId: staged.id,
+    }
+    const t4 = Date.now()
+    const review = await svc.reviewBulk(actor, s, new Date('2026-10-18T12:00:00Z'))
+    const t5 = Date.now()
+    console.log(`review of the 1 GB ZIP (remembered scan): ${t5 - t4} ms`)
+    expect(review.companyZip!.counts).toMatchObject({ matched: COUNT, missing: 0, ambiguous: 0, invalid: 0, tooLarge: 0 })
+    expect(review.counts.blocked).toBe(0)
+
+    const { campaignId } = await svc.startBulk(actor, { ...s, confirm: true }, new Date('2026-10-18T12:00:00Z'))
+    const t6 = Date.now()
+    console.log(`start (each PDF read again, checked and stored): ${t6 - t5} ms`)
+    clearInterval(timer)
+    clearInterval(watch)
+    const kept = store.bulkAttachment!.filter((r) => r.kind === 'company_file' && r.campaignId === campaignId)
+    expect(kept).toHaveLength(COUNT)
+    expect(existsSync(join(ZIP_DIR, `${staged.id}.zip`))).toBe(false)
+    console.log(`peak memory above the start: ${((peak - rss0) / 1e6).toFixed(0)} MB (this test's fake database also holds the ${(kept.length * 7).toFixed(0)} MB of stored PDFs); longest pause of the server: ${maxLag} ms`)
+    expect(maxLag).toBeLessThan(2000) // the server kept answering while the ZIP was read
+    env.BULK_SEND_VIA = 'smtp'
+  }, 30 * 60_000)
+})
+
+describe('ZIP uploads: what the independent review found (2026-10-18)', () => {
+  const att = () => import('../../src/outreach/bulk/attachments.js')
+  const GB = 1024 * 1024 * 1024
+  const diskFile = (id: string) => join(ZIP_DIR, `${id}.zip`)
+  const old = (file: string, hoursAgo: number) => utimesSync(file, new Date(Date.now() - hoursAgo * 3_600_000), new Date(Date.now() - hoursAgo * 3_600_000))
+  const ZIPB = () => makeZip([{ name: 'ABC Limited.pdf', data: pdf('abc') }])
+  const PEOPLE = [['ABC Limited', 'u', 'Ann Lee', 'Owner', 'abc@company.com', '', '', '', '']]
+  const setup = async (extra: Record<string, unknown> = {}) => ({
+    fileBase64: await xlsx([HEADER, ...PEOPLE]),
+    fileName: 'recipients.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-19',
+    startTime: '10:00',
+    intervalMinutes: 5,
+    allowWebmail: true,
+    ...extra,
+  })
+
+  beforeEach(() => {
+    reset()
+    env.BULK_SEND_VIA = 'crm'
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: { maxFiles: 5, maxBytes: 10485760 } }),
+      send: async () => ({ outcome: 'sent', messageId: 'g', activityId: 'a', fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }),
+      statuses: async () => [],
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+  })
+
+  it('a refused piece or finish never becomes an unhandled rejection (which would stop the whole server)', async () => {
+    const a = await att()
+    const unhandled: unknown[] = []
+    const on = (e: unknown) => unhandled.push(e)
+    process.on('unhandledRejection', on)
+    try {
+      const bytes = ZIPB()
+      const { id } = await a.startCompanyZipUpload(actor, { fileName: 'pdfs.zip', sizeBytes: bytes.length })
+      await expect(a.appendZipChunk(actor, id, 5, bytes.subarray(0, 10))).rejects.toThrow(/continue from there/) // the normal "I already have more" answer
+      await expect(a.appendZipChunk(actor, id, 0, Buffer.alloc(0))).rejects.toThrow(/empty/)
+      await expect(a.finishCompanyZipUpload(actor, id)).rejects.toThrow(/Only 0 of/)
+      await a.appendZipChunk(actor, id, 0, bytes) // and the upload still works afterwards
+      await a.finishCompanyZipUpload(actor, id)
+      const bad = await a.startCompanyZipUpload(actor, { fileName: 'text.zip', sizeBytes: 9 })
+      await a.appendZipChunk(actor, bad.id, 0, Buffer.from('not a zip'))
+      await expect(a.finishCompanyZipUpload(actor, bad.id)).rejects.toThrow(/not a ZIP/)
+      await new Promise((r) => setTimeout(r, 50)) // a rejection nobody handled is reported on a later turn
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', on)
+    }
+  })
+
+  it('an upload nobody finished does not block new ones for a day: after an hour without a piece it is cleared, its space too', async () => {
+    const a = await att()
+    const one = await a.startCompanyZipUpload(actor, { fileName: 'one.zip', sizeBytes: GB })
+    const two = await a.startCompanyZipUpload(actor, { fileName: 'two.zip', sizeBytes: GB })
+    await expect(a.startCompanyZipUpload(actor, { fileName: 'three.zip', sizeBytes: GB })).rejects.toThrow(/Too many ZIP files are waiting/)
+    old(diskFile(one.id), 2) // the tab was closed two hours ago
+    const recent = join(ZIP_DIR, `${two.id}.zip`)
+    writeFileSync(recent, 'x') // two is still receiving pieces (just written)
+    const three = await a.startCompanyZipUpload(actor, { fileName: 'three.zip', sizeBytes: GB })
+    expect(store.bulkAttachment!.map((r) => r.id).sort()).toEqual([three.id, two.id].sort())
+    expect(existsSync(diskFile(one.id))).toBe(false)
+    expect(existsSync(diskFile(two.id))).toBe(true)
+  })
+
+  it('the clean-up only touches this app\'s own ZIP files: other files in the folder stay, and another tenant\'s ZIP in use stays however old its file is', async () => {
+    const a = await att()
+    const other = { tenantId: 't2', crmUserId: 'u9' }
+    const theirs = await a.stageCompanyZip(other, { fileName: 'theirs.zip', bytes: ZIPB() })
+    old(diskFile(theirs.id), 40) // an old file, but its row is in use
+    const stranger = join(ZIP_DIR, 'notes.txt')
+    const stranger2 = join(ZIP_DIR, 'backup.zip.bak')
+    const strayZip = join(ZIP_DIR, 'stray-no-row.zip')
+    for (const f of [stranger, stranger2, strayZip]) {
+      writeFileSync(f, 'x')
+      old(f, 40)
+    }
+    await a.startCompanyZipUpload(actor, { fileName: 'mine.zip', sizeBytes: 100 })
+    expect(existsSync(diskFile(theirs.id))).toBe(true)
+    expect(store.bulkAttachment!.some((r) => r.id === theirs.id)).toBe(true)
+    expect([existsSync(stranger), existsSync(stranger2)]).toEqual([true, true]) // not named like ours
+    expect(existsSync(strayZip)).toBe(false) // named like ours, nothing points at it, old: removed
+    for (const f of [stranger, stranger2]) rmSync(f, { force: true })
+  })
+
+  it('a plain attachment upload does not remove a staged ZIP\'s row (which would leave its file on the disk)', async () => {
+    const a = await att()
+    const zip = await a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIPB() })
+    store.bulkAttachment!.find((r) => r.id === zip.id)!.createdAt = new Date('2026-09-01T00:00:00Z')
+    await a.stageAttachment(actor, { fileName: 'x.pdf', contentBase64: pdf('x').toString('base64') }, new Date('2026-10-17T00:00:00Z'))
+    expect(store.bulkAttachment!.some((r) => r.id === zip.id)).toBe(true)
+    expect(existsSync(diskFile(zip.id))).toBe(true)
+  })
+
+  it('a piece for an upload that was removed (or whose file is gone) is refused and never recreates the file', async () => {
+    const a = await att()
+    const bytes = ZIPB()
+    const { id } = await a.startCompanyZipUpload(actor, { fileName: 'pdfs.zip', sizeBytes: bytes.length })
+    await a.removeStagedAttachment(actor, id)
+    await expect(a.appendZipChunk(actor, id, 0, bytes)).rejects.toThrow(/Upload not found/)
+    expect(existsSync(diskFile(id))).toBe(false)
+    const two = await a.startCompanyZipUpload(actor, { fileName: 'two.zip', sizeBytes: bytes.length })
+    rmSync(diskFile(two.id)) // the file vanished under its row
+    await expect(a.appendZipChunk(actor, two.id, 0, bytes)).rejects.toThrow(/Upload not found/)
+    expect(existsSync(diskFile(two.id))).toBe(false)
+    await expect(a.finishCompanyZipUpload(actor, two.id)).rejects.toThrow(/Upload not found/)
+  })
+
+  it('a removal that arrives while a piece is being added waits for it, and leaves nothing behind', async () => {
+    const a = await att()
+    const bytes = ZIPB()
+    const { id } = await a.startCompanyZipUpload(actor, { fileName: 'pdfs.zip', sizeBytes: bytes.length })
+    const [added, removed] = await Promise.allSettled([a.appendZipChunk(actor, id, 0, bytes), a.removeStagedAttachment(actor, id)])
+    expect(added.status).toBe('fulfilled')
+    expect(removed.status).toBe('fulfilled')
+    expect(existsSync(diskFile(id))).toBe(false)
+    expect(store.bulkAttachment).toEqual([])
+  })
+
+  it('if a Start fails after its company PDFs were stored, they are removed again: nothing is left in the database', async () => {
+    const a = await att()
+    const zip = await a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIPB() })
+    await setSender()
+    ;(prisma.bulkEmailCampaign.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('db down'))
+    await expect(svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, new Date('2026-10-18T12:00:00Z'))).rejects.toThrow(/db down/)
+    expect(store.bulkEmailCampaign).toEqual([])
+    expect(store.bulkAttachment!.filter((r) => r.kind === 'company_file')).toEqual([])
+    expect(existsSync(diskFile(zip.id))).toBe(true) // the ZIP is still there to try again
+    // …and trying again works.
+    const { campaignId } = await svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, new Date('2026-10-18T12:00:00Z'))
+    expect(store.bulkAttachment!.filter((r) => r.kind === 'company_file' && r.campaignId === campaignId)).toHaveLength(1)
+  })
+
+  it('if the recipients cannot be stored after the campaign was created, the campaign is cancelled with its files before anything is scheduled', async () => {
+    const a = await att()
+    const zip = await a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIPB() })
+    await setSender()
+    ;(prisma.bulkEmailRecipient.createMany as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('db down'))
+    await expect(svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, new Date('2026-10-18T12:00:00Z'))).rejects.toThrow(/db down/)
+    expect(store.bulkEmailCampaign!.map((c) => c.status)).toEqual(['cancelled'])
+    expect(store.bulkEmailCampaign![0]!.statusReason).toMatch(/nothing was sent/)
+    expect(store.bulkAttachment!.filter((r) => r.kind === 'company_file')).toEqual([])
+    expect(store.bulkEmailRecipient).toEqual([])
   })
 })

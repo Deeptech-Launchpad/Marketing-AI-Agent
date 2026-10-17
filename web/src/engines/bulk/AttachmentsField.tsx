@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { FileArchive, Paperclip, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import { Button } from '../../components/ui/primitives'
+import { uploadZipInPieces } from './zipUpload'
 
 // ATTACHMENTS (2026-10-12): upload once, below the email preview; the same
 // files go with every email of the send. Each file is stored on the server as
@@ -21,7 +22,7 @@ export interface CompanyZip {
   sizeBytes: number
 }
 
-export const MAX_ZIP_BYTES = 20 * 1024 * 1024
+export const MAX_ZIP_BYTES = 1024 * 1024 * 1024
 
 /** Why this file cannot be uploaded as the company ZIP (null = it can). Checked again by the server. */
 export function zipProblem(file: { name: string; size: number }): string | null {
@@ -39,7 +40,8 @@ const BLOCKED = /\.(exe|bat|cmd|com|scr|pif|msi|msp|dll|jar|js|jse|vbs|vbe|wsf|w
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
 }
 
 export const attachmentList = (list: BulkAttachment[]) => list.map((a) => `${a.fileName} (${formatSize(a.sizeBytes)})`).join(', ')
@@ -82,6 +84,8 @@ export function AttachmentsField({
   const [error, setError] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const zipInput = useRef<HTMLInputElement>(null)
+  // The ZIP being uploaded in pieces: its name and how many bytes the server has so far.
+  const [zipProgress, setZipProgress] = useState<{ name: string; sent: number; total: number } | null>(null)
 
   const setWorking = (b: boolean) => {
     setBusy(b)
@@ -136,8 +140,9 @@ export function AttachmentsField({
       return
     }
     setWorking(true)
+    setZipProgress({ name: f.name, sent: 0, total: f.size })
     try {
-      const stored = await api.upload<CompanyZip>('/outreach/bulk/attachments/zip', f, { contentType: 'application/zip', headers: { 'X-File-Name': encodeURIComponent(f.name) } })
+      const stored = await uploadZipInPieces(f, (sent) => setZipProgress({ name: f.name, sent, total: f.size }))
       const old = zip.value
       zip.onChange(stored)
       // A newer ZIP replaces the earlier one (which is removed from the server; if that fails it is cleared after a day).
@@ -145,6 +150,7 @@ export function AttachmentsField({
     } catch (err) {
       setError((err as Error)?.message || 'The ZIP could not be uploaded.')
     } finally {
+      setZipProgress(null)
       setWorking(false)
       if (zipInput.current) zipInput.current.value = ''
     }
@@ -217,8 +223,15 @@ export function AttachmentsField({
         <div className="bulk-zip">
           <p className="note">
             Optional. One ZIP with a PDF for each company, named after the company (for example "ABC Limited.pdf"). Each recipient gets only their own company&rsquo;s PDF, together with
-            the files above. Up to {formatSize(MAX_ZIP_BYTES)}.
+            the files above. Up to {formatSize(MAX_ZIP_BYTES)} in all (each PDF up to {formatSize(MAX_FILE_BYTES)}). A large ZIP is sent in pieces and takes a while; keep this page open.
           </p>
+          {zipProgress && (
+            <p role="status">
+              {zipProgress.sent >= zipProgress.total
+                ? `Checking the PDFs in ${zipProgress.name} …`
+                : `Uploading ${zipProgress.name} — ${Math.floor((zipProgress.sent / zipProgress.total) * 100)}% (${formatSize(zipProgress.sent)} of ${formatSize(zipProgress.total)})`}
+            </p>
+          )}
           {zip.value && (
             <p>
               <FileArchive size={14} aria-hidden /> {zip.value.fileName} <span className="cell-dim">({formatSize(zip.value.sizeBytes)})</span>{' '}

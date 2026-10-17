@@ -19,6 +19,7 @@ let calls: Call[] = []
 const uploaded = new Map<string, { id: string; fileName: string; mimeType: string; sizeBytes: number }>()
 const posts = () => calls.filter((c) => c.method === 'POST')
 let zipSeq = 0
+const zipUploads = new Map<string, { fileName: string; sizeBytes: number; got: number }>()
 
 /** The fake server's ZIP matching (2026-10-17): "<Company>.pdf" for each ready company, except those listed as missing. */
 function applyZip(rows: Array<Record<string, any>>, b: { excludeUnmatched?: boolean }, missing: string[], problems: string[]) {
@@ -182,10 +183,23 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
     }
     if (method === 'DELETE' && u.includes('/outreach/bulk/attachments/')) return json({ id: u.split('/').pop(), removed: true })
     // The ZIP of company-wise PDFs (2026-10-17): its own bytes, its name in a header.
-    if (method === 'POST' && u.endsWith('/outreach/bulk/attachments/zip')) {
-      const f = init.body as File
-      const a = { id: `zip${++zipSeq}`, fileName: decodeURIComponent((init.headers as Record<string, string>)['X-File-Name']!), sizeBytes: f.size }
-      return json(a, 201)
+    if (method === 'POST' && u.endsWith('/outreach/bulk/attachments/zip/start')) {
+      const b = JSON.parse(String(init.body)) as { fileName: string; sizeBytes: number }
+      const id = `zip${++zipSeq}`
+      zipUploads.set(id, { fileName: b.fileName, sizeBytes: b.sizeBytes, got: 0 })
+      return json({ id, fileName: b.fileName, sizeBytes: b.sizeBytes, chunkBytes: 1024 }, 201)
+    }
+    const piece = /\/outreach\/bulk\/attachments\/zip\/([^/]+)\/chunk\?offset=(\d+)$/.exec(u)
+    if (method === 'POST' && piece) {
+      const z = zipUploads.get(piece[1]!)!
+      if (Number(piece[2]) !== z.got) return json({ error: { code: 'conflict', message: 'The server has a different amount.', details: { receivedBytes: z.got } } }, 409)
+      z.got += (init.body as Blob).size
+      return json({ receivedBytes: z.got })
+    }
+    const done = /\/outreach\/bulk\/attachments\/zip\/([^/]+)\/finish$/.exec(u)
+    if (method === 'POST' && done) {
+      const z = zipUploads.get(done[1]!)!
+      return json({ id: done[1], fileName: z.fileName, sizeBytes: z.sizeBytes }, 201)
     }
     // Your own template (2026-10-12): the server returns the template filled for the person, with no version.
     const ownFill = (t: { subject: string; bodyHtml: string }, first: string, co: string) => ({
@@ -274,6 +288,7 @@ beforeEach(() => {
   calls = []
   uploaded.clear()
   zipSeq = 0
+  zipUploads.clear()
 })
 
 describe('step 1: upload Excel', () => {
@@ -992,9 +1007,10 @@ describe('follow-up campaigns (2026-10-15)', () => {
 })
 
 describe('ZIP of company-wise PDFs (2026-10-17)', () => {
-  const zipFile = (name = 'company-pdfs.zip', size = 4096) => {
-    const f = new File(['PK'], name, { type: 'application/zip' })
-    Object.defineProperty(f, 'size', { value: size })
+  // A real file of the size given (the screen cuts it into pieces); `bigSize` only pretends to be large, for the size check.
+  const zipFile = (name = 'company-pdfs.zip', size = 4096, bigSize?: number) => {
+    const f = new File([new Uint8Array(size)], name, { type: 'application/zip' })
+    if (bigSize) Object.defineProperty(f, 'size', { value: bigSize })
     return f
   }
   const atReview = async () => {
@@ -1021,10 +1037,13 @@ describe('ZIP of company-wise PDFs (2026-10-17)', () => {
     stub()
     const section = await atReview()
     await chooseZip(section)
-    const up = posts().find((c) => c.url.endsWith('/outreach/bulk/attachments/zip'))!
-    expect(up.body).toEqual({ file: 'company-pdfs.zip', size: 4096 })
-    expect(up.headers).toMatchObject({ 'Content-Type': 'application/zip', 'X-File-Name': encodeURIComponent('company-pdfs.zip') })
     expect(await within(section).findByRole('button', { name: /remove company-pdfs\.zip/i })).toBeInTheDocument()
+    // Start (name and size), the pieces the server asked for (1,024 bytes here, each at its offset), then finish.
+    expect(posts().find((c) => c.url.endsWith('/attachments/zip/start'))!.body).toEqual({ fileName: 'company-pdfs.zip', sizeBytes: 4096 })
+    const pieces = posts().filter((c) => c.url.includes('/attachments/zip/zip1/chunk'))
+    expect(pieces.map((c) => [Number(new URL(c.url, 'http://x').searchParams.get('offset')), (c.body as { size: number }).size])).toEqual([[0, 1024], [1024, 1024], [2048, 1024], [3072, 1024]])
+    expect(pieces[0]!.headers).toMatchObject({ 'Content-Type': 'application/octet-stream' })
+    expect(posts().some((c) => c.url.endsWith('/attachments/zip/zip1/finish'))).toBe(true)
     await waitFor(() => expect(lastReview()).toMatchObject({ companyZipId: 'zip1' }))
     expect('excludeUnmatched' in lastReview()).toBe(false)
 
@@ -1058,7 +1077,7 @@ describe('ZIP of company-wise PDFs (2026-10-17)', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
     await userEvent.click(approve)
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
-    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ confirm: true, companyZipId: 'zip1', attachmentIds: ['att1'] })
+    expect(posts().find((c) => c.url.endsWith('/outreach/bulk/start'))!.body).toMatchObject({ confirm: true, companyZipId: 'zip1', attachmentIds: ['att1'] })
   })
 
   it('a company with no PDF is shown as an error and blocks the send; excluding it is explicit and then the send can go on', async () => {
@@ -1083,7 +1102,7 @@ describe('ZIP of company-wise PDFs (2026-10-17)', () => {
     await userEvent.click(await screen.findByRole('checkbox', { name: /I reviewed these 1 emails/i }))
     await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
     await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
-    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ confirm: true, companyZipId: 'zip1', excludeUnmatched: true })
+    expect(posts().find((c) => c.url.endsWith('/outreach/bulk/start'))!.body).toMatchObject({ confirm: true, companyZipId: 'zip1', excludeUnmatched: true })
   })
 
   it('problems with the ZIP itself (duplicate names, unusable files) are listed before approval', async () => {
@@ -1099,9 +1118,9 @@ describe('ZIP of company-wise PDFs (2026-10-17)', () => {
     const section = await atReview()
     await chooseZip(section, new File(['x'], 'pdfs.rar'))
     expect(await within(section).findByRole('alert')).toHaveTextContent(/"pdfs\.rar" is not a \.zip file/)
-    await chooseZip(section, zipFile('big.zip', 21 * 1024 * 1024))
-    expect(await within(section).findByRole('alert')).toHaveTextContent(/"big\.zip" is larger than 20\.0 MB/)
-    expect(posts().some((c) => c.url.endsWith('/attachments/zip'))).toBe(false)
+    await chooseZip(section, zipFile('big.zip', 10, 1024 * 1024 * 1024 + 1))
+    expect(await within(section).findByRole('alert')).toHaveTextContent(/"big\.zip" is larger than 1\.0 GB/)
+    expect(posts().some((c) => c.url.includes('/attachments/zip'))).toBe(false)
   })
 
   it('removing the ZIP takes it off the server and the review goes back to a plain one', async () => {
@@ -1145,5 +1164,37 @@ describe('ZIP of company-wise PDFs (2026-10-17)', () => {
     render(<BulkEmail canOperate canApprove />)
     await userEvent.click((await screen.findAllByRole('button', { name: /^open$/i }))[1]!) // the second campaign in the list is bk1
     expect(await screen.findByText('PDF: Thermohvac.pdf')).toBeInTheDocument()
+  })
+
+  it('shows the progress while a large ZIP is sent in pieces, and the ZIP is not usable until the server has all of it', async () => {
+    stub()
+    const section = await atReview()
+    let resolveFinish: (r: Response) => void = () => undefined
+    const original = globalThis.fetch
+    vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) =>
+      String(url).endsWith('/attachments/zip/zip1/finish') ? new Promise<Response>((res) => (resolveFinish = res)) : original(url, init),
+    )
+    await chooseZip(section)
+    expect(await within(section).findByText(/Checking the PDFs in company-pdfs\.zip/)).toBeInTheDocument() // every byte is there; the server is checking the ZIP
+    expect(within(section).getByRole('button', { name: 'Upload ZIP (Company-Wise Attachments)' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /next: date and time/i })).toBeDisabled() // busy: not while uploading
+    resolveFinish(new Response(JSON.stringify({ id: 'zip1', fileName: 'company-pdfs.zip', sizeBytes: 4096 }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    expect(await within(section).findByRole('button', { name: /remove company-pdfs\.zip/i })).toBeInTheDocument()
+    expect(within(section).queryByText(/Checking the PDFs/)).not.toBeInTheDocument()
+  })
+
+  it('a ZIP the server refuses at the start is reported in its words and nothing is attached', async () => {
+    stub()
+    const section = await atReview()
+    const original = globalThis.fetch
+    vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) =>
+      String(url).endsWith('/attachments/zip/start')
+        ? Promise.resolve(new Response(JSON.stringify({ error: { code: 'conflict', message: 'The server does not have enough free disk space for this ZIP. Ask an administrator.' } }), { status: 409, headers: { 'Content-Type': 'application/json' } }))
+        : original(url, init),
+    )
+    await chooseZip(section)
+    expect(await within(section).findByRole('alert')).toHaveTextContent(/enough free disk space/)
+    expect(within(section).queryByRole('button', { name: /remove company-pdfs\.zip/i })).not.toBeInTheDocument()
+    expect('companyZipId' in lastReview()).toBe(false)
   })
 })
