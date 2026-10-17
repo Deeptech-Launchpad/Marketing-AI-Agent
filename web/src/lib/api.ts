@@ -180,6 +180,10 @@ function isAuthoredByHandler(envelope: ErrorEnvelope | undefined): boolean {
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
+  /** A file's own bytes as the body (not JSON), with its content type and any extra headers (2026-10-17: ZIP of company-wise PDFs). */
+  rawBody?: Blob
+  contentType?: string
+  headers?: Record<string, string>
   signal?: AbortSignal
   /**
    * Return null for a 404 the APPLICATION authored — one carrying our error
@@ -203,6 +207,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (options.rawBody !== undefined) {
+    headers['Content-Type'] = options.contentType ?? 'application/octet-stream'
+    Object.assign(headers, options.headers)
+  }
 
   // A READ that fails at the network level is tried again, twice, after a
   // short pause: a laptop switching Wi-Fi, a hotspot or a VPN drops requests in
@@ -217,7 +225,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       res = await fetch(`/api/v1${path}`, {
         method,
         headers,
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        body: options.rawBody ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
         signal: options.signal,
       })
       break
@@ -312,6 +320,9 @@ export const api = {
     request<T>(path, { ...opts, method: 'POST', body }),
   patch: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, 'method' | 'body'>) =>
     request<T>(path, { ...opts, method: 'PATCH', body }),
+  /** POSTs a file's own bytes (for example a ZIP) instead of JSON. */
+  upload: <T>(path: string, file: Blob, opts: { contentType: string; headers?: Record<string, string> }) =>
+    request<T>(path, { method: 'POST', rawBody: file, contentType: opts.contentType, headers: opts.headers }),
   del: <T>(path: string, opts?: Omit<RequestOptions, 'method'>) =>
     request<T>(path, { ...opts, method: 'DELETE' }),
   /**

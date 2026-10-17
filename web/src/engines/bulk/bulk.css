@@ -52,3 +52,11 @@
   border: 0;
   padding: 0;
 }
+
+/* ZIP of company-wise PDFs (2026-10-17). */
+.bulk-zip {
+  margin-top: var(--s2);
+}
+.bulk-zip-check {
+  margin: var(--s2) 0;
+}

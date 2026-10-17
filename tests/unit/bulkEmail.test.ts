@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ExcelJS from 'exceljs'
+import { makeZip, pdf } from '../helpers/makeZip.js'
 
 // BULK EMAIL (2026-10-08) — simple and standalone.
 //
@@ -1987,5 +1988,528 @@ describe('follow-up campaigns to people an earlier campaign emailed', () => {
     const review = await svc.reviewBulk(actor, await setup('2026-10-12', { customTemplate: FOLLOW_UP }), new Date('2026-10-11T12:00:00Z'))
     expect(review.rows.find((r) => r.toEmail === 'bob@bravo.test')!.reason).toMatch(/^On the opt-out list/)
     suppressed.clear()
+  })
+})
+
+// ── ZIP of company-wise PDFs (2026-10-17) ───────────────────────────────────
+// One ZIP of PDFs named after companies; each recipient's email carries only
+// the PDF of THEIR company (the real bytes), through the same NXT Sales path.
+describe('ZIP of company-wise PDFs', () => {
+  const ABC = pdf('ABC Limited report')
+  const XYZ = pdf('XYZ Industries report')
+  const TEST = pdf('Test Corporation report')
+  const PEOPLE = [
+    ['ABC Limited', 'u', 'Ann Lee', 'Owner', 'abc@company.com', '', '', '', ''],
+    ['XYZ Industries', 'u', 'Xavier Roy', 'Owner', 'xyz@company.com', '', '', '', ''],
+    ['Test Corporation', 'u', 'Tara Fox', 'Owner', 'hello@test.com', '', '', '', ''],
+  ]
+  const GOOD_ZIP = () => makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'XYZ Industries.pdf', data: XYZ }, { name: 'Test Corporation.pdf', data: TEST }])
+  const BEFORE = new Date('2026-10-16T12:00:00Z')
+  const att = () => import('../../src/outreach/bulk/attachments.js')
+  const stageZip = async (bytes: Buffer, fileName = 'company-pdfs.zip') => (await att()).stageCompanyZip(actor, { fileName, bytes }, BEFORE)
+  const setup = async (extra: Record<string, unknown> = {}, rows: unknown[][] = PEOPLE) => ({
+    fileBase64: await xlsx([HEADER, ...rows]),
+    fileName: 'recipients.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-17',
+    startTime: '10:00',
+    intervalMinutes: 5,
+    allowWebmail: true, // the example addresses include test.com; irrelevant to the ZIP logic
+    ...extra,
+  })
+  const run = async (n: number) => {
+    for (let m = 0; m < n * 5; m += 5) await svc.dispatchBulkEmails(new Date(istToUtc('2026-10-17', '10:00')!.getTime() + m * 60_000))
+  }
+  type Sent = { to: string; subject: string; attachments?: Array<{ filename: string; mimeType: string; content: string }> }
+  let sends: Sent[]
+
+  beforeEach(() => {
+    env.BULK_SEND_VIA = 'crm'
+    sends = []
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: { maxFiles: 5, maxBytes: 10485760 } }),
+      send: async (e) => {
+        sends.push({ to: e.to, subject: e.subject, ...(e.attachments ? { attachments: e.attachments } : {}) })
+        return { outcome: 'sent', messageId: `gm-${sends.length}`, activityId: `act-${sends.length}`, fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }
+      },
+      statuses: async () => [],
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+    suppressed.clear()
+  })
+
+  const bytesOf = (a: { content: string }) => Buffer.from(a.content, 'base64')
+
+  it('the example: each company is sent its own PDF — the real bytes, one file, nothing else — and the review shows the match first', async () => {
+    const zip = await stageZip(GOOD_ZIP())
+    const s = await setup({ companyZipId: zip.id })
+    const review = await svc.reviewBulk(actor, s, BEFORE)
+    expect(review.rows.map((r) => [r.toEmail, r.companyName, r.status, r.companyFile?.fileName, r.companyFile?.status])).toEqual([
+      ['abc@company.com', 'ABC Limited', 'ready', 'ABC Limited.pdf', 'matched'],
+      ['xyz@company.com', 'XYZ Industries', 'ready', 'XYZ Industries.pdf', 'matched'],
+      ['hello@test.com', 'Test Corporation', 'ready', 'Test Corporation.pdf', 'matched'],
+    ])
+    expect(review.companyZip).toMatchObject({ fileName: 'company-pdfs.zip', counts: { matched: 3, missing: 0, ambiguous: 0, invalid: 0, tooLarge: 0, excluded: 0, unused: 0 } })
+    expect(review.counts).toMatchObject({ validEmails: 3, blocked: 0 })
+    expect(review.companyFileProblem).toBeNull()
+    expect(store.bulkEmailCampaign).toEqual([]) // a review writes nothing
+
+    const { campaignId } = await svc.startBulk(actor, { ...s, confirm: true }, BEFORE)
+    await run(3)
+    expect(sends.map((x) => x.to)).toEqual(['abc@company.com', 'xyz@company.com', 'hello@test.com'])
+    const want: Record<string, [string, Buffer]> = { 'abc@company.com': ['ABC Limited.pdf', ABC], 'xyz@company.com': ['XYZ Industries.pdf', XYZ], 'hello@test.com': ['Test Corporation.pdf', TEST] }
+    for (const m of sends) {
+      expect(m.attachments).toHaveLength(1) // only its own PDF
+      expect(m.attachments![0]).toMatchObject({ filename: want[m.to]![0], mimeType: 'application/pdf' })
+      expect(bytesOf(m.attachments![0]!).equals(want[m.to]![1])).toBe(true) // the actual PDF bytes
+    }
+    // Kept with the send; the staged ZIP is dropped; each recipient names its own file.
+    const kept = store.bulkAttachment!
+    expect(kept.map((r) => [r.kind, r.fileName, r.campaignId])).toEqual([['company_file', 'ABC Limited.pdf', campaignId], ['company_file', 'XYZ Industries.pdf', campaignId], ['company_file', 'Test Corporation.pdf', campaignId]])
+    expect(store.bulkEmailRecipient!.map((r) => kept.find((k) => k.id === r.attachmentId)!.fileName)).toEqual(['ABC Limited.pdf', 'XYZ Industries.pdf', 'Test Corporation.pdf'])
+    expect(store.bulkEmailCampaign![0]!.attachmentCount).toBe(0)
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.recipients.map((r) => r.companyFile?.fileName)).toEqual(['ABC Limited.pdf', 'XYZ Industries.pdf', 'Test Corporation.pdf'])
+    expect(view.counts).toMatchObject({ sent: 3, failed: 0, skipped: 0, total: 3 })
+    expect(store.auditEvent!.some((e) => JSON.stringify(e).includes('company-wise PDFs from \\"company-pdfs.zip\\": 3 matched'))).toBe(true)
+  })
+
+  it('a normal attachment and the company ZIP together: every email carries both, its company PDF first', async () => {
+    const common = await (await att()).stageAttachment(actor, { fileName: 'Brochure.pdf', contentBase64: pdf('brochure').toString('base64') }, BEFORE)
+    const zip = await stageZip(GOOD_ZIP())
+    const s = await setup({ companyZipId: zip.id, attachmentIds: [common.id] })
+    const review = await svc.reviewBulk(actor, s, BEFORE)
+    expect(review.attachments.map((a) => a.fileName)).toEqual(['Brochure.pdf'])
+    await svc.startBulk(actor, { ...s, confirm: true }, BEFORE)
+    await run(3)
+    for (const m of sends) {
+      expect(m.attachments!.map((a) => a.filename)).toEqual([expect.stringMatching(/^(ABC Limited|XYZ Industries|Test Corporation)\.pdf$/), 'Brochure.pdf'])
+      expect(bytesOf(m.attachments![1]!).equals(pdf('brochure'))).toBe(true)
+    }
+    expect(sends[0]!.attachments![0]!.filename).toBe('ABC Limited.pdf')
+    expect(sends[1]!.attachments![0]!.filename).toBe('XYZ Industries.pdf')
+  })
+
+  it('a company with no file is blocked with an error; the send cannot start until it is corrected', async () => {
+    const zip = await stageZip(makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'XYZ Industries.pdf', data: XYZ }]))
+    const s = await setup({ companyZipId: zip.id })
+    const review = await svc.reviewBulk(actor, s, BEFORE)
+    expect(review.rows.map((r) => [r.companyName, r.status, r.companyFile?.status])).toEqual([['ABC Limited', 'ready', 'matched'], ['XYZ Industries', 'ready', 'matched'], ['Test Corporation', 'blocked', 'missing']])
+    expect(review.rows[2]!.reason).toMatch(/No PDF in the ZIP is named after this company/)
+    expect(review.counts).toMatchObject({ validEmails: 2, blocked: 1 })
+    expect(review.companyFileProblem).toMatch(/1 recipient has no usable company PDF.*Upload a corrected ZIP, or exclude that recipient/)
+    await expect(svc.startBulk(actor, { ...s, confirm: true }, BEFORE)).rejects.toThrow(/^Not started — 1 recipient has no usable company PDF/)
+    expect(store.bulkEmailCampaign).toEqual([])
+    expect(store.bulkEmailRecipient).toEqual([])
+    expect(store.bulkAttachment!.filter((r) => r.kind === 'company_file')).toEqual([])
+    expect(store.bulkAttachment!.some((r) => r.kind === 'company_zip')).toBe(true) // still staged, can be replaced
+  })
+
+  it('"exclude" is explicit: those recipients are left out with the reason, everyone else goes with their own PDF, and nobody is sent a wrong file', async () => {
+    const zip = await stageZip(makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'XYZ Industries.pdf', data: XYZ }]))
+    const s = await setup({ companyZipId: zip.id, excludeUnmatched: true })
+    const review = await svc.reviewBulk(actor, s, BEFORE)
+    expect(review.rows.map((r) => [r.companyName, r.status, r.companyFile?.status])).toEqual([['ABC Limited', 'ready', 'matched'], ['XYZ Industries', 'ready', 'matched'], ['Test Corporation', 'skipped', 'excluded']])
+    expect(review.rows[2]!.reason).toMatch(/^Excluded — No PDF in the ZIP is named after this company/)
+    expect(review.companyZip!.counts).toMatchObject({ matched: 2, excluded: 1 })
+    expect(review.counts).toMatchObject({ validEmails: 2, skipped: 1, blocked: 0 })
+    const { campaignId } = await svc.startBulk(actor, { ...s, confirm: true }, BEFORE)
+    await run(3)
+    expect(sends.map((x) => x.to)).toEqual(['abc@company.com', 'xyz@company.com']) // hello@test.com was never emailed
+    expect(sends.map((x) => x.attachments!.map((a) => a.filename))).toEqual([['ABC Limited.pdf'], ['XYZ Industries.pdf']])
+    const view = await svc.bulkView('t1', campaignId)
+    expect(view.counts).toMatchObject({ sent: 2, skipped: 1, total: 3 })
+  })
+
+  it('several files that could match one company: nothing is guessed — blocked, with all candidates named', async () => {
+    const zip = await stageZip(makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'old/XYZ Industries.pdf', data: pdf('old XYZ') }, { name: 'new/xyz  industries.PDF', data: XYZ }, { name: 'Test Corporation.pdf', data: TEST }]))
+    const s = await setup({ companyZipId: zip.id })
+    const review = await svc.reviewBulk(actor, s, BEFORE)
+    expect(review.rows.map((r) => [r.companyName, r.status, r.companyFile?.status, r.companyFile?.fileName ?? null])).toEqual([['ABC Limited', 'ready', 'matched', 'ABC Limited.pdf'], ['XYZ Industries', 'blocked', 'ambiguous', null], ['Test Corporation', 'ready', 'matched', 'Test Corporation.pdf']])
+    expect(review.rows[1]!.reason).toMatch(/Several files match: "old\/XYZ Industries\.pdf", "new\/xyz  industries\.PDF"/)
+    expect(review.companyZip!.problems.join(' ')).toMatch(/would both match the same company/)
+    await expect(svc.startBulk(actor, { ...s, confirm: true }, BEFORE)).rejects.toThrow(/Not started/)
+    // With the explicit exclusion the two clear ones still go with their own files, never XYZ's.
+    await svc.startBulk(actor, { ...s, excludeUnmatched: true, confirm: true }, BEFORE)
+    await run(3)
+    expect(sends.map((x) => [x.to, x.attachments!.map((a) => a.filename)])).toEqual([['abc@company.com', ['ABC Limited.pdf']], ['hello@test.com', ['Test Corporation.pdf']]])
+  })
+
+  it('a file that is not a usable PDF is reported by name; its company is blocked rather than sent something else', async () => {
+    const zip = await stageZip(makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'XYZ Industries.pdf', data: Buffer.from('this is not a pdf') }, { name: 'Test Corporation.pdf', data: TEST }]))
+    const review = await svc.reviewBulk(actor, await setup({ companyZipId: zip.id }), BEFORE)
+    expect(review.rows.map((r) => [r.companyName, r.status, r.companyFile?.status])).toEqual([['ABC Limited', 'ready', 'matched'], ['XYZ Industries', 'blocked', 'invalid'], ['Test Corporation', 'ready', 'matched']])
+    expect(review.rows[1]!.reason).toMatch(/"XYZ Industries\.pdf" cannot be used: it is not a valid PDF/)
+    expect(review.companyZip!.files.find((f) => f.name === 'XYZ Industries.pdf')).toMatchObject({ status: 'invalid', used: false })
+  })
+
+  it('extra files in the ZIP are listed, not used: a PDF for a company that is not in the Excel, and a non-PDF file', async () => {
+    const zip = await stageZip(makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'XYZ Industries.pdf', data: XYZ }, { name: 'Test Corporation.pdf', data: TEST }, { name: 'Somebody Else Ltd.pdf', data: pdf('other') }, { name: 'notes.txt', data: Buffer.from('hi') }]))
+    const review = await svc.reviewBulk(actor, await setup({ companyZipId: zip.id }), BEFORE)
+    expect(review.companyZip!.counts).toMatchObject({ matched: 3, unused: 1 })
+    expect(review.companyZip!.files.map((f) => [f.name, f.status, f.used])).toEqual([['ABC Limited.pdf', 'ok', true], ['XYZ Industries.pdf', 'ok', true], ['Test Corporation.pdf', 'ok', true], ['Somebody Else Ltd.pdf', 'ok', false], ['notes.txt', 'unsupported', false]])
+    expect(review.counts.blocked).toBe(0) // they do not stop the send
+  })
+
+  it('a recipient skipped for another reason (opted out) is skipped for that reason — not reported as a missing file', async () => {
+    suppressed.add('hello@test.com')
+    const zip = await stageZip(makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'XYZ Industries.pdf', data: XYZ }]))
+    const review = await svc.reviewBulk(actor, await setup({ companyZipId: zip.id }), BEFORE)
+    expect(review.rows[2]!.status).toBe('skipped')
+    expect(review.rows[2]!.companyFile).toBeUndefined()
+    expect(review.rows[2]!.reason).toMatch(/^On the opt-out list/)
+    expect(review.counts.blocked).toBe(0)
+  })
+
+  it('the files must fit one email together with the common attachments: too many files or too many bytes blocks that email', async () => {
+    const a = await att()
+    const five = []
+    for (let i = 0; i < 5; i++) five.push((await a.stageAttachment(actor, { fileName: `Common ${i}.pdf`, contentBase64: pdf(`c${i}`).toString('base64') }, BEFORE)).id)
+    const zip = await stageZip(GOOD_ZIP())
+    const crowded = await svc.reviewBulk(actor, await setup({ companyZipId: zip.id, attachmentIds: five }), BEFORE)
+    expect(crowded.rows.map((r) => r.companyFile?.status)).toEqual(['too_large', 'too_large', 'too_large'])
+    expect(crowded.rows[0]!.reason).toMatch(/would carry 6 files; at most 5/)
+
+    store.bulkAttachment = store.bulkAttachment!.filter((r) => r.kind === 'company_zip')
+    const big = await a.stageAttachment(actor, { fileName: 'Big.pdf', contentBase64: pdf('big').toString('base64') }, BEFORE)
+    store.bulkAttachment!.find((r) => r.id === big.id)!.sizeBytes = 10 * 1024 * 1024 - 10 // 10 bytes of room: no company PDF fits
+    const heavy = await svc.reviewBulk(actor, await setup({ companyZipId: zip.id, attachmentIds: [big.id] }), BEFORE)
+    expect(heavy.rows.every((r) => r.status === 'blocked' && r.companyFile?.status === 'too_large')).toBe(true)
+    expect(heavy.rows[0]!.reason).toMatch(/with the common attachments is over the 10\.0 MB limit for one email/)
+  })
+
+  it('wrong mappings never reach a recipient: a swapped, tampered or deleted company PDF makes that email fail unsent', async () => {
+    const zip = await stageZip(GOOD_ZIP())
+    const s = await setup({ companyZipId: zip.id })
+    await svc.startBulk(actor, { ...s, confirm: true }, BEFORE)
+    const rec = (email: string) => store.bulkEmailRecipient!.find((r) => r.toEmail === email)!
+    const file = (name: string) => store.bulkAttachment!.find((r) => r.fileName === name)!
+    rec('abc@company.com').attachmentId = file('XYZ Industries.pdf').id // ABC pointed at XYZ's file
+    file('Test Corporation.pdf').content = Buffer.from(pdf('swapped in the database')) // content no longer matches its stored hash
+    // XYZ is left correct.
+    await run(3)
+    expect(sends.map((x) => x.to)).toEqual(['xyz@company.com']) // only the correct one was handed to NXT Sales
+    expect(bytesOf(sends[0]!.attachments![0]!).equals(XYZ)).toBe(true)
+    expect(rec('abc@company.com')).toMatchObject({ status: 'failed', reason: 'Its company PDF could not be verified, so it was not sent.' })
+    expect(rec('hello@test.com')).toMatchObject({ status: 'failed', reason: 'Its company PDF could not be verified, so it was not sent.' })
+    expect(rec('abc@company.com').crmSendKey).toBeUndefined() // never handed over
+  })
+
+  it('a deleted company PDF fails that email unsent (never sent without its attachment)', async () => {
+    const zip = await stageZip(GOOD_ZIP())
+    await svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, BEFORE)
+    store.bulkAttachment = store.bulkAttachment!.filter((r) => r.fileName !== 'ABC Limited.pdf')
+    await run(3)
+    expect(sends.map((x) => x.to)).toEqual(['xyz@company.com', 'hello@test.com'])
+    expect(store.bulkEmailRecipient!.find((r) => r.toEmail === 'abc@company.com')).toMatchObject({ status: 'failed' })
+  })
+
+  it('the same Excel and the same ZIP again, with different follow-up content: the same people get their PDFs again; each campaign counts its own', async () => {
+    const zip1 = await stageZip(GOOD_ZIP())
+    const first = await svc.startBulk(actor, { ...(await setup({ companyZipId: zip1.id })), confirm: true }, BEFORE)
+    await run(3)
+    const zip2 = await stageZip(GOOD_ZIP())
+    const follow = await setup(
+      { companyZipId: zip2.id, customTemplate: { subject: 'Following up, [Company Name]', bodyHtml: '<p>Hi [First Name], the report is attached again.</p>' }, startDate: '2026-10-20' },
+    )
+    const review = await svc.reviewBulk(actor, follow, new Date('2026-10-18T12:00:00Z'))
+    expect(review.rows.map((r) => r.status)).toEqual(['ready', 'ready', 'ready'])
+    const second = await svc.startBulk(actor, { ...follow, confirm: true }, new Date('2026-10-18T12:00:00Z'))
+    for (let m = 0; m < 15; m += 5) await svc.dispatchBulkEmails(new Date(istToUtc('2026-10-20', '10:00')!.getTime() + m * 60_000))
+    expect(sends).toHaveLength(6)
+    expect(sends.slice(3).map((x) => [x.to, x.subject, x.attachments!.map((a) => a.filename)])).toEqual([
+      ['abc@company.com', 'Following up, ABC Limited', ['ABC Limited.pdf']],
+      ['xyz@company.com', 'Following up, XYZ Industries', ['XYZ Industries.pdf']],
+      ['hello@test.com', 'Following up, Test Corporation', ['Test Corporation.pdf']],
+    ])
+    expect((await svc.bulkView('t1', first.campaignId)).counts).toMatchObject({ sent: 3, total: 3 })
+    expect((await svc.bulkView('t1', second.campaignId)).counts).toMatchObject({ sent: 3, total: 3 })
+  })
+
+  it('works with own templates in order or at random: the PDF follows the company, whichever template it gets', async () => {
+    const zip = await stageZip(GOOD_ZIP())
+    const own = [1, 2].map((n) => ({ subject: `T${n} for [Company Name]`, bodyHtml: `<p>Hi [First Name], template ${n}.</p>` }))
+    await svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id, customTemplates: own, templateOrder: 'random', shuffleSeed: 77 })), confirm: true }, BEFORE)
+    await run(3)
+    expect(sends).toHaveLength(3)
+    for (const m of sends) {
+      const company = { 'abc@company.com': 'ABC Limited', 'xyz@company.com': 'XYZ Industries', 'hello@test.com': 'Test Corporation' }[m.to]!
+      expect(m.attachments!.map((a) => a.filename)).toEqual([`${company}.pdf`])
+      expect(m.subject).toMatch(/^T[12] for /)
+    }
+  })
+
+  it('through this platform\'s own mailbox (SMTP) the company PDF is attached the same way', async () => {
+    env.BULK_SEND_VIA = 'smtp'
+    await setSender()
+    const smtp: Array<{ to: string; attachments?: Array<{ filename: string; content: string }> }> = []
+    setBulkSenderForTests({ send: async (e) => (smtp.push({ to: e.to, attachments: e.attachments as never }), { messageId: 'smtp' }) })
+    const zip = await stageZip(GOOD_ZIP())
+    await svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, BEFORE)
+    await run(3)
+    expect(smtp.map((x) => [x.to, x.attachments!.map((a) => a.filename)])).toEqual([['abc@company.com', ['ABC Limited.pdf']], ['xyz@company.com', ['XYZ Industries.pdf']], ['hello@test.com', ['Test Corporation.pdf']]])
+    expect(bytesOf(smtp[2]!.attachments![0]!).equals(TEST)).toBe(true)
+  })
+
+  it('an older NXT Sales that cannot send attachments: the review says so and the send does not start', async () => {
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: null }),
+      send: async () => {
+        throw new Error('must not send')
+      },
+      statuses: async () => [],
+    })
+    const zip = await stageZip(GOOD_ZIP())
+    const s = await setup({ companyZipId: zip.id })
+    expect((await svc.reviewBulk(actor, s, BEFORE)).attachmentProblem).toMatch(/cannot send attachments yet/)
+    await expect(svc.startBulk(actor, { ...s, confirm: true }, BEFORE)).rejects.toThrow(/^Not started — NXT Sales on this server cannot send attachments yet/)
+    expect(store.bulkEmailCampaign).toEqual([])
+  })
+
+  it('if NXT Sales loses attachment support after the start, the send pauses and nothing goes without its PDF', async () => {
+    const zip = await stageZip(GOOD_ZIP())
+    const { campaignId } = await svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, BEFORE)
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: null }),
+      send: async () => {
+        throw new Error('must not send')
+      },
+      statuses: async () => [],
+    })
+    await run(1)
+    expect(store.bulkEmailCampaign!.find((c) => c.id === campaignId)).toMatchObject({ status: 'paused' })
+    expect(sends).toEqual([])
+  })
+
+  it('staging a ZIP: only a real ZIP with usable PDFs is accepted; it is never an ordinary attachment, and an ordinary attachment is never a ZIP', async () => {
+    const a = await att()
+    await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.rar', bytes: GOOD_ZIP() })).rejects.toThrow(/ends in \.zip/)
+    await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: Buffer.alloc(0) })).rejects.toThrow(/empty/)
+    await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: Buffer.from('not a zip at all, only text bytes here') })).rejects.toThrow(/not a ZIP/)
+    await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: makeZip([{ name: 'notes.txt', data: Buffer.from('x') }]) })).rejects.toThrow(/no usable PDF files/)
+    await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: makeZip([{ name: 'a.pdf', data: Buffer.from('not a pdf') }]) })).rejects.toThrow(/no usable PDF files.*not a valid PDF/)
+    await expect(a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: Buffer.alloc(20 * 1024 * 1024 + 1) })).rejects.toThrow(/larger than 20 MB/)
+    expect(store.bulkAttachment).toEqual([])
+
+    const zip = await stageZip(GOOD_ZIP())
+    const common = await a.stageAttachment(actor, { fileName: 'Brochure.pdf', contentBase64: pdf('b').toString('base64') }, BEFORE)
+    await expect(svc.reviewBulk(actor, await setup({ attachmentIds: [zip.id] }), BEFORE)).rejects.toThrow(/no longer available/) // the ZIP is not a common attachment
+    await expect(svc.reviewBulk(actor, await setup({ companyZipId: common.id }), BEFORE)).rejects.toThrow(/company ZIP is no longer available/) // a normal file is not a ZIP
+    await a.removeStagedAttachment(actor, zip.id) // Remove works for the ZIP too
+    await expect(svc.reviewBulk(actor, await setup({ companyZipId: zip.id }), BEFORE)).rejects.toThrow(/company ZIP is no longer available/)
+  })
+
+  it('without a ZIP nothing changes: no company file, no new fields set, the same emails as before', async () => {
+    const s = await setup()
+    const review = await svc.reviewBulk(actor, s, BEFORE)
+    expect(review.companyZip).toBeNull()
+    expect(review.rows.every((r) => r.status === 'ready' && r.companyFile === null)).toBe(true)
+    await svc.startBulk(actor, { ...s, confirm: true }, BEFORE)
+    await run(3)
+    expect(sends.every((x) => x.attachments === undefined)).toBe(true)
+    expect(store.bulkEmailRecipient!.every((r) => r.attachmentId === null)).toBe(true)
+  })
+})
+
+// ── The ZIP upload route, over real HTTP (2026-10-17) ───────────────────────
+describe('ZIP upload route', () => {
+  let server: import('node:http').Server
+  let base = ''
+  let principal: Record<string, unknown> | undefined
+  const OPERATOR = { crmUserId: 'u1', tenantId: 't1', email: 'op@x.test', name: 'Op', role: 'operator', permissions: ['view', 'operate', 'approve'] }
+
+  beforeEach(async () => {
+    reset()
+    principal = OPERATOR
+    const express = (await import('express')).default
+    const { bulkEmailRoutes } = await import('../../src/api/routes/bulkEmail.routes.js')
+    const { errorHandler } = await import('../../src/api/middleware/errorHandler.js')
+    const app = express()
+    app.use(express.json({ limit: '10mb' }))
+    app.use((req, _res, next) => {
+      if (principal) (req as unknown as { principal: unknown }).principal = principal
+      next()
+    })
+    app.use('/outreach/bulk', bulkEmailRoutes)
+    app.use(errorHandler)
+    await new Promise<void>((res) => {
+      server = app.listen(0, '127.0.0.1', () => res())
+    })
+    base = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}/outreach/bulk`
+  })
+  afterEach(async () => {
+    await new Promise<void>((res) => server.close(() => res()))
+  })
+
+  const upload = (body: Buffer | string, headers: Record<string, string> = {}) =>
+    fetch(`${base}/attachments/zip`, { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-File-Name': encodeURIComponent('pdfs.zip'), ...headers }, body })
+  const good = () => makeZip([{ name: 'ABC Limited.pdf', data: pdf('abc') }])
+
+  it('stores the ZIP exactly as sent, with its name (spaces, accents and brackets survive)', async () => {
+    const bytes = good()
+    const res = await upload(bytes, { 'X-File-Name': encodeURIComponent('Société PDFs (final).zip') })
+    expect(res.status).toBe(201)
+    const out = (await res.json()) as { id: string; fileName: string; sizeBytes: number }
+    expect(out).toMatchObject({ fileName: 'Société PDFs (final).zip', sizeBytes: bytes.length })
+    const row = store.bulkAttachment!.find((r) => r.id === out.id)!
+    expect(row).toMatchObject({ kind: 'company_zip', campaignId: null, tenantId: 't1', mimeType: 'application/zip' })
+    expect(Buffer.from(row.content as Buffer).equals(bytes)).toBe(true)
+  })
+
+  it('needs a login and the "operate" permission', async () => {
+    principal = undefined
+    expect((await upload(good())).status).toBe(401)
+    principal = { ...OPERATOR, permissions: ['view'] }
+    expect((await upload(good())).status).toBe(403)
+    expect(store.bulkAttachment).toEqual([])
+  })
+
+  it('answers in words: wrong type, empty body, not a ZIP, no PDFs, bad name, too large', async () => {
+    const say = async (r: Response) => ((await r.json()) as { error: { message: string } }).error.message
+    let r = await fetch(`${base}/attachments/zip`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-File-Name': 'a.zip' }, body: '{}' })
+    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/Send the ZIP file itself/)])
+    r = await upload(Buffer.alloc(0))
+    expect(r.status).toBe(400)
+    r = await upload(Buffer.from('just some text, not a zip file'))
+    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/not a ZIP/)])
+    r = await upload(makeZip([{ name: 'notes.txt', data: Buffer.from('x') }]))
+    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/no usable PDF files/)])
+    r = await upload(good(), { 'X-File-Name': encodeURIComponent('pdfs.rar') })
+    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/ends in \.zip/)])
+    r = await upload(good(), { 'X-File-Name': '%E0%A4%A' }) // a broken escape
+    expect(r.status).toBe(400)
+    r = await upload(Buffer.alloc(21 * 1024 * 1024))
+    expect([r.status, await say(r)]).toEqual([400, expect.stringMatching(/larger than 20 MB/)])
+    expect(store.bulkAttachment).toEqual([])
+  })
+
+  it('the review and start accept the new fields; unknown fields are still refused', async () => {
+    const staged = (await (await upload(good())).json()) as { id: string }
+    const body = { fileBase64: await xlsx([HEADER, ['ABC Limited', 'u', 'Ann Lee', 'Owner', 'abc@company.com', '', '', '', '']]), templateKey: 'static_site_v1', startDate: '2026-10-17', startTime: '10:00', intervalMinutes: 5, allowWebmail: true }
+    const ok = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZipId: staged.id, excludeUnmatched: false }) })
+    expect(ok.status).toBe(200)
+    const review = (await ok.json()) as { rows: Array<{ companyFile: { fileName: string; status: string } }>; companyZip: { fileName: string } }
+    expect(review.rows[0]!.companyFile).toMatchObject({ fileName: 'ABC Limited.pdf', status: 'matched' })
+    expect(review.companyZip.fileName).toBe('pdfs.zip')
+    const bad = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZip: 'x' }) })
+    expect(bad.status).toBe(400)
+    const bigId = await fetch(`${base}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, companyZipId: 'x'.repeat(65) }) })
+    expect(bigId.status).toBe(400)
+  })
+
+  it('the ZIP can be removed again with the same Remove route as other attachments', async () => {
+    const staged = (await (await upload(good())).json()) as { id: string }
+    const del = await fetch(`${base}/attachments/${staged.id}`, { method: 'DELETE' })
+    expect(del.status).toBe(200)
+    expect(store.bulkAttachment).toEqual([])
+  })
+})
+
+describe('ZIP of company-wise PDFs: hardening after review (2026-10-17)', () => {
+  const ABC = pdf('abc')
+  const XYZ = pdf('xyz')
+  const PEOPLE = [
+    ['ABC Limited', 'u', 'Ann Lee', 'Owner', 'abc@company.com', '', '', '', ''],
+    ['XYZ Industries', 'u', 'Xavier Roy', 'Owner', 'xyz@company.com', '', '', '', ''],
+    ['Test Corporation', 'u', 'Tara Fox', 'Owner', 'hello@test.com', '', '', '', ''],
+  ]
+  const ZIP = () => makeZip([{ name: 'ABC Limited.pdf', data: ABC }, { name: 'XYZ Industries.pdf', data: XYZ }, { name: 'Test Corporation.pdf', data: pdf('t') }])
+  const BEFORE = new Date('2026-10-16T12:00:00Z')
+  const att = () => import('../../src/outreach/bulk/attachments.js')
+  const zipMod = () => import('../../src/outreach/bulk/companyZip.js')
+  const setup = async (extra: Record<string, unknown> = {}) => ({
+    fileBase64: await xlsx([HEADER, ...PEOPLE]),
+    fileName: 'recipients.xlsx',
+    templateKey: 'static_site_v1',
+    startDate: '2026-10-17',
+    startTime: '10:00',
+    intervalMinutes: 5,
+    allowWebmail: true,
+    ...extra,
+  })
+
+  beforeEach(async () => {
+    env.BULK_SEND_VIA = 'crm'
+    ;(await zipMod()).forgetScans()
+    crmSend.setCrmBulkForTests({
+      sender: async () => ({ ready: true, problem: null, name: 'Manoj S', fromEmail: 'manoj@altiusnxt.com', attachments: { maxFiles: 5, maxBytes: 10485760 } }),
+      send: async () => ({ outcome: 'sent', messageId: 'g', activityId: 'a', fromEmail: 'manoj@altiusnxt.com', tracked: true, error: null }),
+      statuses: async () => [],
+    })
+  })
+  afterEach(() => {
+    env.BULK_SEND_VIA = 'smtp'
+  })
+
+  it('if a company PDF cannot be stored, NOTHING is created: no campaign for the sender to see, no recipients, no half-stored files', async () => {
+    const zip = await (await att()).stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIP() }, BEFORE)
+    // The second company PDF fails to store (as a full disk would).
+    class FailingArray extends Array<Record<string, unknown>> {
+      override push(...items: Array<Record<string, unknown>>) {
+        if (items[0]?.kind === 'company_file' && this.filter((r) => r.kind === 'company_file').length >= 1) throw new Error('disk full')
+        return super.push(...items)
+      }
+    }
+    store.bulkAttachment = Object.assign(new FailingArray(), store.bulkAttachment)
+    await expect(svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, BEFORE)).rejects.toThrow(/disk full/)
+    expect(store.bulkEmailCampaign).toEqual([]) // never live while its files were being stored
+    expect(store.bulkEmailRecipient).toEqual([])
+    expect([...store.bulkAttachment!].map((r) => r.kind)).toEqual(['company_zip']) // the first stored file was cleaned up; the ZIP stays to retry
+  })
+
+  it('the files are stored before the campaign exists and tied to it in one step; a missing one cancels the send before anything is scheduled', async () => {
+    const a = await att()
+    await expect(a.linkCompanyFiles(actor, ['nope'], 'c1')).rejects.toThrow(/no longer available/)
+    const zip = await a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIP() }, BEFORE)
+    const { campaignId } = await svc.startBulk(actor, { ...(await setup({ companyZipId: zip.id })), confirm: true }, BEFORE)
+    const files = store.bulkAttachment!.filter((r) => r.kind === 'company_file')
+    expect(files).toHaveLength(3)
+    expect(files.every((r) => r.campaignId === campaignId)).toBe(true)
+    expect(store.bulkEmailRecipient!.every((r) => files.some((f) => f.id === r.attachmentId))).toBe(true)
+  })
+
+  it('a review of an unchanged ZIP does not unpack it again (remembered by its content hash); Start always reads the real bytes', async () => {
+    const a = await att()
+    const z = await zipMod()
+    const zip = await a.stageCompanyZip(actor, { fileName: 'pdfs.zip', bytes: ZIP() }, BEFORE)
+    const s = await setup({ companyZipId: zip.id })
+    const first = await svc.reviewBulk(actor, s, BEFORE)
+    expect(first.companyZip!.files.map((f) => f.name)).toEqual(['ABC Limited.pdf', 'XYZ Industries.pdf', 'Test Corporation.pdf'])
+    expect(z.recallScan(String(store.bulkAttachment![0]!.sha256))!.files.every((f) => f.bytes === null)).toBe(true) // no PDF contents kept in memory
+    // The stored content is swapped under the same hash: the remembered scan is still what the review shows…
+    store.bulkAttachment![0]!.content = makeZip([{ name: 'Other.pdf', data: pdf('o') }])
+    expect((await svc.reviewBulk(actor, s, BEFORE)).companyZip!.files.map((f) => f.name)).toEqual(['ABC Limited.pdf', 'XYZ Industries.pdf', 'Test Corporation.pdf'])
+    // …but Start reads the stored ZIP itself, never the remembered scan: what it finds there is what it uses.
+    await expect(svc.startBulk(actor, { ...s, confirm: true }, BEFORE)).rejects.toThrow(/Not started — 3 recipients have no usable company PDF/)
+    z.forgetScans()
+    expect((await svc.reviewBulk(actor, s, BEFORE)).companyZip!.files.map((f) => f.name)).toEqual(['Other.pdf'])
+  })
+
+  it('the scan memory keeps a few ZIPs, forgets the oldest, and never holds PDF bytes', async () => {
+    const z = await zipMod()
+    const scan = z.readCompanyZip(ZIP())
+    for (let i = 0; i < 10; i++) z.rememberScan(`sha-${i}`, scan)
+    expect(z.recallScan('sha-0')).toBeUndefined()
+    expect(z.recallScan('sha-1')).toBeUndefined()
+    expect(z.recallScan('sha-9')!.files.map((f) => f.bytes)).toEqual([null, null, null])
+    expect(scan.files.every((f) => f.bytes !== null)).toBe(true) // the original scan is untouched
+  })
+
+  it('names are matched with their combining marks, so different non-Latin names never share a key', async () => {
+    const z = await zipMod()
+    expect(z.companyFileKey('रमा')).not.toBe(z.companyFileKey('राम'))
+    expect(z.companyFileKey('Société Générale')).toBe(z.companyFileKey('societe generale'.replace('societe', 'Société').replace('generale', 'Générale')))
+    const files = z.readCompanyZip(makeZip([{ name: 'रमा Ltd.pdf', data: pdf('1') }])).files
+    expect(z.matchCompanyFiles(['राम Ltd', 'रमा Ltd'], files).map((m) => m.status)).toEqual(['missing', 'matched'])
+  })
+
+  it('only companies that can be emailed count when one file matches two names', async () => {
+    const z = await zipMod()
+    const files = z.readCompanyZip(makeZip([{ name: 'ABC Ltd.pdf', data: pdf('1') }])).files
+    expect(z.matchCompanyFiles(['ABC Ltd', 'ABC Ltd.'], files).map((m) => m.status)).toEqual(['ambiguous', 'ambiguous'])
+    expect(z.matchCompanyFiles(['ABC Ltd', 'ABC Ltd.'], files, [true, false]).map((m) => m.status)).toEqual(['matched', 'matched']) // the second is skipped anyway
+    expect(z.matchCompanyFiles(['ABC Ltd', 'ABC Ltd.'], files, [true, true]).map((m) => m.status)).toEqual(['ambiguous', 'ambiguous'])
   })
 })
