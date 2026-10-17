@@ -2866,6 +2866,10 @@ model BulkAttachment {
   mimeType   String
   sizeBytes  Int
   sha256     String
+  // 'common' = a file that goes on every email of a send (the original attachments);
+  // 'company_zip' = a staged ZIP of company-wise PDFs (kept only until the send starts);
+  // 'company_file' = one company's PDF taken out of that ZIP, kept with the send (2026-10-17).
+  kind       String  @default("common")
   content    Bytes
 
   createdByCrmUserId String
@@ -2899,6 +2903,9 @@ model BulkEmailRecipient {
   // template (templateKey 'custom'); sent as it is. null = built from the
   // approved version's text, as before (2026-10-12).
   bodyHtml    String?
+  // This person's own company PDF (a BulkAttachment of kind 'company_file') when the send used a
+  // ZIP of company-wise PDFs; sent with the email as it was approved (2026-10-17).
+  attachmentId String?
   // The approved version this person receives (static_site_v1 / v2 / v3), or
   // 'custom' for the user's own template;
   // null on sends made before the versions rotated = the campaign's template.

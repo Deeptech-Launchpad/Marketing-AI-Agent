@@ -14,10 +14,51 @@ import { BulkEmail } from './BulkEmail'
 
 const render = (ui: ReactElement) => rtlRender(<ThemeProvider><MemoryRouter>{ui}</MemoryRouter></ThemeProvider>)
 
-interface Call { url: string; method: string; body: Record<string, unknown> | null }
+interface Call { url: string; method: string; body: Record<string, unknown> | null; headers?: Record<string, string> }
 let calls: Call[] = []
 const uploaded = new Map<string, { id: string; fileName: string; mimeType: string; sizeBytes: number }>()
 const posts = () => calls.filter((c) => c.method === 'POST')
+let zipSeq = 0
+
+/** The fake server's ZIP matching (2026-10-17): "<Company>.pdf" for each ready company, except those listed as missing. */
+function applyZip(rows: Array<Record<string, any>>, b: { excludeUnmatched?: boolean }, missing: string[], problems: string[]) {
+  let blocked = 0
+  let excluded = 0
+  let matched = 0
+  const out = rows.map((r) => {
+    if (r.status !== 'ready') return r
+    if (missing.includes(r.companyName)) {
+      const detail = 'No PDF in the ZIP is named after this company.'
+      if (b.excludeUnmatched) {
+        excluded++
+        return { ...r, status: 'skipped', reason: `Excluded — ${detail}`, companyFile: { status: 'excluded', fileName: null, sizeBytes: null, detail } }
+      }
+      blocked++
+      return { ...r, status: 'blocked', reason: detail, companyFile: { status: 'missing', fileName: null, sizeBytes: null, detail } }
+    }
+    matched++
+    return { ...r, companyFile: { status: 'matched', fileName: `${r.companyName}.pdf`, sizeBytes: 2048, detail: null } }
+  })
+  const used = out.filter((r) => r.companyFile?.status === 'matched').map((r) => r.companyFile.fileName as string)
+  return {
+    rows: out,
+    problem: blocked ? `${blocked} ${blocked === 1 ? 'recipient has' : 'recipients have'} no usable company PDF (missing, several files match, damaged or too large). Upload a corrected ZIP, or exclude ${blocked === 1 ? 'that recipient' : 'those recipients'}.` : null,
+    counts: { validEmails: out.filter((r) => r.status === 'ready').length, skipped: out.filter((r) => r.status === 'skipped').length, blocked },
+    companyZip: {
+      id: 'zipX',
+      fileName: 'company-pdfs.zip',
+      sizeBytes: 5120,
+      files: [
+        ...used.map((n) => ({ name: n, path: n, sizeBytes: 2048, status: 'ok', reason: null, used: true })),
+        { name: 'Orphan Ltd.pdf', path: 'Orphan Ltd.pdf', sizeBytes: 100, status: 'ok', reason: null, used: false },
+        { name: 'notes.txt', path: 'notes.txt', sizeBytes: 10, status: 'unsupported', reason: 'only PDF files are used (this is .txt)', used: false },
+      ],
+      ignored: 0,
+      problems,
+      counts: { matched, missing: blocked, ambiguous: 0, invalid: 0, tooLarge: 0, excluded, unused: 1 },
+    },
+  }
+}
 
 const SENDING: { enabled: boolean; mailboxConfigured: boolean; account: { email: string; source: 'bulk' | 'system' } | null; reason: string | null } = {
   enabled: true,
@@ -112,12 +153,19 @@ const TRACKED = {
   openTracking: { enabled: true, reason: null },
 }
 
-function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string; attachmentProblem?: string; templateNotes?: string[]; followUp?: boolean } = {}) {
+function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender; tracking?: { enabled: boolean; reason: string | null }; singleBlocked?: string; attachmentProblem?: string; templateNotes?: string[]; followUp?: boolean; zipMissing?: string[]; zipProblems?: string[]; detailPdf?: boolean } = {}) {
   calls = []
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const u = String(url)
     const method = (init.method ?? 'GET').toUpperCase()
-    calls.push({ url: u, method, body: init.body ? JSON.parse(String(init.body)) : null })
+    // A file's own bytes (the company ZIP) are recorded by name and size; everything else is JSON.
+    const sent = init.body
+    calls.push({
+      url: u,
+      method,
+      body: typeof sent === 'string' ? JSON.parse(sent) : sent ? { file: (sent as File).name ?? 'binary', size: (sent as Blob).size } : null,
+      headers: init.headers as Record<string, string> | undefined,
+    })
     const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
     const sending = opts.sending ?? SENDING
     const sender = opts.sender ?? SENDER_OK
@@ -133,6 +181,12 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
       return json(a, 201)
     }
     if (method === 'DELETE' && u.includes('/outreach/bulk/attachments/')) return json({ id: u.split('/').pop(), removed: true })
+    // The ZIP of company-wise PDFs (2026-10-17): its own bytes, its name in a header.
+    if (method === 'POST' && u.endsWith('/outreach/bulk/attachments/zip')) {
+      const f = init.body as File
+      const a = { id: `zip${++zipSeq}`, fileName: decodeURIComponent((init.headers as Record<string, string>)['X-File-Name']!), sizeBytes: f.size }
+      return json(a, 201)
+    }
     // Your own template (2026-10-12): the server returns the template filled for the person, with no version.
     const ownFill = (t: { subject: string; bodyHtml: string }, first: string, co: string) => ({
       subject: t.subject.replace('[Company Name]', co),
@@ -166,12 +220,26 @@ function stub(opts: { sending?: typeof SENDING; sender?: Sender; saved?: Sender;
       const templateOrder = list.length > 1 ? (b.templateOrder ?? 'sequential') : null
       // A follow-up (2026-10-15): the server notes when an earlier campaign last emailed each person.
       const withNotes = opts.followUp ? rows.map((r) => (r.status === 'ready' ? { ...r, note: 'Follow-up: last emailed on 2026-10-08.' } : r)) : rows
-      return json({ ...REVIEW, rows: withNotes, templateOrder, sender, sending, attachments: files(b.attachmentIds), attachmentProblem: opts.attachmentProblem ?? null, templateNotes: opts.templateNotes ?? [] })
+      // With a ZIP: the fake server matches each ready company to "<Company>.pdf" unless it is in opts.zipMissing.
+      const z = (b as { companyZipId?: string; excludeUnmatched?: boolean }).companyZipId ? applyZip(withNotes, b as { excludeUnmatched?: boolean }, opts.zipMissing ?? [], opts.zipProblems ?? []) : null
+      return json({
+        ...REVIEW,
+        rows: z ? z.rows : withNotes,
+        counts: z ? { ...REVIEW.counts, ...z.counts } : REVIEW.counts,
+        companyZip: z?.companyZip ?? null,
+        companyFileProblem: z?.problem ?? null,
+        templateOrder,
+        sender,
+        sending,
+        attachments: files(b.attachmentIds),
+        attachmentProblem: opts.attachmentProblem ?? null,
+        templateNotes: opts.templateNotes ?? [],
+      })
     }
     if (method === 'POST' && u.endsWith('/outreach/bulk/start')) return json({ campaignId: 'bk1', scheduled: 2, skipped: 1 }, 201)
     if (method === 'POST') return json({ ok: true })
     if (u.endsWith('/outreach/bulk/settings')) return json({ ...SETTINGS, sending, sender })
-    if (u.endsWith('/outreach/bulk/bk1')) return json(DETAIL)
+    if (u.endsWith('/outreach/bulk/bk1')) return json(opts.detailPdf ? { ...DETAIL, recipients: DETAIL.recipients.map((r, i) => (i === 0 ? { ...r, companyFile: { fileName: 'Thermohvac.pdf', sizeBytes: 2048 } } : r)) } : DETAIL)
     if (u.endsWith('/outreach/bulk/bk2')) return json(TRACKED)
     if (u.endsWith('/outreach/bulk'))
       return json({
@@ -205,6 +273,7 @@ const field = (text: string) => screen.getByText(text).closest('label')!.querySe
 beforeEach(() => {
   calls = []
   uploaded.clear()
+  zipSeq = 0
 })
 
 describe('step 1: upload Excel', () => {
@@ -919,5 +988,162 @@ describe('follow-up campaigns (2026-10-15)', () => {
     await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
     await screen.findByLabelText('Email preview')
     expect(screen.queryByText(/emailed by an earlier campaign/)).not.toBeInTheDocument()
+  })
+})
+
+describe('ZIP of company-wise PDFs (2026-10-17)', () => {
+  const zipFile = (name = 'company-pdfs.zip', size = 4096) => {
+    const f = new File(['PK'], name, { type: 'application/zip' })
+    Object.defineProperty(f, 'size', { value: size })
+    return f
+  }
+  const atReview = async () => {
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: /next: review emails/i }))
+    await screen.findByLabelText('Email preview')
+    return screen.getByRole('region', { name: 'Attachments' })
+  }
+  const chooseZip = async (section: HTMLElement, f = zipFile()) => {
+    await userEvent.upload(within(section).getByLabelText('Choose the ZIP of company PDFs'), f, { applyAccept: false })
+  }
+  const lastReview = () => posts().filter((c) => c.url.endsWith('/outreach/bulk/review')).pop()!.body!
+
+  it('the normal attachment option stays; the ZIP option sits next to it', async () => {
+    stub()
+    const section = await atReview()
+    expect(within(section).getByRole('button', { name: /add attachments/i })).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: 'Upload ZIP (Company-Wise Attachments)' })).toBeInTheDocument()
+    expect(within(section).getByText(/One ZIP with a PDF for each company, named after the company/)).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Company PDF validation' })).not.toBeInTheDocument() // nothing until a ZIP is uploaded
+  })
+
+  it('uploading the ZIP sends its own bytes with its name, then shows the validation before anything is approved: recipient, company, matched file, status', async () => {
+    stub()
+    const section = await atReview()
+    await chooseZip(section)
+    const up = posts().find((c) => c.url.endsWith('/outreach/bulk/attachments/zip'))!
+    expect(up.body).toEqual({ file: 'company-pdfs.zip', size: 4096 })
+    expect(up.headers).toMatchObject({ 'Content-Type': 'application/zip', 'X-File-Name': encodeURIComponent('company-pdfs.zip') })
+    expect(await within(section).findByRole('button', { name: /remove company-pdfs\.zip/i })).toBeInTheDocument()
+    await waitFor(() => expect(lastReview()).toMatchObject({ companyZipId: 'zip1' }))
+    expect('excludeUnmatched' in lastReview()).toBe(false)
+
+    const check = await screen.findByRole('region', { name: 'Company PDF validation' })
+    expect(check).toHaveTextContent('company-pdfs.zip')
+    expect(check).toHaveTextContent('2 matched to their PDF')
+    expect(check).toHaveTextContent('notes.txt — not used: only PDF files are used')
+    expect(check).toHaveTextContent('Not used (no recipient has this company name): Orphan Ltd.pdf')
+    expect(screen.getByRole('columnheader', { name: 'PDF file' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Match' })).toBeInTheDocument()
+    const row = screen.getByRole('row', { name: /Thermohvac/ })
+    expect(row).toHaveTextContent('mstellick@thermohvac.com')
+    expect(row).toHaveTextContent('Thermohvac.pdf')
+    expect(within(row).getByText('Matched')).toBeInTheDocument()
+    expect(screen.getByLabelText('Email preview')).toHaveTextContent(/Company PDF: Thermohvac\.pdf \(2 KB\) — only this company/)
+    expect(screen.getByRole('button', { name: /next: date and time/i })).toBeEnabled()
+  })
+
+  it('the common attachment and the ZIP go together; approval sends both references with the explicit confirmation', async () => {
+    stub()
+    const section = await atReview()
+    await userEvent.upload(within(section).getByLabelText('Choose files to attach'), new File(['%PDF'], 'overview.pdf', { type: 'application/pdf' }))
+    await within(section).findByRole('button', { name: /remove overview\.pdf/i })
+    await chooseZip(section)
+    await waitFor(() => expect(lastReview()).toMatchObject({ companyZipId: 'zip1', attachmentIds: ['att1'] }))
+    await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+    expect(await screen.findByText(/Company-wise PDFs from company-pdfs\.zip: each of the 2 emails carries only its own company/)).toBeInTheDocument()
+    expect(screen.getByText(/Attachments on every email: overview\.pdf/)).toBeInTheDocument()
+    const approve = screen.getByRole('button', { name: /approve and start sending/i })
+    expect(approve).toBeDisabled() // not before the person confirms
+    await userEvent.click(screen.getByRole('checkbox', { name: /I reviewed these 2 emails/i }))
+    await userEvent.click(approve)
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ confirm: true, companyZipId: 'zip1', attachmentIds: ['att1'] })
+  })
+
+  it('a company with no PDF is shown as an error and blocks the send; excluding it is explicit and then the send can go on', async () => {
+    stub({ zipMissing: ['Babsco'] })
+    const section = await atReview()
+    await chooseZip(section)
+    const check = await screen.findByRole('region', { name: 'Company PDF validation' })
+    expect(await within(check).findByRole('alert')).toHaveTextContent(/1 recipient has no usable company PDF/)
+    const row = screen.getByRole('row', { name: /Babsco/ })
+    expect(within(row).getByText('No matching PDF')).toBeInTheDocument()
+    expect(row).toHaveTextContent('Blocked — No PDF in the ZIP is named after this company.')
+    expect(within(row).queryByRole('button', { name: /preview/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /next: date and time/i })).toBeDisabled()
+
+    await userEvent.click(within(check).getByRole('checkbox', { name: /Exclude the recipients without a usable PDF/ }))
+    await waitFor(() => expect(lastReview()).toMatchObject({ companyZipId: 'zip1', excludeUnmatched: true }))
+    expect(await screen.findByText(/Excluded — No PDF in the ZIP is named after this company/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /next: date and time/i })).toBeEnabled()
+    expect(within(await screen.findByRole('region', { name: 'Company PDF validation' })).getByRole('checkbox')).toBeChecked() // stays visible so it can be undone
+
+    await userEvent.click(screen.getByRole('button', { name: /next: date and time/i }))
+    await userEvent.click(await screen.findByRole('checkbox', { name: /I reviewed these 1 emails/i }))
+    await userEvent.click(screen.getByRole('button', { name: /approve and start sending/i }))
+    await waitFor(() => expect(posts().some((c) => c.url.endsWith('/outreach/bulk/start'))).toBe(true))
+    expect(posts().find((c) => c.url.endsWith('/start'))!.body).toMatchObject({ confirm: true, companyZipId: 'zip1', excludeUnmatched: true })
+  })
+
+  it('problems with the ZIP itself (duplicate names, unusable files) are listed before approval', async () => {
+    stub({ zipProblems: ['Duplicate file name "ABC Limited.pdf" (a/ABC Limited.pdf and b/ABC Limited.pdf). Keep one.'] })
+    const section = await atReview()
+    await chooseZip(section)
+    const check = await screen.findByRole('region', { name: 'Company PDF validation' })
+    expect(check).toHaveTextContent('Duplicate file name "ABC Limited.pdf"')
+  })
+
+  it('a file that is not a .zip, or is too large, is refused on the screen and never uploaded', async () => {
+    stub()
+    const section = await atReview()
+    await chooseZip(section, new File(['x'], 'pdfs.rar'))
+    expect(await within(section).findByRole('alert')).toHaveTextContent(/"pdfs\.rar" is not a \.zip file/)
+    await chooseZip(section, zipFile('big.zip', 21 * 1024 * 1024))
+    expect(await within(section).findByRole('alert')).toHaveTextContent(/"big\.zip" is larger than 20\.0 MB/)
+    expect(posts().some((c) => c.url.endsWith('/attachments/zip'))).toBe(false)
+  })
+
+  it('removing the ZIP takes it off the server and the review goes back to a plain one', async () => {
+    stub()
+    const section = await atReview()
+    await chooseZip(section)
+    await userEvent.click(await within(section).findByRole('button', { name: /remove company-pdfs\.zip/i }))
+    expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/outreach/bulk/attachments/zip1'))).toBe(true)
+    await waitFor(() => expect('companyZipId' in lastReview()).toBe(false))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Company PDF validation' })).not.toBeInTheDocument())
+    expect(screen.queryByRole('columnheader', { name: 'PDF file' })).not.toBeInTheDocument()
+  })
+
+  it('uploading a newer ZIP replaces the earlier one', async () => {
+    stub()
+    const section = await atReview()
+    await chooseZip(section)
+    await within(section).findByRole('button', { name: /remove company-pdfs\.zip/i })
+    await chooseZip(section, zipFile('second.zip'))
+    expect(await within(section).findByRole('button', { name: /remove second\.zip/i })).toBeInTheDocument()
+    expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/outreach/bulk/attachments/zip1'))).toBe(true) // the first is cleared
+    await waitFor(() => expect(lastReview()).toMatchObject({ companyZipId: 'zip2' }))
+  })
+
+  it('without a ZIP nothing about it is sent', async () => {
+    stub()
+    await atReview()
+    expect('companyZipId' in lastReview()).toBe(false)
+    expect('excludeUnmatched' in lastReview()).toBe(false)
+  })
+
+  it('Send to one person has no company ZIP option', async () => {
+    stub()
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click(await screen.findByRole('button', { name: /send to one person/i }))
+    expect(screen.queryByRole('button', { name: 'Upload ZIP (Company-Wise Attachments)' })).not.toBeInTheDocument()
+  })
+
+  it('a finished campaign shows which PDF each recipient was sent', async () => {
+    stub({ detailPdf: true })
+    render(<BulkEmail canOperate canApprove />)
+    await userEvent.click((await screen.findAllByRole('button', { name: /^open$/i }))[1]!) // the second campaign in the list is bk1
+    expect(await screen.findByText('PDF: Thermohvac.pdf')).toBeInTheDocument()
   })
 })

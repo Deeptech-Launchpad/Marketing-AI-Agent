@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Paperclip, X } from 'lucide-react'
+import { FileArchive, Paperclip, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import { Button } from '../../components/ui/primitives'
 
@@ -12,6 +12,23 @@ export interface BulkAttachment {
   fileName: string
   mimeType: string
   sizeBytes: number
+}
+
+/** The ZIP of company-wise PDFs once uploaded (2026-10-17); the server keeps it and the review matches its files to the companies. */
+export interface CompanyZip {
+  id: string
+  fileName: string
+  sizeBytes: number
+}
+
+export const MAX_ZIP_BYTES = 20 * 1024 * 1024
+
+/** Why this file cannot be uploaded as the company ZIP (null = it can). Checked again by the server. */
+export function zipProblem(file: { name: string; size: number }): string | null {
+  if (!/\.zip$/i.test(file.name)) return `"${file.name}" is not a .zip file.`
+  if (file.size === 0) return `"${file.name}" is empty.`
+  if (file.size > MAX_ZIP_BYTES) return `"${file.name}" is larger than ${formatSize(MAX_ZIP_BYTES)}. Split the PDFs into two ZIPs and send them in two campaigns.`
+  return null
 }
 
 export const MAX_FILES = 5
@@ -52,15 +69,19 @@ export function AttachmentsField({
   onChange,
   onBusyChange,
   disabled = false,
+  zip,
 }: {
   value: BulkAttachment[]
   onChange: (next: BulkAttachment[]) => void
   onBusyChange?: (busy: boolean) => void
   disabled?: boolean
+  /** When given, a second option uploads one ZIP of company-wise PDFs (Bulk email only). */
+  zip?: { value: CompanyZip | null; onChange: (next: CompanyZip | null) => void }
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
+  const zipInput = useRef<HTMLInputElement>(null)
 
   const setWorking = (b: boolean) => {
     setBusy(b)
@@ -104,6 +125,46 @@ export function AttachmentsField({
     }
   }
 
+  const addZip = async (files: FileList | null) => {
+    const f = files?.[0]
+    if (!f || !zip) return
+    setError(null)
+    const problem = zipProblem({ name: f.name, size: f.size })
+    if (problem) {
+      setError(problem)
+      if (zipInput.current) zipInput.current.value = ''
+      return
+    }
+    setWorking(true)
+    try {
+      const stored = await api.upload<CompanyZip>('/outreach/bulk/attachments/zip', f, { contentType: 'application/zip', headers: { 'X-File-Name': encodeURIComponent(f.name) } })
+      const old = zip.value
+      zip.onChange(stored)
+      // A newer ZIP replaces the earlier one (which is removed from the server; if that fails it is cleared after a day).
+      if (old) void api.del(`/outreach/bulk/attachments/${encodeURIComponent(old.id)}`).catch(() => undefined)
+    } catch (err) {
+      setError((err as Error)?.message || 'The ZIP could not be uploaded.')
+    } finally {
+      setWorking(false)
+      if (zipInput.current) zipInput.current.value = ''
+    }
+  }
+
+  const removeZip = async () => {
+    if (!zip?.value) return
+    setError(null)
+    setWorking(true)
+    const id = zip.value.id
+    try {
+      await api.del(`/outreach/bulk/attachments/${encodeURIComponent(id)}`)
+    } catch {
+      // Already gone on the server: it is removed here too.
+    } finally {
+      zip.onChange(null)
+      setWorking(false)
+    }
+  }
+
   const total = value.reduce((s, a) => s + a.sizeBytes, 0)
 
   return (
@@ -139,9 +200,35 @@ export function AttachmentsField({
         aria-label="Choose files to attach"
         onChange={(e) => void add(e.target.files)}
       />
-      <Button size="sm" icon={Paperclip} disabled={disabled || busy || value.length >= MAX_FILES} busy={busy} onClick={() => input.current?.click()}>
-        {value.length ? 'Add another file' : 'Add attachments'}
-      </Button>
+      <div className="row">
+        <Button size="sm" icon={Paperclip} disabled={disabled || busy || value.length >= MAX_FILES} busy={busy} onClick={() => input.current?.click()}>
+          {value.length ? 'Add another file' : 'Add attachments'}
+        </Button>
+        {zip && (
+          <>
+            <input ref={zipInput} type="file" accept=".zip,application/zip" hidden aria-label="Choose the ZIP of company PDFs" onChange={(e) => void addZip(e.target.files)} />
+            <Button size="sm" icon={FileArchive} disabled={disabled || busy} busy={busy} onClick={() => zipInput.current?.click()}>
+              Upload ZIP (Company-Wise Attachments)
+            </Button>
+          </>
+        )}
+      </div>
+      {zip && (
+        <div className="bulk-zip">
+          <p className="note">
+            Optional. One ZIP with a PDF for each company, named after the company (for example "ABC Limited.pdf"). Each recipient gets only their own company&rsquo;s PDF, together with
+            the files above. Up to {formatSize(MAX_ZIP_BYTES)}.
+          </p>
+          {zip.value && (
+            <p>
+              <FileArchive size={14} aria-hidden /> {zip.value.fileName} <span className="cell-dim">({formatSize(zip.value.sizeBytes)})</span>{' '}
+              <Button size="sm" variant="quiet" icon={X} disabled={disabled || busy} onClick={() => void removeZip()}>
+                Remove<span className="sr-only"> {zip.value.fileName}</span>
+              </Button>
+            </p>
+          )}
+        </div>
+      )}
     </section>
   )
 }

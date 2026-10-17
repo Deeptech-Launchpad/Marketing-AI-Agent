@@ -1,4 +1,4 @@
-import { Router, type Request } from 'express'
+import express, { Router, type NextFunction, type Request, type Response } from 'express'
 import { z } from 'zod'
 import {
   analyzeUpload,
@@ -16,7 +16,9 @@ import {
   unsubscribeRecipient,
   type Actor,
 } from '../../outreach/bulk/service.js'
-import { MAX_ATTACHMENTS, MAX_FILE_BYTES, removeStagedAttachment, stageAttachment } from '../../outreach/bulk/attachments.js'
+import { MAX_ATTACHMENTS, MAX_FILE_BYTES, removeStagedAttachment, stageAttachment, stageCompanyZip } from '../../outreach/bulk/attachments.js'
+import { MAX_ZIP_BYTES } from '../../outreach/bulk/companyZip.js'
+import { BadRequestError } from '../../platform/errors.js'
 import { MAX_CUSTOM_HTML, MAX_CUSTOM_SUBJECT, MAX_CUSTOM_TEMPLATES } from '../../outreach/bulk/customTemplate.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
@@ -63,6 +65,9 @@ const Setup = z
     customTemplates: z.array(CustomTemplate).min(1).max(MAX_CUSTOM_TEMPLATES).optional(),
     templateOrder: z.enum(['sequential', 'random']).optional(),
     shuffleSeed: z.number().int().min(0).max(0x7fffffff).optional(),
+    // A staged ZIP of company-wise PDFs (2026-10-17), and whether to leave out recipients without a usable file.
+    companyZipId: z.string().min(1).max(64).optional(),
+    excludeUnmatched: z.boolean().optional(),
   })
   .strict()
 
@@ -175,6 +180,32 @@ bulkEmailRoutes.post(
   validateBody(Attachment),
   asyncHandler(async (req, res) => {
     res.status(201).json(await stageAttachment(actorOf(req), req.body as z.infer<typeof Attachment>))
+  }),
+)
+
+// ZIP of company-wise PDFs (2026-10-17): the ZIP's own bytes are the request body (no base64, so up to
+// MAX_ZIP_BYTES fits under the web server's 25 MB), its name in the X-File-Name header. Only this route reads
+// application/zip; the JSON parser ignores it. A body that is too large or unreadable is answered in words.
+const zipBody = (req: Request, res: Response, next: NextFunction) =>
+  express.raw({ type: ['application/zip', 'application/x-zip-compressed'], limit: MAX_ZIP_BYTES + 64 * 1024 })(req, res, (err?: unknown) => {
+    if (!err) return next()
+    const tooLarge = (err as { type?: string }).type === 'entity.too.large'
+    next(new BadRequestError(tooLarge ? `The ZIP is larger than ${MAX_ZIP_BYTES / 1024 / 1024} MB. Split the files into two ZIPs and send them in two campaigns.` : 'The ZIP could not be read. Upload it again.'))
+  })
+
+bulkEmailRoutes.post(
+  '/attachments/zip',
+  requirePermission('operate'),
+  zipBody,
+  asyncHandler(async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new BadRequestError('Send the ZIP file itself (Content-Type: application/zip).')
+    let fileName = ''
+    try {
+      fileName = decodeURIComponent(String(req.header('x-file-name') ?? ''))
+    } catch {
+      throw new BadRequestError('The ZIP file name could not be read.')
+    }
+    res.status(201).json(await stageCompanyZip(actorOf(req), { fileName, bytes: req.body }))
   }),
 )
 

@@ -7,7 +7,7 @@ import { EmptyState, ErrorState, LoadingState } from '../../components/ui/states
 import { useBulkCall as useCall } from './useBulkCall'
 import { SignatureEditor, SignatureView, safeHtml, textToHtml } from './SignatureEditor'
 import { SingleSend } from './SingleSend'
-import { AttachmentsField, attachmentList, type BulkAttachment } from './AttachmentsField'
+import { AttachmentsField, attachmentList, formatSize, type BulkAttachment, type CompanyZip } from './AttachmentsField'
 import { EmailTemplatesField, ownTemplatesReady, ownTemplatesRequest, type OwnTemplates } from './EmailTemplateField'
 import './bulk.css'
 
@@ -59,6 +59,32 @@ interface Analysis {
   companies: Array<{ key: string; companyName: string; rows: number[]; people: Array<{ name: string | null; email: string }>; skip: string | null }>
   noAddress: Array<{ row: number; companyName: string; reason: string }>
 }
+/** The company PDF a recipient gets, from the ZIP of company-wise PDFs (2026-10-17). */
+interface CompanyFileView {
+  status: 'matched' | 'missing' | 'ambiguous' | 'invalid' | 'too_large' | 'excluded'
+  fileName: string | null
+  sizeBytes: number | null
+  detail: string | null
+}
+interface CompanyZipReview {
+  id: string
+  fileName: string
+  sizeBytes: number
+  files: Array<{ name: string; path: string; sizeBytes: number; status: 'ok' | 'invalid' | 'unsupported'; reason: string | null; used: boolean }>
+  ignored: number
+  problems: string[]
+  counts: { matched: number; missing: number; ambiguous: number; invalid: number; tooLarge: number; excluded: number; unused: number }
+}
+const MATCH_LABEL: Record<CompanyFileView['status'], string> = {
+  matched: 'Matched',
+  missing: 'No matching PDF',
+  ambiguous: 'Several files match',
+  invalid: 'File not usable',
+  too_large: 'Too large for one email',
+  excluded: 'Excluded',
+}
+const MATCH_TONE: Record<CompanyFileView['status'], 'ok' | 'danger' | 'neutral'> = { matched: 'ok', missing: 'danger', ambiguous: 'danger', invalid: 'danger', too_large: 'danger', excluded: 'neutral' }
+
 interface ReviewRow {
   position: number
   companyName: string
@@ -72,13 +98,18 @@ interface ReviewRow {
   /** The approved version this person receives (1, 2 or 3); null with templateKey 'custom' = the user's own template. */
   version?: number | null
   templateKey?: string | null
-  status: 'ready' | 'skipped'
+  /** 'blocked': cannot be sent until its company PDF problem is fixed or it is excluded (2026-10-17). */
+  status: 'ready' | 'skipped' | 'blocked'
   reason: string | null
+  companyFile?: CompanyFileView | null
   /** A follow-up: when an earlier campaign last emailed this person (2026-10-15). */
   note?: string | null
   scheduledLocal: string | null
 }
 interface Review {
+  /** The ZIP of company-wise PDFs and how its files matched the companies (2026-10-17); null without one. */
+  companyZip?: CompanyZipReview | null
+  companyFileProblem?: string | null
   /** What was taken out of the pasted template for safety (2026-10-12), in words. */
   templateNotes?: string[]
   /** With 2-3 own templates (2026-10-14): how they are given out. */
@@ -86,7 +117,7 @@ interface Review {
   /** The files that go with every email (2026-10-12), and why they cannot go (null = they can). */
   attachments?: BulkAttachment[]
   attachmentProblem?: string | null
-  counts: { rowsWithCompany: number; companies: number; validEmails: number; skipped: number; noWorkAddress: number }
+  counts: { rowsWithCompany: number; companies: number; validEmails: number; skipped: number; blocked?: number; noWorkAddress: number }
   rows: ReviewRow[]
   noAddress: Array<{ row: number; companyName: string; reason: string }>
   schedule: { firstLocal: string | null; estimatedCompletionLocal: string | null; intervalMinutes: number }
@@ -122,6 +153,8 @@ interface RecipientRow {
   ownTemplate?: boolean
   /** Which own template (1, 2 or 3) this person received (2026-10-14). */
   ownTemplateNumber?: number | null
+  /** This person's own company PDF (2026-10-17). */
+  companyFile?: { fileName: string; sizeBytes: number } | null
   tracking?: OpenTracking | null
 }
 
@@ -133,6 +166,70 @@ function ownNumber(key: string | null | undefined): number | null {
 }
 
 /** "Your template", or "Your template 2" when the send uses several own templates. */
+/** Before approval: how the ZIP's files matched the recipients' companies, and what blocks the send. */
+function CompanyZipCheck({
+  zip,
+  blocked,
+  problem,
+  exclude,
+  busy,
+  onExclude,
+}: {
+  zip: CompanyZipReview
+  blocked: number
+  problem: string | null | undefined
+  exclude: boolean
+  busy: boolean
+  onExclude: (next: boolean) => void
+}) {
+  const c = zip.counts
+  const parts = [
+    `${c.matched} matched to their PDF`,
+    c.missing ? `${c.missing} with no matching PDF` : null,
+    c.ambiguous ? `${c.ambiguous} with several matching files` : null,
+    c.invalid ? `${c.invalid} with a file that cannot be used` : null,
+    c.tooLarge ? `${c.tooLarge} too large for one email` : null,
+    c.excluded ? `${c.excluded} excluded` : null,
+  ].filter(Boolean)
+  const unusable = zip.files.filter((f) => f.status !== 'ok')
+  const unused = zip.files.filter((f) => f.status === 'ok' && !f.used)
+  return (
+    <section className="bulk-zip-check" aria-label="Company PDF validation">
+      <p className="note">
+        <strong>{zip.fileName}</strong> · {zip.files.length} file{zip.files.length === 1 ? '' : 's'} · {parts.join(' · ')}
+      </p>
+      {zip.problems.map((p) => (
+        <p key={p} className="otr-warn">
+          {p}
+        </p>
+      ))}
+      {unusable.length > 0 && (
+        <ul className="otr-list">
+          {unusable.map((f) => (
+            <li key={f.path}>
+              {f.path} — {f.status === 'unsupported' ? 'not used' : 'cannot be used'}: {f.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {unused.length > 0 && <p className="cell-dim">Not used (no recipient has this company name): {unused.map((f) => f.name).join(', ')}</p>}
+      {problem && (
+        <p className="otr-err" role="alert">
+          {problem}
+        </p>
+      )}
+      {(blocked > 0 || exclude) && (
+        <label className="bulk-test">
+          <input type="checkbox" checked={exclude} disabled={busy} onChange={(e) => onExclude(e.target.checked)} />
+          <span>
+            Exclude the recipients without a usable PDF — <strong>they will not be emailed</strong>. Or upload a corrected ZIP instead.
+          </span>
+        </label>
+      )}
+    </section>
+  )
+}
+
 function ownLabel(n: number | null | undefined, several: boolean): string | null {
   return n ? (several ? `Your template ${n}` : 'Your template') : null
 }
@@ -534,6 +631,12 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   const [uploading, setUploading] = useState(false)
   // null = the approved Versions 1, 2 and 3; otherwise the user's OWN template(s) (2026-10-12; up to 3 since 2026-10-14).
   const [ownTemplate, setOwnTemplate] = useState<OwnTemplates | null>(null)
+  // One ZIP of company-wise PDFs (2026-10-17): each recipient gets the PDF named after their company.
+  const [companyZip, setCompanyZip] = useState<CompanyZip | null>(null)
+  const [excludeUnmatched, setExcludeUnmatched] = useState(false)
+  // The latest choice, for the ZIP upload that finishes after the render it was started in.
+  const excludeRef = useRef(false)
+  excludeRef.current = excludeUnmatched
   const call = useCall(() => undefined)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -553,7 +656,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     })
   }
 
-  const body = () => ({
+  const body = (over: { companyZip?: CompanyZip | null; excludeUnmatched?: boolean } = {}) => ({
     fileBase64: file!.base64,
     fileName: file!.name,
     allowWebmail,
@@ -563,13 +666,28 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
     intervalMinutes: Number(interval),
     ...(attachments.length ? { attachmentIds: attachments.map((a) => a.id) } : {}),
     ...ownTemplatesRequest(ownTemplate),
+    ...(('companyZip' in over ? over.companyZip : companyZip)
+      ? { companyZipId: ('companyZip' in over ? over.companyZip : companyZip)!.id, ...((over.excludeUnmatched ?? excludeUnmatched) ? { excludeUnmatched: true } : {}) }
+      : {}),
   })
-  const loadReview = () =>
+  const loadReview = (over: { companyZip?: CompanyZip | null; excludeUnmatched?: boolean } = {}) =>
     void call.run('review', async () => {
-      const r = (await api.post('/outreach/bulk/review', body())) as Review
+      const r = (await api.post('/outreach/bulk/review', body(over))) as Review
       setReview(r)
       setPreviewPos(r.rows.find((x) => x.status === 'ready')?.position ?? null)
     })
+  // A new, replaced or removed ZIP is matched against the companies straight away, so its validation is shown before anything is approved.
+  const onZip = (z: CompanyZip | null) => {
+    setCompanyZip(z)
+    if (!z) setExcludeUnmatched(false)
+    setConfirmed(false)
+    loadReview({ companyZip: z, excludeUnmatched: z ? excludeRef.current : false })
+  }
+  const onExclude = (next: boolean) => {
+    setExcludeUnmatched(next)
+    setConfirmed(false)
+    loadReview({ excludeUnmatched: next })
+  }
   const start = () =>
     void call.run('start', async () => {
       const r = (await api.post('/outreach/bulk/start', { ...body(), confirm: confirmed })) as { campaignId: string }
@@ -725,6 +843,16 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   follow-up to them. Nobody gets the same email twice.
                 </p>
               )}
+              {review.companyZip && (
+                <CompanyZipCheck
+                  zip={review.companyZip}
+                  blocked={review.counts.blocked ?? 0}
+                  problem={review.companyFileProblem}
+                  exclude={excludeUnmatched}
+                  busy={call.busy === 'review' || uploading}
+                  onExclude={onExclude}
+                />
+              )}
               <div className="otr-scroll" style={{ maxHeight: 360, overflowY: 'auto' }}>
                 <table className="otr-table">
                   <thead>
@@ -734,6 +862,12 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                       <th>Version</th>
                       <th>To</th>
                       <th>CC</th>
+                      {review.companyZip && (
+                        <>
+                          <th>PDF file</th>
+                          <th>Match</th>
+                        </>
+                      )}
                       <th />
                     </tr>
                   </thead>
@@ -748,13 +882,29 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                         <td>{ownLabel(ownNumber(r.templateKey), Boolean(review.templateOrder)) ?? (r.version ? `Version ${r.version}` : '—')}</td>
                         <td>{r.toEmail ?? '—'}</td>
                         <td className="cell-dim">{r.ccEmails.join(', ') || '—'}</td>
+                        {review.companyZip && (
+                          <>
+                            <td>{r.companyFile?.fileName ?? '—'}</td>
+                            <td>
+                              {r.companyFile ? (
+                                <Chip tone={MATCH_TONE[r.companyFile.status]} title={r.companyFile.detail ?? undefined}>
+                                  {MATCH_LABEL[r.companyFile.status]}
+                                </Chip>
+                              ) : (
+                                <span className="cell-dim">—</span>
+                              )}
+                            </td>
+                          </>
+                        )}
                         <td>
                           {r.status === 'ready' ? (
                             <Button size="sm" variant="quiet" onClick={() => setPreviewPos(r.position)}>
                               Preview
                             </Button>
                           ) : (
-                            <span className="cell-dim">Skipped — {r.reason}</span>
+                            <span className={r.status === 'blocked' ? 'otr-err' : 'cell-dim'}>
+                              {r.status === 'blocked' ? 'Blocked' : 'Skipped'} — {r.reason}
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -776,6 +926,12 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                     )}{' '}
                     <span className="field-label">Subject</span> {preview.subject}
                   </p>
+                  {preview.companyFile?.fileName && (
+                    <p className="cell-dim">
+                      Company PDF: {preview.companyFile.fileName}
+                      {preview.companyFile.sizeBytes ? ` (${formatSize(preview.companyFile.sizeBytes)})` : ''} — only this company&rsquo;s file goes with this email
+                    </p>
+                  )}
                   {attachments.length > 0 && <p className="cell-dim">Attachments: {attachmentList(attachments)}</p>}
                   {preview.html ? (
                     <div className="bulk-email-html" dangerouslySetInnerHTML={{ __html: safeHtml(preview.html) }} />
@@ -784,7 +940,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   )}
                 </article>
               )}
-              <AttachmentsField value={attachments} onChange={setAttachments} onBusyChange={setUploading} />
+              <AttachmentsField value={attachments} onChange={setAttachments} onBusyChange={setUploading} disabled={call.busy === 'review'} zip={{ value: companyZip, onChange: onZip }} />
             </>
           )}
           <div className="row" style={{ marginTop: 'var(--s3)' }}>
@@ -793,7 +949,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
             </Button>
             <Button
               variant="primary"
-              disabled={!review || review.counts.validEmails === 0 || uploading}
+              disabled={!review || review.counts.validEmails === 0 || (review.counts.blocked ?? 0) > 0 || uploading}
               onClick={() => {
                 setStep('schedule')
                 // Reviewed again so the sending times and the attachments shown are exactly what Start stores.
@@ -887,6 +1043,12 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                   </li>
                 )}
                 {review.attachments && review.attachments.length > 0 && <li>Attachments on every email: {attachmentList(review.attachments)}</li>}
+                {review.companyZip && (
+                  <li>
+                    Company-wise PDFs from {review.companyZip.fileName}: each of the {review.counts.validEmails} emails carries only its own company&rsquo;s PDF
+                    {review.companyZip.counts.excluded > 0 ? ` (${review.companyZip.counts.excluded} recipients excluded: no usable PDF)` : ''}.
+                  </li>
+                )}
               </ul>
               <div className="otr-scroll" style={{ maxHeight: 220, overflowY: 'auto' }}>
                 <table className="otr-table">
@@ -929,6 +1091,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
                     Boolean(review.sending.reason) ||
                     !review.sender.authorized ||
                     Boolean(review.attachmentProblem) ||
+                    (review.counts.blocked ?? 0) > 0 ||
                     uploading
                   }
                   busy={call.busy === 'start'}
@@ -1047,6 +1210,7 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
                           ? ` · Version ${r.version}`
                           : ''}
                     </div>
+                    {r.companyFile && <div className="cell-dim">PDF: {r.companyFile.fileName}</div>}
                     {r.body && (
                       <details open={open === r.id} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open ? r.id : null)}>
                         <summary>Show the email</summary>
