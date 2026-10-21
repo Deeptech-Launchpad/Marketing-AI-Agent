@@ -16,6 +16,7 @@ import {
   unsubscribeRecipient,
   type Actor,
 } from '../../outreach/bulk/service.js'
+import { skippedFileName, skippedReport, skippedWorkbook } from '../../outreach/bulk/skipped.js'
 import {
   appendZipChunk,
   finishCompanyZipUpload,
@@ -265,6 +266,27 @@ bulkEmailRoutes.post(
   validateBody(Single.extend({ confirm: z.boolean() }).strict()),
   asyncHandler(async (req, res) => {
     res.status(201).json(await startSingle(actorOf(req), req.body as z.infer<typeof Single> & { confirm: boolean }))
+  }),
+)
+
+// The companies a bulk send skipped (2026-10-21): read-only, 'latest' = the most recent bulk send from an Excel list.
+bulkEmailRoutes.get(
+  '/:id/skipped',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    res.json(await skippedReport(req.principal!.tenantId, req.params.id!))
+  }),
+)
+
+bulkEmailRoutes.get(
+  '/:id/skipped.xlsx',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const report = await skippedReport(req.principal!.tenantId, req.params.id!)
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', `attachment; filename="${skippedFileName(report)}"`)
+    res.setHeader('Cache-Control', 'no-store')
+    res.send(await skippedWorkbook(report))
   }),
 )
 
