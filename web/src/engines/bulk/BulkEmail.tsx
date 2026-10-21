@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ArrowLeft, CheckCircle2, FileSpreadsheet, Mail, Pause, Play, Plus, RefreshCw, Send, Square, User, UserX } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, FileSpreadsheet, FileX, Mail, Pause, Play, Plus, RefreshCw, Send, Square, User, UserX } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync, usePolling } from '../../lib/hooks'
 import { Button, Chip, Panel, Unset } from '../../components/ui/primitives'
@@ -7,6 +7,7 @@ import { EmptyState, ErrorState, LoadingState } from '../../components/ui/states
 import { useBulkCall as useCall } from './useBulkCall'
 import { SignatureEditor, SignatureView, safeHtml, textToHtml } from './SignatureEditor'
 import { SingleSend } from './SingleSend'
+import { SkippedCompanies } from './SkippedCompanies'
 import { AttachmentsField, attachmentList, formatSize, type BulkAttachment, type CompanyZip } from './AttachmentsField'
 import { EmailTemplatesField, ownTemplatesReady, ownTemplatesRequest, type OwnTemplates } from './EmailTemplateField'
 import './bulk.css'
@@ -322,6 +323,9 @@ export function BulkEmail({ canOperate, canApprove }: { canOperate: boolean; can
   const [openId, setOpenId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [single, setSingle] = useState(false)
+  // The skipped-companies report of one send ('latest' = the most recent bulk send).
+  const [skippedId, setSkippedId] = useState<string | null>(null)
+  if (skippedId) return <SkippedCompanies id={skippedId} onBack={() => setSkippedId(null)} />
   if (single) {
     return (
       <SingleSend
@@ -346,11 +350,11 @@ export function BulkEmail({ canOperate, canApprove }: { canOperate: boolean; can
       />
     )
   }
-  if (openId) return <BulkDetail id={openId} canOperate={canOperate} onBack={() => setOpenId(null)} />
+  if (openId) return <BulkDetail id={openId} canOperate={canOperate} onBack={() => setOpenId(null)} onSkipped={setSkippedId} />
   return (
     <>
       <SenderPanel canApprove={canApprove} />
-      <BulkList canOperate={canOperate} onOpen={setOpenId} onNew={() => setCreating(true)} onSingle={() => setSingle(true)} />
+      <BulkList canOperate={canOperate} onOpen={setOpenId} onNew={() => setCreating(true)} onSingle={() => setSingle(true)} onSkipped={setSkippedId} />
     </>
   )
 }
@@ -518,7 +522,7 @@ function SendingNote({ sending }: { sending: SendingStatus | null }) {
   return <p className="otr-warn">{sending.reason}</p>
 }
 
-function BulkList({ canOperate, onOpen, onNew, onSingle }: { canOperate: boolean; onOpen: (id: string) => void; onNew: () => void; onSingle: () => void }) {
+function BulkList({ canOperate, onOpen, onNew, onSingle, onSkipped }: { canOperate: boolean; onOpen: (id: string) => void; onNew: () => void; onSingle: () => void; onSkipped: (id: string) => void }) {
   const list = useAsync<unknown>((signal) => api.get('/outreach/bulk', { signal }), [])
   const data = list.data as { campaigns?: CampaignRow[]; sending?: SendingStatus; openTracking?: TrackingSetting } | null
   const rows = Array.isArray(data?.campaigns) ? data!.campaigns : []
@@ -528,16 +532,23 @@ function BulkList({ canOperate, onOpen, onNew, onSingle }: { canOperate: boolean
       title="Bulk email"
       subtitle="Upload an Excel list, review the emails, choose when to start — they go one after another."
       actions={
-        canOperate && (
-          <div className="row">
-            <Button size="sm" icon={User} onClick={onSingle}>
-              Send to one person
+        <div className="row">
+          {rows.length > 0 && (
+            <Button size="sm" icon={FileX} onClick={() => onSkipped('latest')}>
+              Skipped companies (latest send)
             </Button>
-            <Button size="sm" variant="primary" icon={Plus} onClick={onNew}>
-              New bulk email
-            </Button>
-          </div>
-        )
+          )}
+          {canOperate && (
+            <>
+              <Button size="sm" icon={User} onClick={onSingle}>
+                Send to one person
+              </Button>
+              <Button size="sm" variant="primary" icon={Plus} onClick={onNew}>
+                New bulk email
+              </Button>
+            </>
+          )}
+        </div>
       }
     >
       <TrackingNotice setting={data?.openTracking} />
@@ -1108,7 +1119,7 @@ function NewBulk({ canApprove, onCancel, onStarted }: { canApprove: boolean; onC
   )
 }
 
-function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolean; onBack: () => void }) {
+function BulkDetail({ id, canOperate, onBack, onSkipped }: { id: string; canOperate: boolean; onBack: () => void; onSkipped: (id: string) => void }) {
   const state = useAsync<unknown>((signal) => api.get(`/outreach/bulk/${encodeURIComponent(id)}`, { signal }), [id])
   const call = useCall(state.refresh)
   const data = state.data as { campaign?: CampaignRow; counts?: NonNullable<CampaignRow['counts']>; recipients?: RecipientRow[]; sending?: SendingStatus; openTracking?: TrackingSetting } | null
@@ -1134,6 +1145,11 @@ function BulkDetail({ id, canOperate, onBack }: { id: string; canOperate: boolea
           <Button size="sm" variant="quiet" icon={ArrowLeft} onClick={onBack}>
             All bulk emails
           </Button>
+          {counts.skipped > 0 && (
+            <Button size="sm" icon={FileX} onClick={() => onSkipped(c.id)}>
+              Skipped companies ({counts.skipped})
+            </Button>
+          )}
           {canOperate && c.status === 'running' && (
             <Button size="sm" icon={Pause} busy={call.busy === 'pause'} onClick={() => void post('pause')}>
               Pause
