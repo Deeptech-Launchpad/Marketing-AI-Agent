@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { env } from '../config/env.js'
 import { withCrmReadOnly } from '../crm/nxtSales/httpClient.js'
+import { warmLeadsKeyProblem } from '../llm/gemini/apiKey.js'
 import { withGeminiBudget } from '../llm/gemini/budgetContext.js'
 import { prisma } from '../platform/db.js'
 import { logger } from '../platform/logger.js'
@@ -101,10 +102,22 @@ async function handleListRefresh(tenantId: string): Promise<void> {
   }
 }
 
+let lastKeyWarningAt = 0
+
 /** One pass over one tenant. Never throws. */
 export async function tickTenant(tenantId: string): Promise<CycleResult | null> {
   try {
     if (!env.WARM_LEADS_WORKER_ENABLED) return null
+    // No dedicated Gemini key: nothing is read, claimed or evaluated, so no company is touched and no attempt is used up.
+    // (The shared key is never an alternative.) Said once every 30 minutes rather than every tick.
+    const keyProblem = warmLeadsKeyProblem()
+    if (keyProblem) {
+      if (Date.now() - lastKeyWarningAt > 30 * 60_000) {
+        lastKeyWarningAt = Date.now()
+        log.error({ tenantId }, `warm leads is idle: ${keyProblem}`)
+      }
+      return null
+    }
     await handleListRefresh(tenantId)
     await withCrmReadOnly(() => preparePilot(tenantId))
     const result = await runCycle(productionDeps(tenantId))

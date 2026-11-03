@@ -21,6 +21,8 @@ export interface GeminiBudget {
   reserve(kind: string): Promise<void>
   /** Called with what a finished call cost, when the ledger knows it. Must not throw. */
   onLedger?(call: { costUsd: number; priced: boolean; hasUsageData: boolean }): void
+  /** Which API key the calls in this budget use. 'warm-leads' = WARM_LEADS_GEMINI_API_KEY, never the shared key. */
+  keyScope?: 'warm-leads'
 }
 
 export class GeminiBudgetRequiredError extends Error {

@@ -26,6 +26,8 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
 
   const state = !o.server.workerEnabled
     ? { label: 'Worker switched off on this server', tone: 'danger' as const }
+    : o.server.geminiKeyProblem
+      ? { label: 'No Gemini key of its own: idle', tone: 'danger' as const }
     : s.paused
       ? { label: 'Paused', tone: 'neutral' as const }
       : o.windowOpenNow

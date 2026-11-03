@@ -521,6 +521,10 @@ const schema = z.object({
   // The dedicated Warm Leads worker (src/warmleadsWorker.ts, its own PM2 process). OFF unless set: a process that
   // does not have this on does nothing, and the screen refuses to "start" while it is off. A kill switch.
   WARM_LEADS_WORKER_ENABLED: bool.default('false'),
+  // A SEPARATE Gemini key for Warm Leads (its own Google Cloud project, restricted to the Generative Language API and
+  // this server's address). Every Gemini call made inside a Warm Leads budget uses THIS key and never GEMINI_API_KEY.
+  // Empty = Warm Leads cannot call Gemini at all (it stops safely and says why); it is never filled in from the shared key.
+  WARM_LEADS_GEMINI_API_KEY: z.string().default(''),
   // The worker stops safely when the server's available memory (MB) drops below this, and starts a night only with
   // 1 GB more (3072 / 4096 by default: the same rule as the approved isolated test).
   WARM_LEADS_MIN_AVAILABLE_MB: z.coerce.number().int().min(256).max(65_536).default(3072),

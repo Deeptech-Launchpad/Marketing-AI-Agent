@@ -87,6 +87,12 @@ export function WarmLeads() {
         </p>
       )}
 
+      {o.server.workerEnabled && o.server.geminiKeyProblem && (
+        <p className="note note--caveat" role="alert">
+          Warm Leads is idle: {o.server.geminiKeyProblem}
+        </p>
+      )}
+
       <Panel
         title="Progress"
         subtitle={`${num(c.total)} companies in NXT Sales`}

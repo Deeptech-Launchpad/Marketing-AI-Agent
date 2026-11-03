@@ -79,7 +79,7 @@ export interface Overview {
     syncApprovedAt: string | null
   }
   listRefresh: { requestedAt: string | null; refreshedAt: string | null; state: string | null; message: string | null }
-  server: { workerEnabled: boolean; syncSwitchOn: boolean }
+  server: { workerEnabled: boolean; syncSwitchOn: boolean; geminiKeyProblem: string | null }
   windowOpenNow: boolean
   bucket: string
   today: Usage | null

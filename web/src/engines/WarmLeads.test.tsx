@@ -37,7 +37,7 @@ const overview = (over: Partial<Overview> = {}): Overview => ({
     syncApprovedAt: null,
   },
   listRefresh: { requestedAt: null, refreshedAt: '2026-11-03T10:00:00Z', state: 'done', message: '15,137 companies read, 15,137 new.' },
-  server: { workerEnabled: true, syncSwitchOn: false },
+  server: { workerEnabled: true, syncSwitchOn: false, geminiKeyProblem: null },
   windowOpenNow: false,
   bucket: 'day:2026-11-04',
   today: emptyUsage,
@@ -151,6 +151,22 @@ describe('the controls and their gates', () => {
     stub(o)
     renderPage()
     expect((await screen.findAllByText(/switched off on this server/i)).length).toBeGreaterThan(0)
+  })
+
+  it('says plainly when Warm Leads has no Gemini key of its own, and shows no key', async () => {
+    const o = overview()
+    o.server.geminiKeyProblem = 'Warm Leads has no Gemini key of its own (WARM_LEADS_GEMINI_API_KEY is empty), so this call was not sent. It does not use the shared key.'
+    stub(o)
+    renderPage()
+    expect((await screen.findAllByText(/no Gemini key of its own/i)).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Warm Leads is idle/i)).toBeInTheDocument()
+  })
+
+  it('shows no key warning when the key is in place', async () => {
+    stub(overview())
+    renderPage()
+    await screen.findAllByText(/Progress/i)
+    expect(screen.queryByText(/Warm Leads is idle/i)).toBeNull()
   })
 
   it('saving the limits sends numbers to /limits', async () => {

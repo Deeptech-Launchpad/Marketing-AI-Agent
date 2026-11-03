@@ -1,3 +1,4 @@
+import { warmLeadsKeyProblem } from '../llm/gemini/apiKey.js'
 import { env } from '../config/env.js'
 import { prisma } from '../platform/db.js'
 import { companyCounts } from './companies.js'
@@ -51,7 +52,8 @@ export async function buildOverview(tenantId: string, now = new Date()) {
     },
     listRefresh: { requestedAt: s.listRefreshRequestedAt, refreshedAt: s.listRefreshedAt, state: s.listRefreshState, message: s.listRefreshMessage },
     // The server's own switches, shown so "Start" never looks broken when the worker is off.
-    server: { workerEnabled: env.WARM_LEADS_WORKER_ENABLED, syncSwitchOn: env.WARM_LEADS_SYNC_ENABLED },
+    // geminiKeyProblem is a sentence about the dedicated key (never the key); null = ready or not needed.
+    server: { workerEnabled: env.WARM_LEADS_WORKER_ENABLED, syncSwitchOn: env.WARM_LEADS_SYNC_ENABLED, geminiKeyProblem: warmLeadsKeyProblem() },
     windowOpenNow: windowOpen(now, win),
     bucket,
     today,

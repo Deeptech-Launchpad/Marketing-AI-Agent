@@ -19,6 +19,8 @@ export const newTally = (): BudgetTally => ({ calls: 0, refused: 0, pricedCostUs
 
 export function bucketBudget(store: UsageStore, tenantId: string, bucket: string, ceiling: number, tally: BudgetTally): GeminiBudget {
   return {
+    // Warm Leads spends from its own Google project: see llm/gemini/apiKey.ts.
+    keyScope: 'warm-leads',
     async reserve() {
       const ok = await store.reserveGeminiCall(tenantId, bucket)
       if (!ok) {

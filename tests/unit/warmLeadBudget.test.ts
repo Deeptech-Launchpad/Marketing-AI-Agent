@@ -25,8 +25,14 @@ function fakeStore(ceiling: number): { store: UsageStore; calls: () => number } 
   return { store, calls: () => calls }
 }
 
-beforeEach(() => resetGeminiCallStatsForTests())
+// A Warm Leads budget only calls Gemini with its own key (apiKey.ts); a placeholder lets these tests exercise the budget itself.
+const savedOwnKey = env.WARM_LEADS_GEMINI_API_KEY
+beforeEach(() => {
+  env.WARM_LEADS_GEMINI_API_KEY = 'warm-leads-placeholder-key'
+  resetGeminiCallStatsForTests()
+})
 afterEach(() => {
+  env.WARM_LEADS_GEMINI_API_KEY = savedOwnKey
   requireGeminiBudget(false)
   env.GEMINI_CALL_CEILING = 0
   resetGeminiCallStatsForTests()

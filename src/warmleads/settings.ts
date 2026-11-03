@@ -1,3 +1,4 @@
+import { warmLeadsKeyProblem } from '../llm/gemini/apiKey.js'
 import type { WarmLeadSettings } from '@prisma/client'
 import { env } from '../config/env.js'
 import { audit } from '../platform/audit.js'
@@ -32,6 +33,8 @@ export async function setPaused(tenantId: string, paused: boolean, by: string): 
     if (!env.WARM_LEADS_WORKER_ENABLED) {
       throw new ConflictError('The Warm Leads worker is switched off on this server (WARM_LEADS_WORKER_ENABLED). Nothing would run.')
     }
+    const keyProblem = warmLeadsKeyProblem()
+    if (keyProblem) throw new ConflictError(`Warm Leads cannot start: ${keyProblem}`)
     if (!s.pilotApprovedAt) {
       const pilot = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot', status: { in: ['preparing', 'queued', 'running'] } }, select: { id: true } })
       if (!pilot) throw new ConflictError('Prepare the pilot first: nothing else is evaluated before the pilot is approved.')
