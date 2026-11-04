@@ -137,6 +137,23 @@ describe('compressed bodies are read as leniently as fetch() read them', () => {
     expect(r.reason ?? '').not.toMatch(/reach that site/)
   })
 
+  it('a deflate body followed by stray bytes is still read (it used to hang until the deadline)', async () => {
+    wire(() => enc('deflate', Buffer.concat([zlib.deflateSync(text), Buffer.from('JUNK')])))
+    const r = await fetchPageRaw('https://acme.test/')
+    expect(r.ok).toBe(true)
+    expect(r.html).toBe(PAGE)
+    expect(r.durationMs).toBeLessThan(2000)
+  })
+
+  it('an encoding it cannot undo on a page that was served OK is refused, but on a 404 or a redirect it is just the status', async () => {
+    wire(() => ({ status: 404, headers: { ...html, 'content-encoding': 'zstd' }, body: Buffer.from('xx') }))
+    const gone = await fetchPageRaw('https://acme.test/')
+    expect(gone).toMatchObject({ ok: false, status: 404 })
+    wire((url) => (url.pathname === '/' ? { status: 301, headers: { location: '/next', 'content-encoding': 'zstd' }, body: Buffer.from('xx') } : { status: 200, headers: html, body: PAGE }))
+    const redirected = await fetchPageRaw('https://acme.test/')
+    expect(redirected).toMatchObject({ ok: true, status: 200 })
+  })
+
   it('an encoding it does not know is refused with a clear sentence', async () => {
     wire(() => enc('compress', text))
     const r = await fetchPageRaw('https://acme.test/')

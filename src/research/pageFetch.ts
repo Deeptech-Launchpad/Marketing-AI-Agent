@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import https from 'node:https'
-import { pipeline, Readable, Transform } from 'node:stream'
+import { pipeline, Readable, type Transform } from 'node:stream'
 import tls from 'node:tls'
 import zlib from 'node:zlib'
 import { env } from '../config/env.js'
@@ -284,38 +284,20 @@ function responseFor(status: number, body: ReadableStream<Uint8Array> | null, he
 const LENIENT = { flush: zlib.constants.Z_SYNC_FLUSH, finishFlush: zlib.constants.Z_SYNC_FLUSH }
 const LENIENT_BR = { flush: zlib.constants.BROTLI_OPERATION_FLUSH, finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH }
 
-/** "deflate" is sent both zlib-wrapped (RFC 1950) and raw (RFC 1951); the first byte tells which, as fetch() did. */
-function createDeflateAuto(): Transform {
-  let inner: Transform | null = null
-  const t: Transform = new Transform({
-    transform(chunk: Buffer, _enc, cb) {
-      if (!inner) {
-        inner = (chunk[0]! & 0x0f) === 8 ? zlib.createInflate(LENIENT) : zlib.createInflateRaw(LENIENT)
-        inner.on('data', (d: Buffer) => t.push(d))
-        inner.on('error', (e) => t.destroy(e))
-      }
-      inner.write(chunk, () => cb())
-    },
-    flush(cb) {
-      if (!inner) return cb()
-      inner.once('end', () => cb())
-      inner.end()
-    },
-  })
-  return t
+/**
+ * The content codings of a response, in the order they must be undone, or null when one is unknown.
+ * "deflate" is sent both zlib-wrapped (RFC 1950) and raw (RFC 1951); see rawDeflate below.
+ */
+function codingsFor(header: string): string[] | null {
+  const tokens = header.split(',').map((x) => x.trim().toLowerCase()).filter((x) => x && x !== 'identity')
+  const known = tokens.every((t) => t === 'gzip' || t === 'x-gzip' || t === 'deflate' || t === 'br')
+  return known ? tokens.reverse() : null
 }
 
-/** The decoders for a Content-Encoding header, in the order they must be applied, or null when one is unknown. */
-function decodersFor(header: string): Transform[] | null {
-  const tokens = header.split(',').map((x) => x.trim().toLowerCase()).filter((x) => x && x !== 'identity')
-  const out: Transform[] = []
-  for (const tok of tokens.reverse()) {
-    if (tok === 'gzip' || tok === 'x-gzip') out.push(zlib.createGunzip(LENIENT))
-    else if (tok === 'deflate') out.push(createDeflateAuto())
-    else if (tok === 'br') out.push(zlib.createBrotliDecompress(LENIENT_BR))
-    else return null
-  }
-  return out
+function decodersFor(codings: string[], rawDeflate: boolean): Transform[] {
+  return codings.map((c) =>
+    c === 'br' ? zlib.createBrotliDecompress(LENIENT_BR) : c === 'deflate' ? (rawDeflate ? zlib.createInflateRaw(LENIENT) : zlib.createInflate(LENIENT)) : zlib.createGunzip(LENIENT),
+  )
 }
 
 export function pinnedRequest(url: URL, headers: Record<string, string>, opts: TransportOptions, deps: RequestDeps = realDeps): Promise<Response> {
@@ -349,19 +331,44 @@ export function pinnedRequest(url: URL, headers: Record<string, string>, opts: T
           resolve(responseFor(status, null, headerEntries))
           return
         }
-        const decoders = decodersFor(String(res.headers['content-encoding'] ?? ''))
-        if (!decoders) {
-          res.destroy()
-          reject(asFetchError(new Error('The site used a content encoding that cannot be read.')))
-          return
+        const codings = codingsFor(String(res.headers['content-encoding'] ?? ''))
+        if (!codings) {
+          // An encoding this reader cannot undo. A page that was read OK is useless then; any other answer (a 404, a
+          // redirect) carries a body nobody reads, so it is reported as the fact it is, as fetch() did.
+          if (status >= 200 && status < 300) {
+            res.destroy()
+            reject(asFetchError(new Error('The site used a content encoding that cannot be read.')))
+            return
+          }
         }
-        // The same wiring as before the hardening: the response (through its decoders) IS the stream the reader consumes,
-        // so a cancel (the reader discarding a body it does not want) tears the whole chain down cleanly.
-        const out: Readable = decoders.length ? (pipeline as unknown as (...s: unknown[]) => Readable)(res, ...decoders, () => undefined) : res
-        // A deadline that fires mid-body ends this stream with the timeout error rather than a bare "connection reset".
-        failBody = (err: Error) => { if (!out.destroyed) out.destroy(asFetchError(err) as Error) }
-        const outHeaders = decoders.length ? headerEntries.filter(([k]) => !/^content-(encoding|length)$/i.test(k)) : headerEntries
-        resolve(responseFor(status, Readable.toWeb(out) as ReadableStream<Uint8Array>, outHeaders))
+        const start = (rawDeflate: boolean) => {
+          try {
+            const decoders = codings ? decodersFor(codings, rawDeflate) : []
+            // The same wiring as before the hardening: the response (through its decoders) IS the stream the reader consumes,
+            // so a cancel (the reader discarding a body it does not want) tears the whole chain down cleanly.
+            const out: Readable = decoders.length ? (pipeline as unknown as (...s: unknown[]) => Readable)(res, ...decoders, () => undefined) : res
+            // A deadline that fires mid-body ends this stream with the timeout error rather than a bare "connection reset".
+            failBody = (err: Error) => { if (!out.destroyed) out.destroy(asFetchError(err) as Error) }
+            const outHeaders = decoders.length ? headerEntries.filter(([k]) => !/^content-(encoding|length)$/i.test(k)) : headerEntries
+            resolve(responseFor(status, Readable.toWeb(out) as ReadableStream<Uint8Array>, outHeaders))
+          } catch (err) {
+            res.destroy()
+            reject(asFetchError(err))
+          }
+        }
+        if (codings && codings[0] === 'deflate') {
+          // Servers send both flavours under the name "deflate"; a zlib-wrapped stream starts with a byte whose low nibble is 8.
+          const onEarlyError = (err: Error) => reject(asFetchError(err))
+          res.once('error', onEarlyError)
+          res.once('readable', () => {
+            res.off('error', onEarlyError)
+            const first = res.read() as Buffer | null
+            if (first) res.unshift(first)
+            start(first ? (first[0]! & 0x0f) !== 8 : false)
+          })
+        } else {
+          start(false)
+        }
       } catch (err) {
         res.destroy()
         reject(asFetchError(err))
@@ -430,6 +437,7 @@ async function fetchWithRedirects(
         }
         url = next
         redirectChain.push(url.toString())
+        await res.body?.cancel().catch(() => undefined) // a redirect's body is never read: let the socket go now
         continue
       }
 
@@ -538,6 +546,7 @@ export async function fetchAsset(
         } catch {
           return { ok: false, ...empty, reason: 'The site returned an invalid redirect.' }
         }
+        await res.body?.cancel().catch(() => undefined)
         continue
       }
 
