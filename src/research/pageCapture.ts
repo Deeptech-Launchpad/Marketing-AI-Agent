@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { logger } from '../platform/logger.js'
-import { assertPublicHost, normalizeUrl } from './ssrfGuard.js'
+import { assertAllowedPort, assertPublicHost, isAllowedPort, normalizeUrl } from './ssrfGuard.js'
 
 // PAGE CAPTURE — A PICTURE OF A PAGE, TAKEN BY A REAL BROWSER.
 //
@@ -73,6 +73,7 @@ export async function captureUrl(rawUrl: string): Promise<CaptureResult> {
   const url = normalizeUrl(rawUrl)
   if (!url) return fail('A valid http(s) URL is required.')
   try {
+    assertAllowedPort(url)
     await assertPublicHost(url.hostname)
   } catch (err) {
     return fail((err as Error).message)
@@ -91,6 +92,7 @@ export async function renderUrlHtml(rawUrl: string): Promise<CaptureResult> {
   const url = normalizeUrl(rawUrl)
   if (!url) return fail('A valid http(s) URL is required.')
   try {
+    assertAllowedPort(url)
     await assertPublicHost(url.hostname)
   } catch (err) {
     return fail((err as Error).message)
@@ -116,6 +118,7 @@ export async function captureHtml(html: string, opts: { baseUrl?: string | null 
     const url = normalizeUrl(opts.baseUrl)
     if (url) {
       try {
+        assertAllowedPort(url)
         await assertPublicHost(url.hostname)
         baseUrl = url.toString()
       } catch {
@@ -154,6 +157,7 @@ export async function inlineImagesFromPage(pageUrl: string, urls: string[]): Pro
   const url = normalizeUrl(pageUrl)
   if (!url) return {}
   try {
+    assertAllowedPort(url)
     await assertPublicHost(url.hostname)
   } catch {
     return {}
@@ -405,7 +409,7 @@ async function capture(target: {
         try {
           const u = new URL(request.url)
           if (u.protocol === 'data:' || u.protocol === 'blob:') allowed = true
-          else if (u.protocol === 'http:' || u.protocol === 'https:') allowed = await hostAllowed(u.hostname)
+          else if (u.protocol === 'http:' || u.protocol === 'https:') allowed = isAllowedPort(u) && (await hostAllowed(u.hostname))
         } catch {
           allowed = false
         }

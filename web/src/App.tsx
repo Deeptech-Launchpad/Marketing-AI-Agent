@@ -12,6 +12,7 @@ import { DecisionMakers } from './engines/DecisionMakers'
 import { Outreach } from './engines/Outreach'
 import { Engagement } from './engines/Engagement'
 import { CrmSync } from './engines/CrmSync'
+import { WarmLeads } from './engines/WarmLeads'
 import { Settings } from './engines/Settings'
 import { UserManual } from './help/UserManual'
 
@@ -57,6 +58,8 @@ function Gate() {
           <Route path="/settings" element={<Settings />} />
     <Route path="/help" element={<UserManual />} />
           <Route path="/settings/crm-sync" element={<CrmSync />} />
+          <Route path="/warm-leads" element={<WarmLeads />} />
+          <Route path="/settings/warm-leads" element={<Navigate to="/warm-leads" replace />} />
           <Route path="/crm" element={<Navigate to="/settings/crm-sync" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

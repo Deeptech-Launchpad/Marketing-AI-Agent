@@ -2947,3 +2947,209 @@ model BulkEmailRecipient {
   @@index([tenantId, status, scheduledAt])
   @@index([tenantId, toEmail])
 }
+
+// ── Warm leads (2026-10-30) ─────────────────────────────────────────────────
+// Evaluates NXT Sales companies as warm / cold / not enough data, from evidence
+// this platform already collects (CRM records, the company website, and — for
+// companies the fast screen flags — the Intent Signals web research). Each
+// result is written to NXT Sales (Companies → Warm Leads). Nothing here sends
+// email or contacts a company. See src/warmleads/.
+//
+// PERMANENT MODULE (2026-11-04). The run is now one night's work, or the pilot:
+//   kind:   pilot | daily | (legacy: test | batch | retry)
+//   status: preparing | queued | running | completed | failed
+// `bucket` ties a run to its usage row (WarmLeadUsage): "pilot" or "day:YYYY-MM-DD".
+// The full company list is only processed after the pilot was approved
+// (WarmLeadSettings.pilotApprovedAt). Per-company state lives in WarmLeadCompany.
+model WarmLeadRun {
+  id           String    @id
+  tenantId     String
+  kind         String
+  status       String    @default("queued")
+  requestedBy  String
+  // The companies chosen when the run was started, in order — kept so the run
+  // is traceable even if the CRM list changes later.
+  companyIds   Json
+  // How the companies were chosen: seed, size, and per company the strata it
+  // stands for (warmleads/sample.ts). Null for runs that are not a sample.
+  sample       Json?
+  total        Int       @default(0)
+  deepCheckCap Int       @default(0)
+  deepChecks   Int       @default(0)
+  approvedAt   DateTime?
+  approvedBy   String?
+  costUsd      Decimal   @default(0) @db.Decimal(12, 6)
+  failureReason String?
+  bucket       String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  evaluations WarmLeadEvaluation[]
+
+  @@index([tenantId, kind, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId, bucket])
+}
+
+// One company in one run.
+//   status:         queued | running | done | failed
+//   classification: warm | cold | insufficient_data   (null until done)
+//   deepCheck:      done | not_needed | skipped_cap | failed
+//   reasons: [{ signal, polarity, points, summary, evidence, sourceUrl, observedAt, source }]
+model WarmLeadEvaluation {
+  id              String    @id
+  tenantId        String
+  runId           String
+  crmCompanyId    String
+  companyName     String?
+  website         String?
+  contact         Json?
+  status          String    @default("queued")
+  classification  String?
+  score           Int?
+  confidence      String?
+  summary         String?
+  reasons         Json?
+  deepCheck       String?
+  enrichmentId    String?
+  intentRunId     String?
+  costUsd         Decimal   @default(0) @db.Decimal(12, 6)
+  attempts        Int       @default(0)
+  error           String?
+  crmSyncedAt     DateTime?
+  crmSyncError    String?
+  // Permanent module: screen = CRM + website only; deep = Gemini web research ran too.
+  tier               String?
+  // Web research was cut short (call ceiling, per-night cap) or could not be read: the result is not final.
+  researchIncomplete Boolean @default(false)
+  // Gemini calls this one evaluation made (reserved against the bucket's ceiling).
+  geminiCalls        Int     @default(0)
+  bucket             String?
+  startedAt       DateTime?
+  evaluatedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  run WarmLeadRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, crmCompanyId])
+  @@index([tenantId, crmCompanyId, status])
+  @@index([tenantId, classification])
+}
+
+// ── Warm leads: the permanent module (2026-11-04) ───────────────────────────
+
+// Controls. One row per tenant. EVERYTHING defaults to the safe value: paused,
+// 25 companies and 300 Gemini calls a night, the 23:00–06:00 IST window, sync off.
+// Limits can only be raised up to what an admin approved (approvedMax*); the
+// pilot must be approved before daily processing; NXT Sales sync has its own
+// approval. These gates are enforced by the service, not only by the screen.
+model WarmLeadSettings {
+  tenantId             String    @id
+  paused               Boolean   @default(true)
+  dailyCompanyLimit    Int       @default(25)
+  dailyGeminiCeiling   Int       @default(300)
+  pilotSize            Int       @default(100)
+  pilotGeminiCeiling   Int       @default(1200)
+  // Highest values an admin may set; raised only by an explicit approval after review (25/300 -> 50/600 -> 100/1200).
+  approvedMaxCompanies Int       @default(25)
+  approvedMaxCeiling   Int       @default(300)
+  // Percent of the night's companies that may be retries of earlier failures.
+  retryShare           Int       @default(20)
+  windowStart          String    @default("23:00")
+  windowEnd            String    @default("06:00")
+  timezone             String    @default("Asia/Kolkata")
+  pilotApprovedAt      DateTime?
+  pilotApprovedBy      String?
+  scaleApprovedAt      DateTime?
+  scaleApprovedBy      String?
+  // Sending results to NXT Sales: off until separately approved (and the server's own switch is on).
+  syncEnabled          Boolean   @default(false)
+  syncApprovedAt       DateTime?
+  syncApprovedBy       String?
+  // The admin asked for the company list to be re-read from NXT Sales; the worker does it.
+  listRefreshRequestedAt DateTime?
+  listRefreshedAt        DateTime?
+  listRefreshState       String?    // running | done | failed
+  listRefreshMessage     String?
+  updatedBy            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+// One row per NXT Sales company: the permanent "to do" list and the CURRENT result.
+//   state: pending | queued (pilot) | running | evaluated | failed | needs_reevaluation
+// A failed or incomplete evaluation never overwrites a valid classification
+// (state becomes needs_reevaluation instead); only a completed evaluation does.
+model WarmLeadCompany {
+  id                  String    @id
+  tenantId            String
+  crmCompanyId        String
+  name                String
+  domain              String?
+  country             String?
+  industry            String?
+  // Position in NXT Sales' own list order when last read (pinned first, then newest): the order pending companies are taken.
+  listPosition        Int       @default(0)
+  inCrm               Boolean   @default(true)
+  cohort              String?   // pilot | null
+  state               String    @default("pending")
+  attempts            Int       @default(0)
+  lastAttemptAt       DateTime?
+  nextAttemptAt       DateTime?
+  lastError           String?
+  researchIncomplete  Boolean   @default(false)
+  lastEvaluationId    String?
+  // The current valid result (the latest completed evaluation).
+  currentEvaluationId String?
+  classification      String?
+  score               Int?
+  confidence          String?
+  summary             String?
+  evaluatedAt         DateTime?
+  // NXT Sales: which evaluation it holds, if any.
+  syncedEvaluationId  String?
+  syncedAt            DateTime?
+  syncError           String?
+  firstSeenAt         DateTime  @default(now())
+  lastSeenAt          DateTime  @default(now())
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([tenantId, crmCompanyId])
+  @@index([tenantId, state, listPosition])
+  @@index([tenantId, state, nextAttemptAt])
+  @@index([tenantId, classification])
+  @@index([tenantId, cohort, state])
+}
+
+// What one bucket (the pilot, or one night) may spend, and has spent. The ceilings
+// are enforced by single conditional UPDATEs on this row, so they hold across
+// restarts and across any number of workers.
+//   bucket: "pilot" | "day:YYYY-MM-DD" (the date the night's window STARTED, in the settings' timezone)
+model WarmLeadUsage {
+  id               String   @id
+  tenantId         String
+  bucket           String
+  geminiCalls      Int      @default(0)
+  geminiCeiling    Int      @default(0)
+  companiesStarted Int      @default(0)
+  companyLimit     Int      @default(0)
+  retriesStarted   Int      @default(0)
+  retryLimit       Int      @default(0)
+  screened         Int      @default(0)
+  deepResearched   Int      @default(0)
+  completed        Int      @default(0)
+  failed           Int      @default(0)
+  incomplete       Int      @default(0)
+  // Cost as the ledger reported it; calls without a price are counted, never estimated.
+  pricedCostUsd    Decimal  @default(0) @db.Decimal(12, 6)
+  unpricedCalls    Int      @default(0)
+  stoppedReason    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([tenantId, bucket])
+}

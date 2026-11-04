@@ -126,6 +126,7 @@
   --e-scoring: #164e63;
   --e-qualification: #7c2d12;
   --e-crm: #115e59;
+  --e-warmleads: #991b1b;
 
   /* ── Theme-dependent surface behaviour ──────────────────────────────── */
   /* Text placed on top of a filled accent. */
@@ -287,6 +288,7 @@
   --e-scoring: #06b6d4;
   --e-qualification: #fbbf24;
   --e-crm: #14b8a6;
+  --e-warmleads: #ef4444;
 
   --on-accent: #06121a;
   --scrim: rgba(3, 5, 8, 0.66);

@@ -8,6 +8,7 @@ import { campaignRoutes } from './campaigns.routes.js'
 import { companyRoutes } from './companies.routes.js'
 import { decisionMakerRoutes } from './decisionMakers.routes.js'
 import { enrichmentRoutes } from './enrichment.routes.js'
+import { warmLeadsRoutes } from './warmLeads.routes.js'
 import { intentRoutes } from './intent.routes.js'
 import { knowledgeRoutes } from './knowledge.routes.js'
 import { engagementRoutes } from './engagement.routes.js'
@@ -64,6 +65,7 @@ apiRoutes.use('/crm-leads', crmLeadsRoutes)
 // Read-only reporting on what this platform spent against its own API keys.
 apiRoutes.use('/usage', usageRoutes)
 apiRoutes.use('/enrichment', enrichmentRoutes)
+apiRoutes.use('/warm-leads', warmLeadsRoutes)
 apiRoutes.use('/intent', intentRoutes)
 apiRoutes.use('/decision-makers', decisionMakerRoutes)
 apiRoutes.use('/website-audit', websiteAuditRoutes)

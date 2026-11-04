@@ -36,6 +36,7 @@ export const QUEUE_INTENT_MONITOR = 'intent.monitor'
 export const QUEUE_OUTREACH_TEST_DISPATCH = 'outreach.test_dispatch'
 /** Bulk Email Upload (2026-10-07): the one-at-a-time sender. */
 export const QUEUE_BULK_EMAIL_DISPATCH = 'outreach.bulk_dispatch'
+// Warm Leads has NO queue here: it runs in its own worker process (src/warmleadsWorker.ts) from its own table.
 
 const ALL_QUEUES = [
   QUEUE_RUN_STEP,

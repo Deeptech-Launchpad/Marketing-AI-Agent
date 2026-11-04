@@ -1,4 +1,5 @@
 import pLimit from 'p-limit'
+import { reserveGeminiCallAsync } from './callCeiling.js'
 import type { z } from 'zod'
 import { env } from '../../config/env.js'
 import { UpstreamError } from '../../platform/errors.js'
@@ -83,6 +84,8 @@ function firstText(res: GeminiResponse): string {
 }
 
 async function post(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: GeminiResponse }> {
+  // Counted before the request is made; past the ceiling this throws and nothing is sent.
+  await reserveGeminiCallAsync(path.replace(/^models\/[^:]+:/, ''))
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), env.GEMINI_ATTEMPT_TIMEOUT_MS)
   try {
@@ -457,6 +460,7 @@ export class GeminiGateway implements LlmPort {
 
   async health(): Promise<{ ok: boolean; detail?: string }> {
     try {
+      await reserveGeminiCallAsync('models.list')
       const res = await fetch(`${env.GEMINI_API_BASE}/models?key=${env.GEMINI_API_KEY}`, {
         signal: AbortSignal.timeout(8_000),
       })

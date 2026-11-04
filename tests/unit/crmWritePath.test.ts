@@ -124,8 +124,17 @@ describe('the HTTP request', () => {
   // the PUT does — tested below.
   it('offers no PATCH or DELETE, and POST only as crmPost', async () => {
     const client = await import('../../src/crm/nxtSales/httpClient.js')
-    expect(Object.keys(client).filter((k) => /patch|delete/i.test(k))).toEqual([])
+    // 2026-11-04: the ONE delete is the Warm Leads withdrawal (a company that stopped being Warm / Early Signal is taken
+    // off NXT Sales' list). It is not a general delete: it is a single named function, it exists only for the
+    // /api/marketing-warm-leads/companies/:id path, and the transport refuses it everywhere except inside the
+    // Warm Leads 'sync' scope (tests/unit/warmLeadCrmScope.test.ts proves each of those). Nothing else may be added.
+    expect(Object.keys(client).filter((k) => /patch|delete/i.test(k))).toEqual(['crmWarmLeadsDelete'])
     expect(Object.keys(client).filter((k) => /post/i.test(k))).toEqual(['crmPost'])
+    const src = (await import('node:fs')).readFileSync(new URL('../../src/crm/nxtSales/httpClient.ts', import.meta.url), 'utf8')
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    // Exactly four mentions: the endpoint list's type and its one entry, the sender's type, and the withdrawal call.
+    expect([...code.matchAll(/'DELETE'/g)]).toHaveLength(4)
+    expect([...code.matchAll(/'PATCH'/g)]).toHaveLength(0)
   })
 })
 

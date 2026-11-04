@@ -15,7 +15,7 @@ const db = {
 }
 vi.mock('../../src/platform/db.js', () => ({ prisma: db, newId: () => 'id_test' }))
 
-const { fetchPageRaw, fetchPage } = await import('../../src/research/pageFetch.js')
+const { fetchPageRaw, fetchPage, setTransportForTests } = await import('../../src/research/pageFetch.js')
 const { env } = await import('../../src/config/env.js')
 
 function htmlResponse(read: (signal: AbortSignal) => Promise<{ done: boolean; value?: Uint8Array }>, signal: AbortSignal) {
@@ -36,10 +36,12 @@ beforeEach(() => {
   fetchMock.mockReset()
   db.researchArtifact.findFirst.mockReset()
   db.researchArtifact.create.mockClear()
-  vi.stubGlobal('fetch', fetchMock)
+  // The reader no longer calls the global fetch (its connection is pinned); the mocked network goes in through its test seam.
+  setTransportForTests((url, headers, opts) => fetchMock(url.toString(), { redirect: 'manual', signal: opts.signal, headers }))
 })
 afterEach(() => {
   vi.useRealTimers()
+  setTransportForTests(null)
   vi.unstubAllGlobals()
 })
 
