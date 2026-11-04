@@ -37,7 +37,7 @@ export async function setPaused(tenantId: string, paused: boolean, by: string): 
     const keyProblem = warmLeadsKeyProblem()
     if (keyProblem) throw new ConflictError(`Warm Leads cannot start: ${keyProblem}`)
     if (!s.pilotApprovedAt) {
-      const pilot = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot', status: { in: ['preparing', 'queued', 'running'] } }, select: { id: true } })
+      const pilot = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot', status: { in: ['preparing', 'queued', 'running', 'completed'] } }, select: { id: true } })
       if (!pilot) throw new ConflictError('Prepare the pilot first: nothing else is evaluated before the pilot is approved.')
     } else if ((await prisma.warmLeadCompany.count({ where: { tenantId, inCrm: true } })) === 0) {
       throw new ConflictError('Read the company list from NXT Sales first.')

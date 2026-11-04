@@ -333,10 +333,14 @@ async function readWebsite(tenantId: string, company: CrmCompany, requestedBy: s
 
 async function webResearch(tenantId: string, companyId: string, requestedBy: string): Promise<{ status: DeepCheck; signals: ObservedSignal[]; intentRunId: string; costUsd: number; reason: string | null }> {
   const { id } = await queueIntentDetection({ tenantId, crmCompanyId: companyId, requestedByCrmUserId: requestedBy })
-  const refusedBefore = geminiCallStats().blocked
+  const before = geminiCallStats()
   await runIntentDetection(id)
   // If the call ceiling refused any call during this research, the research is incomplete — never "nothing found".
-  const cutShort = geminiCallStats().blocked > refusedBefore
+  const after = geminiCallStats()
+  const cutShort = after.blocked > before.blocked
+  // Gemini itself failed (a rejected key, Google's quota, an outage) and the providers carried on with "nothing found": the
+  // research was NOT done, and a company must never be called cold because the question could not be asked.
+  const geminiFailed = after.failed > before.failed
   const run = await prisma.intentDetectionRun.findUnique({ where: { id }, select: { status: true, failureReason: true, costUsd: true, providerResults: true } })
   const stored = await prisma.intentSignal.findMany({ where: { tenantId, crmCompanyId: companyId }, orderBy: { detectedAt: 'desc' }, take: 300 })
   const signals = presentSignals(stored).map(
@@ -360,6 +364,9 @@ async function webResearch(tenantId: string, companyId: string, requestedBy: str
   if (cutShort) {
     // What was found before the ceiling still stands; the missing part is what makes it incomplete.
     return { status: 'skipped_ceiling', signals: ok ? signals : [], intentRunId: id, costUsd: Number(run?.costUsd ?? 0), reason: 'The Gemini call limit was reached during this research.' }
+  }
+  if (geminiFailed) {
+    return { status: 'failed', signals: [], intentRunId: id, costUsd: Number(run?.costUsd ?? 0), reason: `Gemini returned an error during this research (${after.lastFailure ?? 'no detail'}), so it was not completed.` }
   }
   return { status: usable ? 'done' : 'failed', signals: usable ? signals : [], intentRunId: id, costUsd: Number(run?.costUsd ?? 0), reason: usable ? null : unreadable ?? run?.failureReason ?? 'The web research did not complete.' }
 }

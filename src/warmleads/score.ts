@@ -333,14 +333,17 @@ export function classify(input: EvaluationInput): EvaluationResult {
   } else if (has('existing_customer')) {
     classification = 'existing_customer'
     summary = 'Existing customer: a won deal is on record — account management, not new-business outreach.'
-  } else if (!websiteRead && !crmHistory) {
+  } else if (!websiteRead && (!crmHistory || (!intent.length && input.deep.status !== 'done'))) {
+    // Nothing was read, no web research was done and there is no intent evidence: a CRM note such as a bounce is not an examination, so the company
+    // cannot be called cold on it. Cold needs a website that was read or research that finished.
     classification = 'insufficient_data'
+    const history = crmHistory ? 'the CRM history shows no current interest' : 'there is no recent CRM history'
     summary =
       w.status === 'partial'
-        ? "Nothing to evaluate: the website on record redirects to a different company's site, and there is no recent CRM history."
+        ? `Nothing to evaluate: the website on record redirects to a different company's site, and ${history}.`
         : w.status === 'unreachable'
-          ? 'Nothing to evaluate: the website says its page does not exist, and there is no recent CRM history.'
-          : 'Nothing to evaluate: no website on the CRM record and no recent CRM history.'
+          ? `Nothing to evaluate: the website says its page does not exist, and ${history}.`
+          : `Nothing to evaluate: no website on the CRM record and ${history}.`
   } else if (researchIncomplete && !intent.length) {
     classification = 'insufficient_data'
     summary = incompleteResearchText(input.deep.status)

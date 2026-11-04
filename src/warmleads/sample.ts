@@ -143,11 +143,15 @@ export function selectSample(
     const have = () => [...picked.values()].filter((p) => p.strata.includes(s)).length
     while (picked.size < size && have() < want && pool.length) {
       let best = 0
-      let bestKey: [number, number] | null = null
+      let bestKey: [number, number, number] | null = null
       for (let i = 0; i < pool.length; i++) {
         const c = pool[i]!
-        const key: [number, number] = [countryCount.get(norm(c.country)) ?? 0, industryCount.get(norm(c.industry)) ?? 0]
-        if (!bestKey || key[0] < bestKey[0] || (key[0] === bestKey[0] && key[1] < bestKey[1])) {
+        // Countries AND industries are balanced together: the least-represented combination first (the two counts added),
+        // then the less-represented country, then industry. Country alone left whole industries out when countries were plentiful.
+        const cc = countryCount.get(norm(c.country)) ?? 0
+        const ic = industryCount.get(norm(c.industry)) ?? 0
+        const key: [number, number, number] = [cc + ic, cc, ic]
+        if (!bestKey || key[0] < bestKey[0] || (key[0] === bestKey[0] && (key[1] < bestKey[1] || (key[1] === bestKey[1] && key[2] < bestKey[2])))) {
           best = i
           bestKey = key
         }
@@ -225,9 +229,28 @@ export async function allCompanies(query: { lastActivity?: string } = {}, maxPag
  * The representative sample of the CRM, or as much of it as the CRM holds.
  * Read-only. The companies come back with the sample so a run can be started from it.
  */
+/** One record per company id, chosen without regard to the order the CRM listed them in. */
+export function dedupeById(items: CrmCompany[]): CrmCompany[] {
+  const best = new Map<string, CrmCompany>()
+  const better = (a: CrmCompany, b: CrmCompany) => {
+    const ua = a.updatedAt ?? ''
+    const ub = b.updatedAt ?? ''
+    if (ua !== ub) return ua > ub
+    return JSON.stringify(a) < JSON.stringify(b)
+  }
+  for (const c of items) {
+    const cur = best.get(c.id)
+    if (!cur || better(c, cur)) best.set(c.id, c)
+  }
+  return [...best.values()]
+}
+
 export async function buildSample(opts: { seed: number; size?: number }): Promise<{ sample: SampleResult; companies: Map<string, CrmCompany> }> {
   const crm = getCrm()
-  const listed = await allCompanies()
+  const read = await allCompanies()
+  // Paging a live CRM by offset can return the same company twice. One copy is kept, chosen by a rule that does not depend on
+  // the order the CRM answered in (the most recently updated; a tie goes to the smaller text), so the sample stays reproducible.
+  const listed = { ...read, items: dedupeById(read.items) }
   const byId = new Map(listed.items.map((c) => [c.id, c]))
 
   // Deals: one read of every deal; a company is a customer with a won deal, and has an open deal with any other not-lost stage.
@@ -300,6 +323,15 @@ export async function buildSample(opts: { seed: number; size?: number }): Promis
     })
 
   const picked = selectSample(candidates, { seed: opts.seed, size: opts.size })
+  if (listed.truncated) {
+    picked.notes.push(`The company list was cut off after ${listed.items.length.toLocaleString()} companies, so only those could be sampled. The pilot is not drawn from the whole CRM.`)
+  }
+  if (read.items.length !== listed.items.length) {
+    picked.notes.push(`${(read.items.length - listed.items.length).toLocaleString()} repeated company record(s) in the CRM list were ignored.`)
+  }
+  if (emailReadFailures > 0) {
+    picked.notes.push(`The emails of ${emailReadFailures.toLocaleString()} companies could not be read, so any reply from them is not reflected in the "recent reply" group.`)
+  }
   if (probeTruncated) {
     picked.notes.push(
       `Replies were looked for in the ${probe.length.toLocaleString()} most recently active of ${recentActivity.toLocaleString()}${recentActivity > probe.length ? '+' : ''} companies with activity in the last ${RECENT_ACTIVITY_DAYS} days (limit WARM_LEADS_REPLY_PROBE_CAP=${cap}); a company with a reply outside those was not seen.`,

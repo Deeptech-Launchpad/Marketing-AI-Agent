@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CheckCircle2, Play, RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAsync } from '../../lib/hooks'
@@ -16,15 +16,19 @@ export function PilotPanel({ o, admin, act, busy, refreshKey }: { o: Overview; a
   const p = o.pilot
   const size = o.settings.pilotSize
 
-  const results = useAsync<{ evaluations: Evaluation[] }>((signal) => api.get('/warm-leads/pilot/results', { signal }), [refreshKey, o.stage], {
+  // The refresh counter must NOT be part of the key: a changed key blanks the cards every few seconds. A refresh keeps them on screen.
+  const results = useAsync<{ evaluations: Evaluation[] }>((signal) => api.get('/warm-leads/pilot/results', { signal }), [o.stage], {
     enabled: o.stage === 'pilot_review' || o.stage === 'pilot_running',
   })
+  useEffect(() => {
+    if (refreshKey > 0) results.refresh()
+  }, [refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (o.stage === 'daily') {
     return (
       <Panel title="Pilot" subtitle={`${size}-company pilot`}>
         <p className="note">
-          <CheckCircle2 size={14} /> Approved {fmt(p.approvedAt)}{p.approvedBy ? ` by ${p.approvedBy}` : ''}. Daily processing is enabled.
+          <CheckCircle2 size={14} /> Approved {fmt(p.approvedAt)}{p.approvedBy ? ` by ${p.approvedBy}` : ''}. Daily processing is now allowed, but it stays paused until you press Start under Controls.
         </p>
       </Panel>
     )
@@ -92,7 +96,17 @@ export function PilotPanel({ o, admin, act, busy, refreshKey }: { o: Overview; a
       {o.stage === 'pilot_review' && (
         <div style={{ marginTop: 'var(--s4)' }}>
           <h3 style={{ margin: '0 0 var(--s2)' }}>Review the results, then approve</h3>
-          <p className="note">Read every result below. Failed companies are retried later and do not block approval. Nothing else is processed until the pilot is approved.</p>
+          <p className="note">Read every result below. Failed companies are retried and do not block approval, but approve only if the results you can read are meaningful. Nothing else is processed until the pilot is approved, and approving does not start daily processing: it stays paused until you press Start.</p>
+          {p.counts.total < size && (
+            <p className="note note--caveat" role="alert">
+              This pilot has {num(p.counts.total)} companies, not {num(size)}. Approve it only if that is what you expect.
+            </p>
+          )}
+          {p.counts.failed + p.counts.incomplete > 0 && (
+            <p className="note note--caveat">
+              {num(p.counts.failed)} failed and {num(p.counts.incomplete)} incomplete of {num(p.counts.total)}. They stay as they are (never Cold) and are retried later.
+            </p>
+          )}
           {admin ? (
             <>
               <label className="check" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: 'var(--s2) 0' }}>

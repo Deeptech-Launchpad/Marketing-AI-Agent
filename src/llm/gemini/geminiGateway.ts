@@ -1,5 +1,5 @@
 import pLimit from 'p-limit'
-import { reserveGeminiCallAsync } from './callCeiling.js'
+import { recordGeminiFailure, reserveGeminiCallAsync } from './callCeiling.js'
 import type { z } from 'zod'
 import { env } from '../../config/env.js'
 import { resolveGeminiApiKey } from './apiKey.js'
@@ -219,6 +219,7 @@ export class GeminiGateway implements LlmPort {
       )
     }
 
+    recordGeminiFailure(lastError)
     throw new UpstreamError(
       `${lastError?.message ?? 'Gemini call failed'} (tried ${candidates.length} model(s))`,
       { retryable: false },
@@ -343,6 +344,7 @@ export class GeminiGateway implements LlmPort {
       }
     }
 
+    recordGeminiFailure(lastError)
     return {
       ok: false,
       provider: this.name,

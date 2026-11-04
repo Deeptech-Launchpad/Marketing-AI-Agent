@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { useAsync } from '../../lib/hooks'
 import { Button, Chip, Panel } from '../../components/ui/primitives'
@@ -20,13 +20,20 @@ export function CompanyList({ refreshKey, initialFilter = 'all' }: { refreshKey:
 
   const list = useAsync<{ total: number; page: number; limit: number; items: CompanyRow[] }>(
     (signal) => api.get(`/warm-leads/companies?filter=${filter}&page=${page}&limit=${PAGE}${query ? `&search=${encodeURIComponent(query)}` : ''}`, { signal }),
-    [filter, page, query, refreshKey],
+    [filter, page, query],
   )
   const detail = useAsync<{ company: CompanyRow; history: Evaluation[] }>(
     (signal) => api.get(`/warm-leads/companies/${encodeURIComponent(open!)}`, { signal }),
-    [open, refreshKey],
+    [open],
     { enabled: Boolean(open) },
   )
+  // A refresh keeps the table and the open company on screen; putting the counter in the key above would blank them every few seconds.
+  useEffect(() => {
+    if (refreshKey > 0) {
+      list.refresh()
+      if (open) detail.refresh()
+    }
+  }, [refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const pages = list.data ? Math.max(1, Math.ceil(list.data.total / PAGE)) : 1
 
   return (

@@ -347,3 +347,35 @@ describe('warm-lead classification', () => {
     expect(r.reasons.find((x) => x.signal === 'layoffs')!.points).toBe(POINTS.negativePublicSignal)
   })
 })
+
+// A company nobody examined cannot be called cold. A bounce, an auto-reply or an old lost deal is a note in the CRM, not an
+// examination; without a website that was read, or research that finished, the honest answer is "not enough data".
+describe('no website, no research: never cold on a CRM note alone', () => {
+  const noSite = site({ status: 'no_website', url: null })
+
+  it('a bounce or auto-reply is not enough to call a company cold', () => {
+    const r = classify(input({ crm: { ok: true, signals: [crmSig('automated_inbound_only', 'neutral')] }, website: noSite }))
+    expect(r.classification).toBe('insufficient_data')
+    expect(r.summary).toMatch(/Nothing to evaluate/)
+  })
+
+  it('nor is a negative note such as a past lost deal', () => {
+    const r = classify(input({ crm: { ok: true, signals: [crmSig('lost_deal', 'negative')] }, website: noSite }))
+    expect(r.classification).toBe('insufficient_data')
+  })
+
+  it('a real reply still makes it an early signal without a website (unchanged)', () => {
+    const r = classify(input({ crm: { ok: true, signals: [crmSig('inbound_engagement')] }, website: noSite }))
+    expect(r.classification).toBe('early_signal')
+  })
+
+  it('a website that WAS read, with nothing found, is still cold (the rule is not simply "never cold")', () => {
+    const r = classify(input({ crm: { ok: true, signals: [crmSig('automated_inbound_only', 'neutral')] }, website: site() }))
+    expect(r.classification).toBe('cold')
+  })
+
+  it('web research that finished (nothing found) may call a company without a website cold', () => {
+    const r = classify(input({ crm: { ok: true, signals: [crmSig('automated_inbound_only', 'neutral')] }, website: noSite, deep: { status: 'done', signals: [] } }))
+    expect(r.classification).toBe('cold')
+  })
+})

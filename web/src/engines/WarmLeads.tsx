@@ -81,6 +81,11 @@ export function WarmLeads() {
           {error}
         </p>
       )}
+      {ov.error && ov.data && (
+        <p className="note note--caveat" role="alert">
+          The screen could not be refreshed ({ov.error.message}). What is shown may be out of date; the status below is not live.
+        </p>
+      )}
       {!o.server.workerEnabled && (
         <p className="note note--caveat">
           The Warm Leads worker is switched off on this server (WARM_LEADS_WORKER_ENABLED). You can prepare everything here, but nothing is evaluated until it is switched on.
@@ -106,14 +111,14 @@ export function WarmLeads() {
           <Metric label="Cold" value={num(c.cold)} />
           <Metric label="Not enough data" value={num(c.insufficientData)} />
           <Metric label="Research incomplete" value={num(c.researchIncomplete)} hint="never counted as Cold" />
-          <Metric label="Failed" value={num(c.failed)} hint="will retry" />
+          <Metric label="Failed" value={num(c.failed)} hint="retried a few times, then by Retry failed" />
           <Metric label="Re-check due" value={num(c.needsReevaluation)} hint="keeps its result" />
           <Metric label="In progress" value={num(c.inProgress)} />
         </MetricRow>
         <p className="note" style={{ marginTop: 'var(--s3)' }}>
           Existing customers {num(c.existingCustomer)} · active opportunities {num(c.activeOpportunity)} · do not contact {num(c.doNotContact)}
           {c.notInCrm ? ` · ${num(c.notInCrm)} no longer in NXT Sales` : ''}
-          {attention ? ` · ${num(attention)} waiting for a retry` : ''}
+          {attention ? ` · ${num(attention)} failed or due for a re-check` : ''}
         </p>
       </Panel>
 

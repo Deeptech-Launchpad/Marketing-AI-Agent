@@ -243,6 +243,9 @@ describeIfDb('what an outcome does to a company', () => {
   })
 })
 
+// The pilot reads the company list first; here the list is already in the table, so reading it again is skipped.
+const noRefresh = (async () => ({ seen: 0, created: 0, markedGone: 0, truncated: false })) as never
+
 describeIfDb('the pilot', () => {
   it('turns a requested pilot into queued evaluations, takes them in order, and closes the run when none is left', async () => {
     const { requestPilot, preparePilot, pilotView } = await import('../../src/warmleads/pilot.js')
@@ -255,7 +258,7 @@ describeIfDb('the pilot', () => {
       sample: { seed: 1, size: 3, picks: ids.map((id) => ({ id, name: id, country: null, industry: null, website: 'website', strata: ['general'], pickedFor: 'general' })), coverage: [], countries: 1, industries: 1, notes: [], pool: {} },
       companies: new Map(ids.map((id, i) => [id, crmCompany(900 + i)])),
     })) as never
-    expect(await preparePilot(T, build)).toBe(true)
+    expect(await preparePilot(T, build, noRefresh)).toBe(true)
     expect((await pilotView(T)).counts).toMatchObject({ total: 3, queued: 3 })
 
     const claims = []
@@ -266,6 +269,56 @@ describeIfDb('the pilot', () => {
     await prisma.warmLeadEvaluation.updateMany({ where: { runId: claims[0]!.runId }, data: { status: 'done', classification: 'cold' } })
     expect(await companies.finishRunIfIdle(claims[0]!.runId)).toBe(true)
     expect((await pilotView(T)).canApprove).toBe(true)
+  })
+
+  it('a retried pilot company replaces its earlier result in the pilot view, and approval waits for the retry', async () => {
+    const { pilotView, pilotResults, approvePilot } = await import('../../src/warmleads/pilot.js')
+    const base = await pilotView(T)
+    const first = await prisma.warmLeadEvaluation.findFirstOrThrow({ where: { runId: base.run!.id } })
+    await prisma.warmLeadEvaluation.update({ where: { id: first.id }, data: { status: 'failed', classification: null, researchIncomplete: false } })
+    expect((await pilotView(T)).counts).toMatchObject({ total: 3, failed: 1 })
+
+    // The retry is a NEW evaluation in a separate "retry" run, exactly as the worker makes it.
+    const retryRun = await prisma.warmLeadRun.create({ data: { id: `${T}-retry`, tenantId: T, kind: 'retry', status: 'running', requestedBy: 'tester', companyIds: [first.crmCompanyId], total: 1, bucket: 'pilot' } })
+    const ev = await prisma.warmLeadEvaluation.create({ data: { id: `${T}-ev-retry`, tenantId: T, runId: retryRun.id, crmCompanyId: first.crmCompanyId, companyName: first.companyName, bucket: 'pilot', status: 'running' } })
+    let v = await pilotView(T)
+    expect(v.counts).toMatchObject({ total: 3, failed: 0, running: 1 }) // the old failure is no longer counted
+    expect(v.canApprove).toBe(false)
+    await expect(approvePilot(T, 'admin-1')).rejects.toThrow(/retried|still waiting/)
+
+    await prisma.warmLeadEvaluation.update({ where: { id: ev.id }, data: { status: 'done', classification: 'warm', score: 60 } })
+    v = await pilotView(T)
+    expect(v.counts).toMatchObject({ total: 3, failed: 0, running: 0, warm: 1 })
+    expect(v.canApprove).toBe(true)
+    const results = await pilotResults(T)
+    expect(results).toHaveLength(3) // one current result per pilot company, not four
+    expect(results.find((r) => r.crmCompanyId === first.crmCompanyId)).toMatchObject({ status: 'done', classification: 'warm' })
+  })
+
+  it('a pilot that cannot queue every sampled company is refused whole - it never quietly runs short', async () => {
+    const { requestPilot, preparePilot, pilotView } = await import('../../src/warmleads/pilot.js')
+    await companies.refreshCompanyList(T2, list(40))
+    // c0 and c1 wait for a first evaluation; c2 already has a result; c3 left NXT Sales.
+    await prisma.warmLeadCompany.updateMany({ where: { tenantId: T2 }, data: { state: 'pending', cohort: null } })
+    await prisma.warmLeadCompany.update({ where: { tenantId_crmCompanyId: { tenantId: T2, crmCompanyId: crmCompany(2).id } }, data: { state: 'evaluated' } })
+    await prisma.warmLeadCompany.update({ where: { tenantId_crmCompanyId: { tenantId: T2, crmCompanyId: crmCompany(3).id } }, data: { inCrm: false } })
+    const ids = [0, 1, 2, 3].map((i) => crmCompany(i).id)
+
+    await requestPilot(T2, 'admin-1')
+    const build = (async () => ({
+      sample: { seed: 1, size: 4, picks: ids.map((id) => ({ id, name: id, country: null, industry: null, website: 'website', strata: ['general'], pickedFor: 'general' })), coverage: [], countries: 1, industries: 1, notes: [], pool: {} },
+      companies: new Map(ids.map((id, i) => [id, crmCompany(i)])),
+    })) as never
+    expect(await preparePilot(T2, build, noRefresh)).toBe(true)
+
+    const v = await pilotView(T2)
+    expect(v.run?.status).toBe('failed')
+    expect(v.run?.failureReason).toMatch(/Only 2 of the 4 sampled companies could be queued/)
+    expect(v.counts.total).toBe(0) // nothing was queued at all
+    expect(await prisma.warmLeadCompany.count({ where: { tenantId: T2, state: 'queued' } })).toBe(0)
+    expect(v.canApprove).toBe(false)
+    // and a new pilot may be requested straight away
+    await expect(requestPilot(T2, 'admin-1')).resolves.toBeDefined()
   })
 
   it('approving needs a finished pilot; it permits daily processing but does NOT start it (the worker stays paused)', async () => {

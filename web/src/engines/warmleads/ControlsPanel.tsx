@@ -15,6 +15,8 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
   const [retryShare, setRetryShare] = useState(String(s.retryShare))
   const [win, setWin] = useState(s.window)
   const [scaleOk, setScaleOk] = useState(false)
+  const [syncOk, setSyncOk] = useState(false)
+  const [retryNote, setRetryNote] = useState<string | null>(null)
 
   // Follow the server when it changes (another admin, or a save).
   useEffect(() => {
@@ -30,10 +32,19 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
       ? { label: 'No Gemini key of its own: idle', tone: 'danger' as const }
     : s.paused
       ? { label: 'Paused', tone: 'neutral' as const }
-      : o.windowOpenNow
-        ? { label: 'Running', tone: 'ok' as const }
-        : { label: `Started — waiting for ${s.window.start}–${s.window.end} ${s.window.timezone}`, tone: 'warn' as const }
+      : o.stage === 'pilot_review'
+        ? { label: 'Started — the pilot has finished and waits for your review', tone: 'warn' as const }
+        : o.stage !== 'pilot_running' && o.stage !== 'daily'
+          ? { label: 'Started — nothing is being processed yet (see Pilot)', tone: 'warn' as const }
+          : !o.windowOpenNow
+            ? { label: `Started — waiting for ${s.window.start}–${s.window.end} ${s.window.timezone}`, tone: 'warn' as const }
+            : o.today?.stoppedReason === 'company_limit' || o.today?.stoppedReason === 'gemini_ceiling' || o.today?.stoppedReason === 'nothing_to_do'
+              ? { label: `Started — the work for this night has stopped (${o.today.stoppedReason.replace(/_/g, ' ')})`, tone: 'neutral' as const }
+              : o.today?.stoppedReason === 'repeated_failures'
+                ? { label: 'Started — stopped after repeated failures; it tries again later', tone: 'danger' as const }
+                : { label: 'Running', tone: 'ok' as const }
 
+  const limitsFilled = [companies, ceiling, retryShare].every((v) => v.trim() !== '' && Number.isFinite(Number(v)))
   const limitsChanged = companies !== String(s.dailyCompanyLimit) || ceiling !== String(s.dailyGeminiCeiling) || retryShare !== String(s.retryShare)
   const windowChanged = win.start !== s.window.start || win.end !== s.window.end || win.timezone !== s.window.timezone
   // There is exactly one higher level (50 a day). Nothing above it is offered.
@@ -46,7 +57,13 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
         <Chip tone={state.tone}>{state.label}</Chip>
         {admin &&
           (s.paused ? (
-            <Button icon={Play} variant="primary" busy={busy === 'start'} onClick={() => act('start', () => api.post('/warm-leads/start', {}))}>
+            <Button
+              icon={Play}
+              variant="primary"
+              busy={busy === 'start'}
+              disabled={!o.server.workerEnabled || Boolean(o.server.geminiKeyProblem)}
+              onClick={() => act('start', () => api.post('/warm-leads/start', {}))}
+            >
               Start
             </Button>
           ) : (
@@ -56,6 +73,9 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
           ))}
         <span className="note">Pausing stops before the next company; the one being evaluated finishes first.</span>
       </div>
+      {admin && s.paused && !o.server.workerEnabled && <p className="note note--caveat">Start is unavailable: the worker is switched off on this server.</p>}
+      {admin && s.paused && o.server.workerEnabled && o.server.geminiKeyProblem && <p className="note note--caveat">Start is unavailable: {o.server.geminiKeyProblem}</p>}
+      {admin && s.paused && o.stage === 'daily' && <p className="note">The pilot is approved. Daily processing begins only when you press Start.</p>}
 
       <h3 style={{ margin: 'var(--s4) 0 var(--s2)' }}>Daily limits</h3>
       <div className="row" style={{ gap: 'var(--s3)', alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -77,7 +97,7 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
         {admin && (
           <Button
             icon={Save}
-            disabled={!limitsChanged}
+            disabled={!limitsChanged || !limitsFilled}
             busy={busy === 'limits'}
             onClick={() => act('limits', () => api.put('/warm-leads/limits', { dailyCompanyLimit: Number(companies), dailyGeminiCeiling: Number(ceiling), retryShare: Number(retryShare) }))}
           >
@@ -85,6 +105,7 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
           </Button>
         )}
       </div>
+      {admin && !limitsFilled && <p className="note note--caveat">Fill in all three numbers. An empty field is not a limit of 0.</p>}
       <p className="note" style={{ marginTop: 'var(--s2)' }}>
         Approved so far: up to {s.approvedMaxCompanies} companies and {s.approvedMaxCeiling} Gemini calls a night. When the ceiling is reached the night stops safely; a company whose web research could not be finished is marked “research incomplete” — never Cold — and is checked again.
       </p>
@@ -138,10 +159,17 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
               icon={RotateCcw}
               busy={busy === 'retry'}
               disabled={o.counts.failed + o.counts.needsReevaluation === 0}
-              onClick={() => act('retry', () => api.post('/warm-leads/retry-failed', {}))}
-              title="Makes failed and unfinished companies due again; they are retried inside the nightly retry share, separately from new companies."
+              onClick={() =>
+                act('retry', async () => {
+                  const r = await api.post<{ retried?: number }>('/warm-leads/retry-failed', {})
+                  const n = r?.retried ?? 0
+                  setRetryNote(
+                    `${n} compan${n === 1 ? 'y was' : 'ies were'} made due again. They are retried by the worker, not at once: it needs to be started and inside the processing window${s.retryShare === 0 ? ', and the retry share above is 0, so nothing will be retried until you raise it' : ''}.`,
+                  )
+                })
+              }
             >
-              Retry failed ({o.counts.failed + o.counts.needsReevaluation})
+              Retry failed or due for a re-check ({o.counts.failed + o.counts.needsReevaluation})
             </Button>
           </>
         )}
@@ -149,6 +177,7 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
           {refreshing ? 'Reading the list… (the worker does this, it can take a minute)' : o.listRefresh.message ? `${o.listRefresh.message} ${fmt(o.listRefresh.refreshedAt)}` : o.listRefresh.refreshedAt ? `Last read ${fmt(o.listRefresh.refreshedAt)}.` : 'The list has not been read yet.'}
         </span>
       </div>
+      {retryNote && <p className="note" role="status">{retryNote}</p>}
       {o.listRefresh.state === 'failed' && <p className="note note--caveat">{o.listRefresh.message}</p>}
 
       <h3 style={{ margin: 'var(--s4) 0 var(--s2)' }}>Sending results to NXT Sales</h3>
@@ -156,22 +185,36 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
         {s.syncEnabled
           ? `On since ${fmt(s.syncApprovedAt)}: Warm and Early Signal companies are sent to NXT Sales; a company that stops being Warm or Early Signal is taken off its list. Nothing else in the CRM is changed.`
           : 'Off. Results are kept in this application only. Nothing is written to NXT Sales.'}
-        {!o.server.syncSwitchOn && ' The server’s own switch for sending (WARM_LEADS_SYNC_ENABLED) is also off.'}
+        {!o.server.syncSwitchOn && ' The server’s own switch for sending (WARM_LEADS_SYNC_ENABLED) is off, so NOTHING is being sent even if it is approved here.'}
+        {o.server.syncSwitchOn && !o.server.syncLiveAllowed && ' This server is connected to the live NXT Sales and writing to it is not allowed here (WARM_LEADS_ALLOW_LIVE is off), so nothing can be sent.'}
       </p>
+      {admin && !s.syncEnabled && (
+        <ul className="note" style={{ margin: 'var(--s2) 0', paddingLeft: 'var(--s4)' }}>
+          <li>{s.pilotApprovedAt ? 'Done' : 'Needed'}: the pilot is approved.</li>
+          <li>{o.server.syncSwitchOn ? 'Done' : 'Needed'}: the server switch for sending is on (WARM_LEADS_SYNC_ENABLED).</li>
+          <li>{o.server.syncLiveAllowed ? 'Done' : 'Needed'}: writing to this NXT Sales is allowed on this server.</li>
+          <li>Needed: your approval below.</li>
+        </ul>
+      )}
       {admin && (
         <div className="row" style={{ gap: 'var(--s2)', marginTop: 'var(--s2)' }}>
           {s.syncEnabled ? (
             <Button busy={busy === 'syncoff'} onClick={() => act('syncoff', () => api.post('/warm-leads/sync/disable', {}))}>Switch sending off</Button>
           ) : (
-            <Button
-              icon={Send}
-              disabled={!s.pilotApprovedAt || !o.server.syncSwitchOn}
-              busy={busy === 'syncon'}
-              title={!s.pilotApprovedAt ? 'Approve the pilot first.' : !o.server.syncSwitchOn ? 'Enable WARM_LEADS_SYNC_ENABLED on the server first.' : undefined}
-              onClick={() => act('syncon', () => api.post('/warm-leads/sync/approve', { confirm: true }))}
-            >
-              Approve sending to NXT Sales
-            </Button>
+            <>
+              <label className="check" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <input type="checkbox" checked={syncOk} disabled={!s.pilotApprovedAt || !o.server.syncSwitchOn} onChange={(e) => setSyncOk(e.target.checked)} />
+                <span>I approve sending Warm and Early Signal companies to NXT Sales. Only their evaluation is written; no company detail, owner or status is changed.</span>
+              </label>
+              <Button
+                icon={Send}
+                disabled={!syncOk || !s.pilotApprovedAt || !o.server.syncSwitchOn}
+                busy={busy === 'syncon'}
+                onClick={() => act('syncon', async () => { await api.post('/warm-leads/sync/approve', { confirm: true }); setSyncOk(false) })}
+              >
+                Approve sending to NXT Sales
+              </Button>
+            </>
           )}
         </div>
       )}

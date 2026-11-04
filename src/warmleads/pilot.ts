@@ -33,23 +33,29 @@ export async function requestPilot(tenantId: string, by: string): Promise<{ runI
 }
 
 /** The worker's step: turns a "preparing" pilot into 100 queued evaluations. Returns true when it did something. */
-export async function preparePilot(tenantId: string, build: typeof buildSample = buildSample): Promise<boolean> {
+export async function preparePilot(tenantId: string, build: typeof buildSample = buildSample, refresh: typeof refreshCompanyList = refreshCompanyList): Promise<boolean> {
   const run = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot', status: 'preparing' }, orderBy: { createdAt: 'asc' } })
   if (!run) return false
   const settings = await ensureSettings(tenantId)
   try {
     // The company list must exist: the pilot companies are rows of it.
-    if ((await prisma.warmLeadCompany.count({ where: { tenantId, inCrm: true } })) === 0) await refreshCompanyList(tenantId)
+    // Read fresh: the sample is drawn from the CRM as it is NOW, so every pick must have a row, or the pilot would run short.
+    await refresh(tenantId)
 
     const built = await build({ seed: env.WARM_LEADS_SAMPLE_SEED, size: settings.pilotSize })
     const picks = built.sample.picks.filter((p) => built.companies.has(p.id))
     if (!picks.length) throw new Error('The sample contains no company that could be read from NXT Sales.')
 
     // Companies the pilot takes must still be waiting: never re-evaluate one that already has a result.
-    const rows = await prisma.warmLeadCompany.findMany({ where: { tenantId, crmCompanyId: { in: picks.map((p) => p.id) } }, select: { crmCompanyId: true, state: true } })
-    const waiting = new Set(rows.filter((r) => r.state === 'pending').map((r) => r.crmCompanyId))
+    const rows = await prisma.warmLeadCompany.findMany({ where: { tenantId, crmCompanyId: { in: picks.map((p) => p.id) } }, select: { crmCompanyId: true, state: true, inCrm: true } })
+    const waiting = new Set(rows.filter((r) => r.state === 'pending' && r.inCrm).map((r) => r.crmCompanyId))
     const chosen = picks.filter((p) => waiting.has(p.id))
     if (!chosen.length) throw new Error('None of the sample companies is waiting for a first evaluation.')
+    // The pilot is exactly what the sample picked. A pilot that quietly runs with fewer companies than the stored sample says
+    // would be reviewed and approved as something it is not, so it is refused and the reason is given.
+    if (chosen.length < picks.length) {
+      throw new Error(`Only ${chosen.length} of the ${picks.length} sampled companies could be queued (${picks.length - chosen.length} already have a result, are not in the company list, or are no longer in NXT Sales). Nothing was started; request the pilot again.`)
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.warmLeadCompany.updateMany({ where: { tenantId, crmCompanyId: { in: chosen.map((p) => p.id) } }, data: { state: 'queued', cohort: 'pilot' } })
@@ -72,6 +78,26 @@ export async function preparePilot(tenantId: string, build: typeof buildSample =
   return true
 }
 
+/**
+ * The CURRENT evaluation of each pilot company: the latest one, whichever run made it. A retry of a failed pilot company is a
+ * new evaluation in a separate "retry" run, so reading only the pilot run would keep showing the old failure after the retry
+ * had succeeded, and the pilot would be approved against numbers that are no longer true.
+ */
+export async function latestPilotEvaluations<T extends { crmCompanyId: string; createdAt: Date }>(
+  load: (companyIds: string[], since: Date) => Promise<T[]>,
+  run: { companyIds: unknown; createdAt: Date },
+): Promise<T[]> {
+  const ids = Array.isArray(run.companyIds) ? (run.companyIds as string[]) : []
+  if (!ids.length) return []
+  const all = await load(ids, run.createdAt)
+  const latest = new Map<string, T>()
+  for (const e of all) {
+    const cur = latest.get(e.crmCompanyId)
+    if (!cur || e.createdAt > cur.createdAt) latest.set(e.crmCompanyId, e)
+  }
+  return [...latest.values()]
+}
+
 export interface PilotView {
   run: { id: string; status: string; total: number; startedAt: Date | null; finishedAt: Date | null; failureReason: string | null; sample: unknown } | null
   counts: { total: number; queued: number; running: number; done: number; failed: number; incomplete: number; warm: number; earlySignal: number; cold: number; insufficientData: number; other: number }
@@ -85,9 +111,12 @@ export async function pilotView(tenantId: string): Promise<PilotView> {
   const run = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot' }, orderBy: { createdAt: 'desc' } })
   const counts = { total: 0, queued: 0, running: 0, done: 0, failed: 0, incomplete: 0, warm: 0, earlySignal: 0, cold: 0, insufficientData: 0, other: 0 }
   if (run) {
-    const rows = await prisma.warmLeadEvaluation.groupBy({ by: ['status', 'classification', 'researchIncomplete'], where: { runId: run.id }, _count: { _all: true } })
-    for (const r of rows) {
-      const n = r._count._all
+    const latest = await latestPilotEvaluations(
+      (ids, since) => prisma.warmLeadEvaluation.findMany({ where: { tenantId, crmCompanyId: { in: ids }, createdAt: { gte: since } }, select: { crmCompanyId: true, createdAt: true, status: true, classification: true, researchIncomplete: true } }),
+      run,
+    )
+    for (const r of latest) {
+      const n = 1
       counts.total += n
       if (r.status === 'queued') counts.queued += n
       else if (r.status === 'running') counts.running += n
@@ -108,16 +137,18 @@ export async function pilotView(tenantId: string): Promise<PilotView> {
     counts,
     approvedAt: s.pilotApprovedAt,
     approvedBy: s.pilotApprovedBy,
-    canApprove: Boolean(run && run.status === 'completed' && !s.pilotApprovedAt),
+    canApprove: Boolean(run && run.status === 'completed' && !s.pilotApprovedAt && counts.queued === 0 && counts.running === 0),
   }
 }
 
 /** The pilot companies with their results, for the review screen. */
 export async function pilotResults(tenantId: string) {
-  const run = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot' }, orderBy: { createdAt: 'desc' }, select: { id: true } })
+  const run = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot' }, orderBy: { createdAt: 'desc' }, select: { id: true, companyIds: true, createdAt: true } })
   if (!run) return []
-  const evaluations = await prisma.warmLeadEvaluation.findMany({ where: { runId: run.id }, orderBy: [{ score: { sort: 'desc', nulls: 'last' } }, { createdAt: 'asc' }] })
-  return evaluations.map((e) => ({ ...e, costUsd: Number(e.costUsd) }))
+  const latest = await latestPilotEvaluations((ids, since) => prisma.warmLeadEvaluation.findMany({ where: { tenantId, crmCompanyId: { in: ids }, createdAt: { gte: since } } }), run)
+  // best score first, as before
+  latest.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.createdAt.getTime() - b.createdAt.getTime())
+  return latest.map((e) => ({ ...e, costUsd: Number(e.costUsd) }))
 }
 
 /** An admin approves the finished pilot. Only then may daily processing start. */
@@ -129,6 +160,7 @@ export async function approvePilot(tenantId: string, by: string): Promise<void> 
   await finishRunIfIdle(run.id)
   const fresh = await prisma.warmLeadRun.findUniqueOrThrow({ where: { id: run.id } })
   if (fresh.status !== 'completed') throw new ConflictError('The pilot has not finished yet: some companies are still waiting or running.')
+  if (!(await pilotView(tenantId)).canApprove) throw new ConflictError('Some pilot companies are being retried or are still waiting. Approve when they have finished.')
   // paused: true in the SAME update: processing was running (Start was pressed for the pilot), and approving it must not roll
   // straight into daily processing. Daily processing starts only when an admin presses Start again.
   await prisma.warmLeadSettings.update({ where: { tenantId }, data: { pilotApprovedAt: new Date(), pilotApprovedBy: by, updatedBy: by, paused: true } })

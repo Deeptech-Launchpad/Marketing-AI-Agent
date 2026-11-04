@@ -37,7 +37,7 @@ const overview = (over: Partial<Overview> = {}): Overview => ({
     syncApprovedAt: null,
   },
   listRefresh: { requestedAt: null, refreshedAt: '2026-11-03T10:00:00Z', state: 'done', message: '15,137 companies read, 15,137 new.' },
-  server: { workerEnabled: true, syncSwitchOn: false, geminiKeyProblem: null },
+  server: { workerEnabled: true, syncSwitchOn: false, geminiKeyProblem: null, syncLiveAllowed: true },
   windowOpenNow: false,
   bucket: 'day:2026-11-04',
   today: emptyUsage,
@@ -197,7 +197,7 @@ describe('the controls and their gates', () => {
     stub(overview())
     renderPage()
     expect(await screen.findByRole('button', { name: /approve sending to nxt sales/i })).toBeDisabled()
-    expect(screen.getByText(/WARM_LEADS_SYNC_ENABLED/)).toBeInTheDocument()
+    expect(screen.getAllByText(/WARM_LEADS_SYNC_ENABLED/).length).toBeGreaterThan(0)
     expect(screen.getByText(/Nothing is written to NXT Sales/)).toBeInTheDocument()
   })
 
@@ -264,5 +264,183 @@ describe('usage', () => {
     expect(screen.getAllByText('10/25').length).toBeGreaterThan(0) // companies
     expect(screen.getAllByText('$0.0421').length).toBeGreaterThan(0)
     expect(screen.getByText('3 calls without a price')).toBeInTheDocument()
+  })
+})
+
+// ── Review findings: the screen must never say something that is not true ────
+
+describe('the screen tells the truth about what is happening', () => {
+  const withSettings = (patch: Partial<Overview['settings']>, over: Partial<Overview> = {}): Overview => {
+    const o = overview(over)
+    o.settings = { ...o.settings, ...patch }
+    return o
+  }
+
+  it('after the pilot has finished it does not say "Running": it says the pilot waits for your review', async () => {
+    const o = withSettings({ paused: false, pilotApprovedAt: null }, { stage: 'pilot_review', windowOpenNow: true })
+    stub(o)
+    renderPage()
+    expect(await screen.findByText(/pilot has finished and waits for your review/i)).toBeInTheDocument()
+    expect(screen.queryByText('Running')).toBeNull()
+  })
+
+  it('"Running" only when it can be: daily mode, started, inside the window, and the night has not stopped', async () => {
+    stub(withSettings({ paused: false }, { stage: 'daily', windowOpenNow: true }))
+    renderPage()
+    expect(await screen.findByText('Running')).toBeInTheDocument()
+  })
+
+  it('a night that has already stopped is said to have stopped', async () => {
+    const o = withSettings({ paused: false }, { stage: 'daily', windowOpenNow: true })
+    o.today = { ...(o.today as NonNullable<Overview['today']>), stoppedReason: 'company_limit' }
+    stub(o)
+    renderPage()
+    expect(await screen.findByText(/work for this night has stopped \(company limit\)/i)).toBeInTheDocument()
+    expect(screen.queryByText('Running')).toBeNull()
+  })
+
+  it('Start is disabled, with the reason beside it, when the Warm Leads Gemini key is unusable', async () => {
+    const o = withSettings({ paused: true }, { stage: 'daily' })
+    o.server = { ...o.server, geminiKeyProblem: 'Warm Leads has no Gemini key of its own (WARM_LEADS_GEMINI_API_KEY is empty).' }
+    stub(o)
+    renderPage()
+    expect(await screen.findByRole('button', { name: /^start$/i })).toBeDisabled()
+    expect(screen.getByText(/Start is unavailable: Warm Leads has no Gemini key/i)).toBeInTheDocument()
+  })
+
+  it('Start is disabled while the worker is switched off on the server', async () => {
+    const o = withSettings({ paused: true })
+    o.server = { ...o.server, workerEnabled: false }
+    stub(o)
+    renderPage()
+    expect(await screen.findByRole('button', { name: /^start$/i })).toBeDisabled()
+  })
+
+  it('after the pilot is approved it says daily processing is allowed but paused until Start - not "enabled"', async () => {
+    stub(withSettings({ paused: true }, { stage: 'daily' }))
+    renderPage()
+    expect(await screen.findAllByText(/stays paused until you press Start/i)).not.toHaveLength(0)
+    expect(screen.queryByText(/Daily processing is enabled/i)).toBeNull()
+  })
+
+  it('a pilot with fewer companies than its size says so before it can be approved', async () => {
+    const o = withSettings({ paused: true, pilotApprovedAt: null }, { stage: 'pilot_review' })
+    o.pilot = { ...o.pilot, counts: { ...o.pilot.counts, total: 40, done: 40, failed: 0, incomplete: 0 } }
+    stub(o)
+    renderPage()
+    expect(await screen.findByText(/This pilot has 40 companies, not 100/i)).toBeInTheDocument()
+  })
+
+  it('failed and incomplete pilot companies are counted next to the approval', async () => {
+    const o = withSettings({ paused: true, pilotApprovedAt: null }, { stage: 'pilot_review' })
+    o.pilot = { ...o.pilot, counts: { ...o.pilot.counts, total: 100, done: 90, failed: 6, incomplete: 4 } }
+    stub(o)
+    renderPage()
+    expect(await screen.findByText(/6 failed and 4 incomplete of 100/i)).toBeInTheDocument()
+  })
+})
+
+describe('retry, limits and sending: no control that pretends', () => {
+  it('"Retry" says how many companies were made due and what has to happen next - it is not instant', async () => {
+    const o = overview()
+    o.counts = { ...o.counts, failed: 3, needsReevaluation: 0 }
+    const calls = stub(o)
+    const base = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => (String(input).includes('/retry-failed') ? (calls.push({ method: 'POST', url: String(input), body: {} }), new Response(JSON.stringify({ retried: 3 }), { status: 200, headers: { 'Content-Type': 'application/json' } })) : base(input, init)))
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: /retry failed or due for a re-check \(3\)/i }))
+    expect(await screen.findByText(/3 companies were made due again. They are retried by the worker, not at once/i)).toBeInTheDocument()
+    expect(calls.some((c) => c.url.includes('/retry-failed'))).toBe(true)
+  })
+
+  it('with a retry share of 0 it warns that nothing will be retried', async () => {
+    const o = overview()
+    o.settings = { ...o.settings, retryShare: 0 }
+    o.counts = { ...o.counts, failed: 2, needsReevaluation: 0 }
+    stub(o)
+    const base = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => (String(input).includes('/retry-failed') ? new Response(JSON.stringify({ retried: 2 }), { status: 200, headers: { 'Content-Type': 'application/json' } }) : base(input, init)))
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: /retry failed or due for a re-check/i }))
+    expect(await screen.findByText(/retry share above is 0, so nothing will be retried/i)).toBeInTheDocument()
+  })
+
+  it('an emptied limit field is not saved as 0: Save is disabled and the screen says why', async () => {
+    stub(overview())
+    renderPage()
+    const field = await screen.findByLabelText(/Gemini call ceiling per night/i)
+    await userEvent.clear(field)
+    expect(screen.getByRole('button', { name: /save limits/i })).toBeDisabled()
+    expect(screen.getByText(/An empty field is not a limit of 0/i)).toBeInTheDocument()
+  })
+
+  it('approving sending needs a ticked confirmation; every closed gate is listed', async () => {
+    const o = overview()
+    o.settings = { ...o.settings, pilotApprovedAt: '2026-11-02T00:00:00Z', syncEnabled: false }
+    o.server = { ...o.server, syncSwitchOn: true, syncLiveAllowed: false }
+    const calls = stub(o)
+    renderPage()
+    const button = await screen.findByRole('button', { name: /approve sending to nxt sales/i })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/Needed: writing to this NXT Sales is allowed on this server/i)).toBeInTheDocument()
+    expect(screen.getByText(/WARM_LEADS_ALLOW_LIVE is off/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('checkbox', { name: /I approve sending Warm and Early Signal companies/i }))
+    expect(button).toBeEnabled()
+    await userEvent.click(button)
+    expect(calls.find((c) => c.url.includes('/sync/approve'))?.body).toEqual({ confirm: true })
+  })
+})
+
+describe('the screen does not blank or hide failures while it refreshes', () => {
+  it('the company table stays on screen while a refresh is in flight', async () => {
+    let companiesCalls = 0
+    const base = stub(overview())
+    void base
+    const inner = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (/\/warm-leads\/companies\?/.test(String(input))) {
+        companiesCalls++
+        if (companiesCalls > 1) return new Promise<Response>(() => undefined) // the refresh never answers
+      }
+      return inner(input, init)
+    })
+    renderPage()
+    expect(await screen.findByText('Acme Retail')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /^refresh$/i }))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(companiesCalls).toBeGreaterThan(1) // a refresh really was started
+    expect(screen.getByText('Acme Retail')).toBeInTheDocument() // and the table was not replaced by "Reading the companies"
+    expect(screen.queryByText(/Reading the companies/i)).toBeNull()
+  })
+
+  it('when a refresh fails the screen says so instead of showing old data as current', async () => {
+    let overviewCalls = 0
+    stub(overview())
+    const inner = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/warm-leads/overview')) {
+        overviewCalls++
+        if (overviewCalls > 1) return new Response(JSON.stringify({ error: { message: 'Session expired' } }), { status: 401, headers: { 'Content-Type': 'application/json' } })
+      }
+      return inner(input, init)
+    })
+    renderPage()
+    await screen.findAllByText(/Progress/i)
+    await userEvent.click(screen.getByRole('button', { name: /^refresh$/i }))
+    expect(await screen.findByText(/The screen could not be refreshed/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/Progress/i).length).toBeGreaterThan(0) // the last data stays visible, marked as possibly out of date
+  })
+
+  it('a failed company whose automatic retries are used up is not described as "will retry"', async () => {
+    stub(overview(), [company({ state: 'failed', classification: null, nextAttemptAt: null, attempts: 3 })])
+    renderPage()
+    expect(await screen.findByText(/Failed — use Retry failed/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Failed — will retry/i)).toBeNull()
+  })
+
+  it('a failed company still due for an automatic retry says "will retry"', async () => {
+    stub(overview(), [company({ state: 'failed', classification: null, nextAttemptAt: '2026-11-05T00:00:00Z', attempts: 1 })])
+    renderPage()
+    expect(await screen.findByText(/Failed — will retry/i)).toBeInTheDocument()
   })
 })

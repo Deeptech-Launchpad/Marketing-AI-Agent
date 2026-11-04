@@ -12,7 +12,7 @@ export function EvaluationCard({ e, heading }: { e: Evaluation; heading?: string
         <strong>{heading ?? e.companyName ?? e.crmCompanyId}</strong>
         <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           {e.status === 'failed' ? (
-            <Chip tone="danger">Failed — will retry</Chip>
+            <Chip tone="danger">Failed — nothing was classified</Chip>
           ) : incomplete ? (
             <Chip tone="warn">Research incomplete — not final</Chip>
           ) : e.status === 'done' && cls ? (

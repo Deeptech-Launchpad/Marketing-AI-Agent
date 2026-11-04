@@ -37,11 +37,12 @@ export const FILTERS: Array<{ value: Filter; label: string }> = [
 ]
 
 /** The one status a company row shows. Incomplete research and "not enough data" are never merged, and neither is ever called Cold. */
-export function statusOf(c: Pick<CompanyRow, 'state' | 'classification' | 'researchIncomplete'>): { label: string; tone: Tone } {
+export function statusOf(c: Pick<CompanyRow, 'state' | 'classification' | 'researchIncomplete'> & { nextAttemptAt?: string | null }): { label: string; tone: Tone } {
   if (c.state === 'running') return { label: 'Evaluating now', tone: 'warn' }
   if (c.state === 'queued') return { label: 'Queued (pilot)', tone: 'warn' }
   if (c.state === 'pending') return { label: 'Pending', tone: 'neutral' }
-  if (c.state === 'failed') return { label: 'Failed — will retry', tone: 'danger' }
+  // After the automatic attempts are used up nothing retries it by itself: an admin presses "Retry failed".
+  if (c.state === 'failed') return { label: c.nextAttemptAt === undefined || c.nextAttemptAt ? 'Failed — will retry' : 'Failed — use Retry failed', tone: 'danger' }
   if (c.researchIncomplete && !c.classification) return { label: 'Research incomplete', tone: 'warn' }
   const cls = c.classification ? CLASS[c.classification] : null
   const base = cls ?? { label: 'Evaluated', tone: 'neutral' as Tone }
