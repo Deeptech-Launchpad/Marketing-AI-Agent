@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import https from 'node:https'
-import { pipeline, Readable } from 'node:stream'
+import { pipeline, Readable, Transform } from 'node:stream'
 import tls from 'node:tls'
 import zlib from 'node:zlib'
 import { env } from '../config/env.js'
@@ -264,6 +264,60 @@ function asFetchError(err: unknown): unknown {
  *  - The body is decoded (gzip, deflate, br) so what callers read is what fetch used to give them;
  *    the byte cap they apply counts the DECODED bytes, so a compression bomb is cut off the same way.
  */
+/**
+ * A Response for ANY status the server sends. The Response constructor only accepts 200-599 (and refuses a body for
+ * 204/205/304), but fetch() used to hand callers whatever the server said - LinkedIn answers bots with HTTP 999 - and
+ * callers treat such an answer as a fact ("login wall"), not as a crash. For a status the constructor refuses, the
+ * Response is built with a placeholder and its status/ok are overridden with the real values.
+ */
+function responseFor(status: number, body: ReadableStream<Uint8Array> | null, headers: Array<[string, string]>): Response {
+  const bodyless = status === 204 || status === 205 || status === 304 || (status >= 100 && status < 200)
+  const representable = status >= 200 && status <= 599 && status !== 205
+  if (representable) return new Response(bodyless ? null : body, { status, headers })
+  const r = new Response(bodyless ? null : body, { status: 200, headers })
+  Object.defineProperty(r, 'status', { value: status })
+  Object.defineProperty(r, 'ok', { value: status >= 200 && status < 300 })
+  return r
+}
+
+/** Lenient on purpose: servers truncate bodies, send empty gzip bodies, or mislabel raw deflate; fetch() coped with all of it. */
+const LENIENT = { flush: zlib.constants.Z_SYNC_FLUSH, finishFlush: zlib.constants.Z_SYNC_FLUSH }
+const LENIENT_BR = { flush: zlib.constants.BROTLI_OPERATION_FLUSH, finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH }
+
+/** "deflate" is sent both zlib-wrapped (RFC 1950) and raw (RFC 1951); the first byte tells which, as fetch() did. */
+function createDeflateAuto(): Transform {
+  let inner: Transform | null = null
+  const t: Transform = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      if (!inner) {
+        inner = (chunk[0]! & 0x0f) === 8 ? zlib.createInflate(LENIENT) : zlib.createInflateRaw(LENIENT)
+        inner.on('data', (d: Buffer) => t.push(d))
+        inner.on('error', (e) => t.destroy(e))
+      }
+      inner.write(chunk, () => cb())
+    },
+    flush(cb) {
+      if (!inner) return cb()
+      inner.once('end', () => cb())
+      inner.end()
+    },
+  })
+  return t
+}
+
+/** The decoders for a Content-Encoding header, in the order they must be applied, or null when one is unknown. */
+function decodersFor(header: string): Transform[] | null {
+  const tokens = header.split(',').map((x) => x.trim().toLowerCase()).filter((x) => x && x !== 'identity')
+  const out: Transform[] = []
+  for (const tok of tokens.reverse()) {
+    if (tok === 'gzip' || tok === 'x-gzip') out.push(zlib.createGunzip(LENIENT))
+    else if (tok === 'deflate') out.push(createDeflateAuto())
+    else if (tok === 'br') out.push(zlib.createBrotliDecompress(LENIENT_BR))
+    else return null
+  }
+  return out
+}
+
 export function pinnedRequest(url: URL, headers: Record<string, string>, opts: TransportOptions, deps: RequestDeps = realDeps): Promise<Response> {
   return new Promise((resolve, reject) => {
     const secure = url.protocol === 'https:'
@@ -276,33 +330,51 @@ export function pinnedRequest(url: URL, headers: Record<string, string>, opts: T
       signal: opts.signal,
       ...(secure ? { rejectUnauthorized: true, ...(opts.ca ? { ca: [...opts.ca] } : {}) } : {}),
     }
+    const timeoutError = () => Object.assign(new Error('The site took too long to respond.'), { name: 'TimeoutError' })
+    // Set once the response body is being read, so a deadline that fires mid-body is reported as "too slow", not "reset".
+    let failBody: ((err: Error) => void) | null = null
+
     const req = (secure ? deps.https : deps.http).request(url, options, (res) => {
-      const headerEntries: Array<[string, string]> = []
-      for (const [k, v] of Object.entries(res.headers)) {
-        if (typeof v === 'string') headerEntries.push([k, v])
-        else if (Array.isArray(v)) headerEntries.push([k, v.join(', ')])
-      }
-      const status = res.statusCode ?? 502
-      // 204/304 carry no body, and Response refuses one for those statuses.
-      if (status === 204 || status === 304 || (status >= 100 && status < 200)) {
-        res.resume()
-        resolve(new Response(null, { status, headers: headerEntries }))
-        return
-      }
-      const encoding = String(res.headers['content-encoding'] ?? '').toLowerCase().trim()
-      const decoder =
-        encoding === 'gzip' || encoding === 'x-gzip' ? zlib.createGunzip() : encoding === 'deflate' ? zlib.createInflate() : encoding === 'br' ? zlib.createBrotliDecompress() : null
-      if (encoding && encoding !== 'identity' && !decoder) {
+      // This runs inside an event handler: anything thrown here would be an uncaught exception that kills the process.
+      try {
+        const headerEntries: Array<[string, string]> = []
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === 'string') headerEntries.push([k, v])
+          else if (Array.isArray(v)) headerEntries.push([k, v.join(', ')])
+        }
+        const status = res.statusCode ?? 502
+        // No body for these statuses (a Response refuses one).
+        if (status === 204 || status === 205 || status === 304 || (status >= 100 && status < 200)) {
+          res.resume()
+          resolve(responseFor(status, null, headerEntries))
+          return
+        }
+        const decoders = decodersFor(String(res.headers['content-encoding'] ?? ''))
+        if (!decoders) {
+          res.destroy()
+          reject(asFetchError(new Error('The site used a content encoding that cannot be read.')))
+          return
+        }
+        // The same wiring as before the hardening: the response (through its decoders) IS the stream the reader consumes,
+        // so a cancel (the reader discarding a body it does not want) tears the whole chain down cleanly.
+        const out: Readable = decoders.length ? (pipeline as unknown as (...s: unknown[]) => Readable)(res, ...decoders, () => undefined) : res
+        // A deadline that fires mid-body ends this stream with the timeout error rather than a bare "connection reset".
+        failBody = (err: Error) => { if (!out.destroyed) out.destroy(asFetchError(err) as Error) }
+        const outHeaders = decoders.length ? headerEntries.filter(([k]) => !/^content-(encoding|length)$/i.test(k)) : headerEntries
+        resolve(responseFor(status, Readable.toWeb(out) as ReadableStream<Uint8Array>, outHeaders))
+      } catch (err) {
         res.destroy()
-        reject(asFetchError(new Error('The site used a content encoding that cannot be read.')))
-        return
+        reject(asFetchError(err))
       }
-      const source: Readable = decoder ? pipeline(res, decoder, () => undefined) : res
-      const outHeaders = decoder ? headerEntries.filter(([k]) => !/^content-(encoding|length)$/i.test(k)) : headerEntries
-      resolve(new Response(Readable.toWeb(source) as ReadableStream<Uint8Array>, { status, headers: outHeaders }))
     })
     req.on('error', (err) => reject(asFetchError(err)))
-    req.on('timeout', () => req.destroy(Object.assign(new Error('The site took too long to respond.'), { name: 'TimeoutError' })))
+    req.on('timeout', () => {
+      const e = timeoutError()
+      failBody?.(e)
+      req.destroy(e)
+    })
+    // The deadline: report it as a timeout wherever it catches the request, headers or body.
+    opts.signal.addEventListener('abort', () => failBody?.(Object.assign(timeoutError(), { name: 'TimeoutError' })), { once: true })
     req.end()
   })
 }

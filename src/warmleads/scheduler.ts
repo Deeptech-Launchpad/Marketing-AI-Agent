@@ -17,7 +17,7 @@ import { bucketDay, windowOpen, type WindowConfig } from './window.js'
 //
 // Everything it touches is injected (CycleDeps), so the rules are tested without a database or a CRM.
 
-export type StopReason = 'worker_disabled' | 'paused' | 'outside_window' | 'low_memory' | 'company_limit' | 'gemini_ceiling' | 'nothing_to_do' | 'error'
+export type StopReason = 'worker_disabled' | 'paused' | 'outside_window' | 'low_memory' | 'company_limit' | 'gemini_ceiling' | 'nothing_to_do' | 'repeated_failures' | 'error'
 
 export interface CycleSettings {
   paused: boolean
@@ -86,6 +86,9 @@ export function retryTurn(startedSoFar: number, retryShare: number): boolean {
   return (startedSoFar + 1) % every === 0
 }
 
+/** This many failed evaluations in a row (CRM, network or key trouble rather than one odd site) stop the cycle, so a bad hour cannot use up the night's companies. */
+export const MAX_CONSECUTIVE_FAILURES = 8
+
 export async function runCycle(d: CycleDeps): Promise<CycleResult> {
   const result: CycleResult = { stoppedBecause: 'nothing_to_do', bucket: null, processed: 0, failed: 0, incomplete: 0 }
   const stop = (why: StopReason): CycleResult => ({ ...result, stoppedBecause: why })
@@ -99,6 +102,7 @@ export async function runCycle(d: CycleDeps): Promise<CycleResult> {
 
   await d.recoverStale(now)
 
+  let consecutiveFailures = 0
   const mode: 'pilot' | 'daily' = s.pilotApprovedAt ? 'daily' : 'pilot'
   const bucket = mode === 'pilot' ? 'pilot' : bucketDay(now, windowOf(s))
   result.bucket = bucket
@@ -147,6 +151,7 @@ export async function runCycle(d: CycleDeps): Promise<CycleResult> {
 
     result.processed++
     if (outcome.failed) result.failed++
+    consecutiveFailures = outcome.failed ? consecutiveFailures + 1 : 0
     if (outcome.researchIncomplete) result.incomplete++
     await d.usage.addProgress(d.tenantId, bucket, {
       screened: 1,
@@ -158,6 +163,13 @@ export async function runCycle(d: CycleDeps): Promise<CycleResult> {
       unpricedCalls: evaluated.unpricedCalls,
     })
     if (claim.kind === 'pilot') await d.afterPilotEvaluation(claim)
+
+    // Stop here rather than burn the rest of the night's companies on a systemic problem; the worker waits before trying again.
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      d.log('warn', 'warm-lead cycle stopped: too many failures in a row', { consecutiveFailures })
+      await d.usage.setStopped(d.tenantId, bucket, 'repeated_failures').catch(() => undefined)
+      return stop('repeated_failures')
+    }
 
     // The web research could not be finished because the ceiling was reached: stop the night here, safely.
     if (evaluated.computed.deep === 'skipped_ceiling') {

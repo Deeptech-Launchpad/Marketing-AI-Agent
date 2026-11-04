@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Claim, StoredOutcome, WorkKind } from '../../src/warmleads/companies.js'
-import { runCycle, retryTurn, type CycleDeps, type CycleSettings, type EvaluatedClaim } from '../../src/warmleads/scheduler.js'
+import { MAX_CONSECUTIVE_FAILURES, runCycle, retryTurn, type CycleDeps, type CycleSettings, type EvaluatedClaim } from '../../src/warmleads/scheduler.js'
 import type { ComputedEvaluation } from '../../src/warmleads/service.js'
 import type { BucketLimits, BucketUsage, ProgressDelta, UsageStore } from '../../src/warmleads/usageStore.js'
 import { deepResearchAllowed } from '../../src/warmleads/scheduler.js'
@@ -356,5 +356,43 @@ describe('errors', () => {
     const r = await runCycle(s.deps)
     expect(r.stoppedBecause).toBe('error')
     expect(calls).toBe(1)
+  })
+})
+
+describe('the circuit breaker', () => {
+  const failing = () => async (claim: Claim): Promise<StoredOutcome> => ({ state: 'failed', classification: null, researchIncomplete: false, failed: true })
+
+  it('stops after 8 failed evaluations in a row, so a bad hour cannot use up the nights companies', async () => {
+    const s = setup({ deps: { record: failing() } })
+    const r = await runCycle(s.deps)
+    expect(r.stoppedBecause).toBe('repeated_failures')
+    expect(r.processed).toBe(MAX_CONSECUTIVE_FAILURES)
+    expect(r.failed).toBe(MAX_CONSECUTIVE_FAILURES)
+    expect(s.usage.rows.get(BUCKET)!.companiesStarted).toBe(MAX_CONSECUTIVE_FAILURES) // 17 slots of the night remain
+    expect(s.usage.rows.get(BUCKET)!.stoppedReason).toBe('repeated_failures')
+  })
+
+  it('a success in between resets the count: failures that are not in a row never stop the night', async () => {
+    let n = 0
+    const s = setup({
+      deps: {
+        record: async (claim) => {
+          n++
+          const failed = n % 8 !== 0 // seven failures, then one success, again and again
+          return { state: failed ? 'failed' : 'evaluated', classification: failed ? null : 'cold', researchIncomplete: false, failed }
+        },
+      },
+    })
+    const r = await runCycle(s.deps)
+    expect(r.stoppedBecause).toBe('company_limit')
+    expect(r.processed).toBe(25)
+  })
+
+  it('an incomplete research is not a failure and never trips it', async () => {
+    const s = setup({
+      deps: { record: async () => ({ state: 'needs_reevaluation', classification: null, researchIncomplete: true, failed: false }) },
+    })
+    const r = await runCycle(s.deps)
+    expect(r.stoppedBecause).toBe('company_limit')
   })
 })

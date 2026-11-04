@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bucketDay, DEFAULT_WINDOW, parseClock, windowOpen, windowProblem } from '../../src/warmleads/window.js'
+import { bucketDay, DEFAULT_WINDOW, parseClock, windowChangeProblem, windowOpen, windowProblem } from '../../src/warmleads/window.js'
 
 // The default window is 23:00-06:00 Asia/Kolkata (UTC+5:30, no daylight saving).
 const IST = DEFAULT_WINDOW
@@ -53,5 +53,22 @@ describe('which night a moment belongs to', () => {
   it('month and year boundaries', () => {
     expect(bucketDay(at('2026-12-31T18:50:00Z'), IST)).toBe('day:2026-12-31') // 00:20 IST on 1 Jan 2027 belongs to the night of 31 Dec
     expect(bucketDay(at('2026-12-31T17:40:00Z'), IST)).toBe('day:2026-12-31')
+  })
+})
+
+// A window saved in the middle of a night would key tonight's allowance by a different date and start a second one.
+describe('changing the window mid-night', () => {
+  const night = at('2026-11-04T20:00:00Z') // 01:30 IST, inside the default window
+  const day = at('2026-11-04T12:00:00Z') // 17:30 IST, outside it
+
+  it('is refused while tonight has already used companies or Gemini calls', () => {
+    expect(windowChangeProblem(night, IST, { companiesStarted: 3, geminiCalls: 0 })).toMatch(/already started/)
+    expect(windowChangeProblem(night, IST, { companiesStarted: 0, geminiCalls: 12 })).toMatch(/already started/)
+  })
+
+  it('is allowed before anything ran tonight, and at any time outside the window', () => {
+    expect(windowChangeProblem(night, IST, null)).toBeNull()
+    expect(windowChangeProblem(night, IST, { companiesStarted: 0, geminiCalls: 0 })).toBeNull()
+    expect(windowChangeProblem(day, IST, { companiesStarted: 25, geminiCalls: 300 })).toBeNull()
   })
 })

@@ -24,6 +24,8 @@ const describeIfDb = skip ? describe.skip : describe
 if (skip) console.warn(`\n[warm-leads persistence] SKIPPED — ${skip}\n`)
 
 const T = `wl-int-${Math.random().toString(36).slice(2, 10)}`
+// A second throw-away tenant for tests that must not disturb the first one's 1,200 companies.
+const T2 = `${T}-b`
 const { prisma } = await import('../../src/platform/db.js')
 const { dbUsageStore } = await import('../../src/warmleads/usageStore.js')
 const companies = await import('../../src/warmleads/companies.js')
@@ -55,6 +57,11 @@ const list = (n: number, truncated = false) => async () => ({ items: Array.from(
 
 afterAll(async () => {
   if (skip) return
+  for (const t of [T, T2]) {
+    await prisma.warmLeadCompany.deleteMany({ where: { tenantId: t } })
+    await prisma.warmLeadUsage.deleteMany({ where: { tenantId: t } })
+    await prisma.warmLeadSettings.deleteMany({ where: { tenantId: t } })
+  }
   await prisma.warmLeadRun.deleteMany({ where: { tenantId: T } })
   await prisma.warmLeadCompany.deleteMany({ where: { tenantId: T } })
   await prisma.warmLeadUsage.deleteMany({ where: { tenantId: T } })
@@ -104,6 +111,34 @@ describeIfDb('the company list', () => {
     const r3 = await companies.refreshCompanyList(T, list(10, true)) // a cut-off read must not mark anything gone
     expect(r3).toMatchObject({ truncated: true, markedGone: 0 })
     expect((await companies.companyCounts(T)).total).toBeGreaterThan(1000)
+  })
+})
+
+describeIfDb('the company list: what a live CRM can do', () => {
+  it('the same company appearing twice in the paged list (offset paging over a changing CRM) does not fail the read', async () => {
+    const withDuplicates = async () => ({ items: [crmCompany(0), crmCompany(1), crmCompany(0), crmCompany(2), crmCompany(1)], truncated: false })
+    const r = await companies.refreshCompanyList(T2, withDuplicates)
+    expect(r).toMatchObject({ seen: 3, created: 3, truncated: false })
+    const rows = await prisma.warmLeadCompany.findMany({ where: { tenantId: T2 }, orderBy: { listPosition: 'asc' } })
+    expect(rows.map((x) => x.listPosition)).toEqual([0, 1, 2]) // positions follow the de-duplicated order
+  })
+})
+
+describeIfDb('retrying failed pilot companies', () => {
+  it('gives back the slots of the failed pilot companies it retries (at most the retry share of the pilot) and never touches the Gemini count', async () => {
+    await companies.refreshCompanyList(T2, list(40))
+    await prisma.warmLeadCompany.updateMany({ where: { tenantId: T2 }, data: { cohort: 'pilot', state: 'failed', attempts: 3 } })
+    await dbUsageStore.ensureBucket(T2, 'pilot', { geminiCeiling: 1200, companyLimit: 100, retryLimit: 20 })
+    await prisma.warmLeadUsage.update({ where: { tenantId_bucket: { tenantId: T2, bucket: 'pilot' } }, data: { companiesStarted: 100, geminiCalls: 700 } })
+
+    expect(await companies.retryFailed(T2, { pilotOnly: false })).toBe(40) // not the pilot: no slots are given back
+    expect((await dbUsageStore.getBucket(T2, 'pilot'))!.companiesStarted).toBe(100)
+
+    expect(await companies.retryFailed(T2, { pilotOnly: true })).toBe(40)
+    const u = (await dbUsageStore.getBucket(T2, 'pilot'))!
+    expect(u.companiesStarted).toBe(80) // 20 given back = the retry share, not all 40
+    expect(u.geminiCalls).toBe(700) // the 1,200-call ceiling keeps counting what was spent
+    expect(await dbUsageStore.reserveCompanySlot(T2, 'pilot', true)).toBe(true) // a retry can now start
   })
 })
 
@@ -233,10 +268,14 @@ describeIfDb('the pilot', () => {
     expect((await pilotView(T)).canApprove).toBe(true)
   })
 
-  it('approving needs a finished pilot and then opens daily processing', async () => {
+  it('approving needs a finished pilot; it permits daily processing but does NOT start it (the worker stays paused)', async () => {
     const { approvePilot } = await import('../../src/warmleads/pilot.js')
+    // Start was pressed for the pilot, so processing is running when the admin approves.
+    await prisma.warmLeadSettings.update({ where: { tenantId: T }, data: { paused: false } })
     await approvePilot(T, 'admin-1')
-    expect((await prisma.warmLeadSettings.findUniqueOrThrow({ where: { tenantId: T } })).pilotApprovedAt).not.toBeNull()
+    const s = await prisma.warmLeadSettings.findUniqueOrThrow({ where: { tenantId: T } })
+    expect(s.pilotApprovedAt).not.toBeNull()
+    expect(s.paused).toBe(true) // daily processing begins only when an admin presses Start again
   })
 })
 

@@ -61,6 +61,16 @@ export function windowOpen(now: Date, w: WindowConfig): boolean {
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
+/**
+ * Why the window cannot be changed right now, or null. The night's allowance is keyed by the window (bucketDay), so a window
+ * saved in the middle of a night could start a second allowance; changes wait until tonight's processing is over.
+ */
+export function windowChangeProblem(now: Date, current: WindowConfig, usedTonight: { companiesStarted: number; geminiCalls: number } | null): string | null {
+  if (!windowOpen(now, current)) return null
+  if (!usedTonight || (usedTonight.companiesStarted === 0 && usedTonight.geminiCalls === 0)) return null
+  return "Tonight's processing has already started. Change the window after it ends, so the night's limits are not counted twice."
+}
+
 /** The usage bucket of the night `now` belongs to: "day:YYYY-MM-DD" (the date the window started, in the window's zone). */
 export function bucketDay(now: Date, w: WindowConfig): string {
   const { minutes, year, month, day } = zoneParts(now, w.timezone)

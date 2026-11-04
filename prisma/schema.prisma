@@ -3053,7 +3053,7 @@ model WarmLeadSettings {
   dailyGeminiCeiling   Int       @default(300)
   pilotSize            Int       @default(100)
   pilotGeminiCeiling   Int       @default(1200)
-  // Highest values an admin may set; raised only by an explicit approval after review (25/300 -> 50/600 -> 100/1200).
+  // Highest values an admin may set; raised only by an explicit approval after review (25/300 -> 50/600). Nothing above 50/600 exists.
   approvedMaxCompanies Int       @default(25)
   approvedMaxCeiling   Int       @default(300)
   // Percent of the night's companies that may be retries of earlier failures.

@@ -79,15 +79,25 @@ export function productionDeps(tenantId: string): CycleDeps {
   }
 }
 
+/** A failed read of the company list is not retried every tick (it pages through the live CRM): wait this long, unless an admin asks again. */
+const LIST_RETRY_AFTER_FAILURE_MS = 30 * 60_000
+/** After the circuit breaker trips the worker leaves the CRM and the sites alone for this long. */
+const BREAKER_PAUSE_MS = 30 * 60_000
+const listFailedAt = new Map<string, number>()
+const breakerUntil = new Map<string, number>()
+
 async function handleListRefresh(tenantId: string): Promise<void> {
   const s = await prisma.warmLeadSettings.findUniqueOrThrow({ where: { tenantId } })
   const requested = s.listRefreshRequestedAt
   const done = s.listRefreshedAt
+  const failedAt = listFailedAt.get(tenantId) ?? 0
+  if (failedAt && Date.now() - failedAt < LIST_RETRY_AFTER_FAILURE_MS && !(requested && requested.getTime() > failedAt)) return
   const dayOld = s.pilotApprovedAt && windowOpen(new Date(), { start: s.windowStart, end: s.windowEnd, timezone: s.timezone }) && (!done || Date.now() - done.getTime() > DAY_MS)
   if (!(requested && (!done || requested > done)) && !dayOld) return
   await prisma.warmLeadSettings.update({ where: { tenantId }, data: { listRefreshState: 'running', listRefreshMessage: null } })
   try {
     const r = await withCrmReadOnly(() => refreshCompanyList(tenantId))
+    listFailedAt.delete(tenantId)
     await prisma.warmLeadSettings.update({
       where: { tenantId },
       data: {
@@ -97,7 +107,8 @@ async function handleListRefresh(tenantId: string): Promise<void> {
       },
     })
   } catch (err) {
-    log.warn({ err }, 'company list could not be refreshed')
+    listFailedAt.set(tenantId, Date.now())
+    log.warn({ err }, 'company list could not be refreshed; not tried again for 30 minutes unless an admin asks')
     await prisma.warmLeadSettings.update({ where: { tenantId }, data: { listRefreshState: 'failed', listRefreshMessage: ((err as Error).message ?? String(err)).slice(0, 300) } })
   }
 }
@@ -118,9 +129,12 @@ export async function tickTenant(tenantId: string): Promise<CycleResult | null> 
       }
       return null
     }
+    // After the circuit breaker tripped (see scheduler.ts) nothing is touched until the pause is over.
+    if (Date.now() < (breakerUntil.get(tenantId) ?? 0)) return null
     await handleListRefresh(tenantId)
     await withCrmReadOnly(() => preparePilot(tenantId))
     const result = await runCycle(productionDeps(tenantId))
+    if (result.stoppedBecause === 'repeated_failures') breakerUntil.set(tenantId, Date.now() + BREAKER_PAUSE_MS)
     if (result.processed) log.info(result, 'warm-lead cycle finished')
     await syncPending(tenantId).catch((err) => log.warn({ err }, 'warm-lead sync pass failed'))
     return result

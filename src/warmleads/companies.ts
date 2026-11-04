@@ -56,7 +56,14 @@ export async function refreshCompanyList(tenantId: string, listAll: () => Promis
   const started = new Date()
   const before = await prisma.warmLeadCompany.count({ where: { tenantId } })
   const { items, truncated } = await listAll()
-  const named = items.filter((c) => c.id && c.name?.trim())
+  // Paging a live CRM by offset can return the same company twice; one INSERT must not carry the same id twice
+  // ("cannot affect row a second time"). The first occurrence wins, and list positions follow the de-duplicated order.
+  const seenIds = new Set<string>()
+  const named = items.filter((c) => {
+    if (!c.id || !c.name?.trim() || seenIds.has(c.id)) return false
+    seenIds.add(c.id)
+    return true
+  })
 
   for (let i = 0; i < named.length; i += BATCH) {
     const chunk = named.slice(i, i + BATCH)
@@ -408,5 +415,13 @@ export async function retryFailed(tenantId: string, opts: { pilotOnly: boolean }
     where: { tenantId, inCrm: true, state: { in: ['failed', 'needs_reevaluation'] }, ...(opts.pilotOnly ? { cohort: 'pilot' } : {}) },
     data: { nextAttemptAt: new Date(), attempts: 0 },
   })
+  if (opts.pilotOnly && r.count > 0) {
+    // Every pilot company holds one of the pilot's 100 company slots, even a failed one, so without this a finished pilot
+    // could never retry anything. Give back as many slots as the pilot may still retry. The Gemini ceiling is untouched.
+    await prisma.$executeRaw`
+      UPDATE "WarmLeadUsage"
+      SET "companiesStarted" = GREATEST(0, "companiesStarted" - LEAST(${r.count}::int, GREATEST(0, "retryLimit" - "retriesStarted"))), "updatedAt" = NOW()
+      WHERE "tenantId" = ${tenantId} AND "bucket" = 'pilot'`
+  }
   return r.count
 }

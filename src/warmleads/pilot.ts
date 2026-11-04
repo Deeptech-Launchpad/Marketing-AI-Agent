@@ -129,7 +129,9 @@ export async function approvePilot(tenantId: string, by: string): Promise<void> 
   await finishRunIfIdle(run.id)
   const fresh = await prisma.warmLeadRun.findUniqueOrThrow({ where: { id: run.id } })
   if (fresh.status !== 'completed') throw new ConflictError('The pilot has not finished yet: some companies are still waiting or running.')
-  await prisma.warmLeadSettings.update({ where: { tenantId }, data: { pilotApprovedAt: new Date(), pilotApprovedBy: by, updatedBy: by } })
+  // paused: true in the SAME update: processing was running (Start was pressed for the pilot), and approving it must not roll
+  // straight into daily processing. Daily processing starts only when an admin presses Start again.
+  await prisma.warmLeadSettings.update({ where: { tenantId }, data: { pilotApprovedAt: new Date(), pilotApprovedBy: by, updatedBy: by, paused: true } })
   await prisma.warmLeadRun.update({ where: { id: run.id }, data: { approvedAt: new Date(), approvedBy: by } })
-  await audit({ tenantId, actorType: 'user', actorCrmUserId: by, action: 'warmleads.pilot_approved', resourceType: 'WarmLeadRun', resourceId: run.id, summary: 'Pilot results approved; daily processing may now be started.' })
+  await audit({ tenantId, actorType: 'user', actorCrmUserId: by, action: 'warmleads.pilot_approved', resourceType: 'WarmLeadRun', resourceId: run.id, summary: 'Pilot results approved. Daily processing stays paused until an admin presses Start.' })
 }

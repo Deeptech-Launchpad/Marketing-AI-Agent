@@ -5,6 +5,7 @@ import { audit } from '../platform/audit.js'
 import { prisma } from '../platform/db.js'
 import { BadRequestError, ConflictError } from '../platform/errors.js'
 import { checkLimitUpdate, checkScaleApproval, checkWindow, type LimitUpdate } from './limits.js'
+import { bucketDay, windowChangeProblem } from './window.js'
 
 // THE CONTROLS - every gate is enforced here, in the service, and not only by the screen.
 //
@@ -55,6 +56,11 @@ export async function updateLimits(tenantId: string, by: string, u: LimitUpdate)
 export async function updateWindow(tenantId: string, by: string, w: { start: string; end: string; timezone: string }): Promise<WarmLeadSettings> {
   const checked = checkWindow(w)
   if (!checked.ok) throw new BadRequestError(checked.error)
+  const cur = await ensureSettings(tenantId)
+  const curWindow = { start: cur.windowStart, end: cur.windowEnd, timezone: cur.timezone }
+  const bucket = await prisma.warmLeadUsage.findUnique({ where: { tenantId_bucket: { tenantId, bucket: bucketDay(new Date(), curWindow) } }, select: { companiesStarted: true, geminiCalls: true } })
+  const blocked = windowChangeProblem(new Date(), curWindow, bucket)
+  if (blocked) throw new ConflictError(blocked)
   return change(tenantId, by, { windowStart: checked.value.start, windowEnd: checked.value.end, timezone: checked.value.timezone }, 'window_changed', `Warm-lead window set to ${checked.value.start}–${checked.value.end} ${checked.value.timezone}.`)
 }
 

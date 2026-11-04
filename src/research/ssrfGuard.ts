@@ -148,6 +148,8 @@ export const isAllowedPort = (url: URL): boolean => ALLOWED_PORTS.includes(portO
 
 /** Rejects a URL on any port but 80 and 443. Checked on the first URL and on EVERY redirect hop, before anything is sent. */
 export function assertAllowedPort(url: URL): void {
+  // fetch() refused an address with a user name or password; node:http would send them as a Basic header. Still refused.
+  if (url.username || url.password) throw new BlockedAddressError('Web addresses with a user name or password are not read.')
   if (!isAllowedPort(url)) throw new BlockedAddressError('That port is not allowed: only ports 80 and 443 are read.')
 }
 
