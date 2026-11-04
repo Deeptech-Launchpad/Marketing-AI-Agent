@@ -33,6 +33,7 @@ restart them.
 | Where | Switch | Effect when off |
 |---|---|---|
 | `.env` | `WARM_LEADS_WORKER_ENABLED` | the worker starts and idles; the screen refuses "Start" |
+| `.env` | `WARM_LEADS_GEMINI_API_KEY` | Warm Leads' own Gemini key (separate Google Cloud project). Empty or equal to `GEMINI_API_KEY` = Warm Leads stays idle and the screen says so; the shared key is never used for it. All other features keep `GEMINI_API_KEY` |
 | screen | Start / Pause (default **paused**) | nothing is evaluated |
 | screen | pilot approval | daily processing is refused |
 | `.env` | `WARM_LEADS_SYNC_ENABLED` (+ `WARM_LEADS_ALLOW_LIVE` for a non-local CRM) | nothing is sent to NXT Sales |
