@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render as rtlRender, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from '../../lib/theme'
-import { ENGINES, PIPELINE, SETTINGS_TOOLS, engineForPath, numberWord } from '../../lib/engines'
+import { ENGINES, PIPELINE, SETTINGS_TOOLS, STANDALONE_TOOLS, engineForPath, numberWord } from '../../lib/engines'
 import { AppShell } from './AppShell'
 import app from '../../App.tsx?raw'
 
@@ -102,6 +102,30 @@ describe('CRM Sync lives under Settings', () => {
   it('is mounted at that address, and the old address still leads there', () => {
     expect(app).toContain('<Route path="/settings/crm-sync" element={<CrmSync />} />')
     expect(app).toContain('<Route path="/crm" element={<Navigate to="/settings/crm-sync" replace />} />')
+  })
+})
+
+// Warm Leads is a separate top-level tool (2026-11-04): its own item on the rail,
+// outside the six-stage pipeline, with no stage number.
+describe('Warm Leads is a top-level item outside the pipeline', () => {
+  it('has its own rail item and no stage badge', () => {
+    renderShell()
+    const nav = screen.getByRole('navigation')
+    expect(within(nav).getByRole('link', { name: /warm leads/i })).toHaveAttribute('href', '/warm-leads')
+    expect(document.querySelectorAll('.nav__stage')).toHaveLength(6)
+  })
+
+  it('is not an engine or a pipeline node, so the numbering is untouched', () => {
+    expect(ENGINES.map((e) => e.id)).not.toContain('warm-leads')
+    expect(PIPELINE.map((e) => e.id)).not.toContain('warm-leads')
+    expect(STANDALONE_TOOLS.map((t) => t.id)).toEqual(['warm-leads'])
+    expect(STANDALONE_TOOLS[0]?.stage).toBe(0)
+    expect(engineForPath('/warm-leads')?.title).toBe('Warm Leads')
+  })
+
+  it('is mounted at /warm-leads, and the old Settings address leads there', () => {
+    expect(app).toContain('<Route path="/warm-leads" element={<WarmLeads />} />')
+    expect(app).toContain('<Route path="/settings/warm-leads" element={<Navigate to="/warm-leads" replace />} />')
   })
 })
 

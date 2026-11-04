@@ -12,6 +12,7 @@ const REDACT = [
   '*.apiKey',
   '*.authorization',
   'GEMINI_API_KEY',
+  'WARM_LEADS_GEMINI_API_KEY',
   'JWT_SECRET',
 ]
 

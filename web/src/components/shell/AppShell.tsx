@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { HelpCircle, LayoutGrid, LogOut, PanelLeftClose, PanelLeftOpen, PanelRightClose, Search, SlidersHorizontal } from 'lucide-react'
-import { ENGINES, brandAccent, engineAccent, engineForPath, rgbTriple } from '../../lib/engines'
+import { ENGINES, STANDALONE_TOOLS, brandAccent, engineAccent, engineForPath, rgbTriple } from '../../lib/engines'
 import { useTheme } from '../../lib/theme'
 import { ThemeSwitch } from './ThemeSwitch'
 import { useAuth } from '../../lib/auth'
@@ -91,6 +91,27 @@ export function AppShell() {
           })}
         </ul>
 
+        {/* Standalone tools: not pipeline stages, so no stage number and outside the six-stage list. */}
+        {navOpen && <p className="nav__section">Tools</p>}
+        <ul className="nav__list">
+          {STANDALONE_TOOLS.map((t) => {
+            const Icon = t.icon
+            return (
+              <li key={t.id}>
+                <NavLink
+                  to={t.path}
+                  className={({ isActive }) => `nav__item${isActive ? ' is-active' : ''}`}
+                  style={{ ['--item-accent' as string]: engineAccent(t, theme) }}
+                  title={navOpen ? undefined : t.title}
+                >
+                  <Icon size={16} aria-hidden="true" />
+                  {navOpen && <span className="nav__label">{t.name}</span>}
+                </NavLink>
+              </li>
+            )
+          })}
+        </ul>
+
         <NavLink
           to="/settings"
           className={({ isActive }) => `nav__item nav__settings${isActive ? ' is-active' : ''}`}
@@ -113,7 +134,7 @@ export function AppShell() {
           <span className="topbar__engine">
             {engine?.title ?? (location.pathname === '/help' ? 'User Manual' : 'Command Centre')}
           </span>
-          {engine && <span className="topbar__task mono">{engine.task}</span>}
+          {engine && engine.task && <span className="topbar__task mono">{engine.task}</span>}
         </div>
 
         <div className="topbar__right">

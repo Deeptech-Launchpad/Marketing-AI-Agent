@@ -320,6 +320,8 @@ export const api = {
     request<T>(path, { ...opts, method: 'POST', body }),
   patch: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, 'method' | 'body'>) =>
     request<T>(path, { ...opts, method: 'PATCH', body }),
+  put: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, 'method' | 'body'>) =>
+    request<T>(path, { ...opts, method: 'PUT', body }),
   /** POSTs a file's own bytes (for example a ZIP) instead of JSON. */
   upload: <T>(path: string, file: Blob, opts: { contentType: string; headers?: Record<string, string> }) =>
     request<T>(path, { method: 'POST', rawBody: file, contentType: opts.contentType, headers: opts.headers }),

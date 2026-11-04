@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Cloud, KeyRound, LogOut, User } from 'lucide-react'
+import { Cloud, Flame, KeyRound, LogOut, User } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/hooks'
 import { useAuth } from '../lib/auth'
@@ -146,6 +146,19 @@ export function Settings() {
         <div className="row" style={{ marginTop: 'var(--s4)' }}>
           <Button icon={Cloud} onClick={() => navigate('/settings/crm-sync')}>
             Open CRM Sync
+          </Button>
+        </div>
+      </Panel>
+
+      <Panel title="Warm leads" subtitle="Which NXT Sales companies show current interest">
+        <p className="note">
+          Evaluates every NXT Sales company as warm, early signal, cold or not enough data: a cheap screen first, web research only
+          for promising companies. Starts with a 100-company pilot that you review and approve; after that a few companies are
+          processed each night within daily limits. Results stay in this application until sending to NXT Sales is approved.
+        </p>
+        <div className="row" style={{ marginTop: 'var(--s4)' }}>
+          <Button icon={Flame} onClick={() => navigate('/warm-leads')}>
+            Open Warm leads
           </Button>
         </div>
       </Panel>

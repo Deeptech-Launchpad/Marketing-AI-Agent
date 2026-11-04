@@ -52,5 +52,11 @@ module.exports = {
   apps: [
     { name: 'nxt-marketing-api', script: 'dist/index.js', ...common },
     { name: 'nxt-marketing-worker', script: 'dist/worker.js', ...common },
+    // WARM LEADS (2026-11-04): its OWN process, so it can never slow, starve or take a job from the API or the
+    // worker above (Bulk Email, outreach, intent monitoring). It reads its own table (no job queue), is read-only
+    // towards NXT Sales, and spends Gemini only inside a database-enforced daily budget. It does NOTHING unless
+    // WARM_LEADS_WORKER_ENABLED=true is in .env, and processes nothing until an admin starts it on the screen.
+    // Its own, lower memory ceiling: a leak restarts this process only.
+    { name: 'nxt-marketing-warmleads', script: 'dist/warmleadsWorker.js', ...common, max_memory_restart: '1200M', node_args: '--max-old-space-size=1024' },
   ],
 }

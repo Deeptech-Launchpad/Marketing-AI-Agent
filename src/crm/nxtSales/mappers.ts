@@ -64,6 +64,7 @@ export function toCompanyParams(q: CrmCompanyQuery): QueryParams {
   // returning every company, with or without deals.
   if (q.hasDeal !== undefined) p.hasDeal = q.hasDeal ? 'yes' : 'no'
   if (q.createDate) p.createDate = q.createDate
+  if (q.lastActivity) p.lastActivity = q.lastActivity
   if (q.customFilters && Object.keys(q.customFilters).length) {
     p.customFilters = JSON.stringify(q.customFilters)
   }

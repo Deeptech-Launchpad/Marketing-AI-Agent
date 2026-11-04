@@ -29,6 +29,8 @@ export const CrmCompanyQuerySchema = z.object({
   remarksValues: z.array(z.string()).optional(),
   hasDeal: z.boolean().optional(),
   createDate: z.string().optional(),
+  /** NXT Sales' own date token for the company's NEWEST activity, e.g. 'last_90' (read-only filter). */
+  lastActivity: z.string().optional(),
   customFilters: z.record(z.string()).optional(),
   page: z.number().int().positive().optional(),
   limit: z.number().int().positive().max(500).optional(),

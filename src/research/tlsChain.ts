@@ -2,7 +2,7 @@ import { X509Certificate } from 'node:crypto'
 import http from 'node:http'
 import tls from 'node:tls'
 import { logger } from '../platform/logger.js'
-import { assertPublicHost } from './ssrfGuard.js'
+import { ALLOWED_PORTS, assertAllowedPort, assertPublicHost, createPinnedLookup } from './ssrfGuard.js'
 
 // COMPLETING A CERTIFICATE CHAIN THE SERVER DID NOT SEND.
 //
@@ -100,6 +100,7 @@ async function fetchIssuer(rawUrl: string): Promise<string | null> {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
 
   try {
+    assertAllowedPort(url)
     await assertPublicHost(url.hostname)
   } catch {
     return null
@@ -108,7 +109,13 @@ async function fetchIssuer(rawUrl: string): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     const req = http.get(
       url,
-      { timeout: AIA_TIMEOUT_MS, headers: { Accept: 'application/pkix-cert, application/x-x509-ca-cert, */*' } },
+      {
+        timeout: AIA_TIMEOUT_MS,
+        headers: { Accept: 'application/pkix-cert, application/x-x509-ca-cert, */*' },
+        // The address that was checked is the address connected to, and no pooled socket can skip that.
+        lookup: createPinnedLookup() as unknown as http.RequestOptions['lookup'],
+        agent: false,
+      },
       (res) => {
         if (!res.statusCode || res.statusCode >= 400) {
           res.resume()
@@ -177,6 +184,7 @@ function trustedSubjects(): Set<string> {
  * — in which case the caller reports the original failure, unchanged.
  */
 export async function completeCertificateChain(hostname: string, port = 443): Promise<string[] | null> {
+  if (!ALLOWED_PORTS.includes(port)) return null // only ports 80 and 443 are ever connected to
   const key = `${hostname}:${port}`
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.chain
@@ -188,7 +196,15 @@ export async function completeCertificateChain(hostname: string, port = 443): Pr
 
   const presented = await new Promise<X509Certificate | null>((resolve) => {
     const socket = tls.connect(
-      { host: hostname, port, servername: hostname, rejectUnauthorized: false, timeout: HANDSHAKE_TIMEOUT_MS },
+      {
+        host: hostname,
+        port,
+        servername: hostname,
+        rejectUnauthorized: false,
+        timeout: HANDSHAKE_TIMEOUT_MS,
+        // Pinned: the handshake goes to the address that passed the public-address check.
+        lookup: createPinnedLookup() as unknown as tls.ConnectionOptions['lookup'],
+      },
       () => {
         const peer = socket.getPeerCertificate(true)
         socket.destroy()

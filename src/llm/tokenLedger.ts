@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import { prisma, newId } from '../platform/db.js'
 import { logger } from '../platform/logger.js'
+import { currentGeminiBudget } from './gemini/budgetContext.js'
 import type { LlmUsage } from './llmPort.js'
 
 // Records one row per LLM request and rolls the cost onto the run.
@@ -41,6 +42,13 @@ export async function recordLlmCall(input: LedgerInput): Promise<void> {
   const promptTokens = toCount(input.usage.promptTokens)
   const outputTokens = toCount(input.usage.outputTokens)
   const totalTokens = toCount(input.usage.totalTokens) || promptTokens + outputTokens
+
+  // A Warm Leads budget, when one is open, learns what the call cost (nothing is estimated).
+  try {
+    currentGeminiBudget()?.onLedger?.({ costUsd: input.costUsd, priced: input.priced, hasUsageData: input.usage.hasUsageData })
+  } catch {
+    /* the budget's own bookkeeping never blocks the ledger */
+  }
 
   try {
     await prisma.$transaction(async (tx) => {

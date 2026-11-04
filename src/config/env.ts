@@ -67,6 +67,12 @@ const schema = z.object({
   // actually wrong. Step-level and budget limits still bound the run overall.
   GEMINI_ATTEMPT_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   GEMINI_MAX_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  /**
+   * A hard ceiling on the number of Gemini API calls this process may make (0 = no ceiling). Every HTTP request
+   * counts — retries and model fall-backs included. The call after the ceiling is never sent
+   * (llm/gemini/callCeiling.ts). Used by the isolated warm-lead test.
+   */
+  GEMINI_CALL_CEILING: z.coerce.number().int().min(0).max(100_000).default(0),
 
   BUDGET_MAX_TOKENS_PER_RUN: z.coerce.number().int().positive().default(500_000),
   BUDGET_MAX_USD_PER_RUN: z.coerce.number().positive().default(5),
@@ -493,6 +499,36 @@ const schema = z.object({
   BULK_SEND_VIA: z.enum(['smtp', 'crm']).default('smtp'),
   BULK_OPEN_TRACKING_BASE_URL: z.string().default(''),
 
+  // ── Warm leads (2026-10-30, src/warmleads) ──────────────────────────────
+  // Results are written to NXT Sales (/api/marketing-warm-leads) only when
+  // this is on. Off: evaluations still run and are kept here, and each one
+  // records that it was not sent.
+  WARM_LEADS_SYNC_ENABLED: bool.default('false'),
+  // Writing to a NON-local NXT Sales needs this as well — same rule as
+  // CRM_WRITE_ALLOW_LIVE: a live CRM is never written to by accident.
+  WARM_LEADS_ALLOW_LIVE: bool.default('false'),
+  // The web research (Intent Signals, Gemini + search — the only paid step)
+  // runs for at most this many companies per run. The fast screen has no cap.
+  WARM_LEADS_DEEP_MAX_PER_RUN: z.coerce.number().int().min(0).max(50).default(10),
+  // Largest batch one click may start after the test is approved.
+  WARM_LEADS_MAX_BATCH: z.coerce.number().int().min(1).max(500).default(100),
+  // The fixed seed of the representative test sample: the same seed on the same
+  // CRM data picks the same companies (warmleads/sample.ts).
+  // How many companies with recent activity have their emails read when the test sample looks for
+  // recent replies (read-only calls to NXT Sales; the most recently active are read first).
+  WARM_LEADS_REPLY_PROBE_CAP: z.coerce.number().int().min(20).max(5000).default(1000),
+  WARM_LEADS_SAMPLE_SEED: z.coerce.number().int().min(1).max(2_147_483_647).default(20261031),
+  // The dedicated Warm Leads worker (src/warmleadsWorker.ts, its own PM2 process). OFF unless set: a process that
+  // does not have this on does nothing, and the screen refuses to "start" while it is off. A kill switch.
+  WARM_LEADS_WORKER_ENABLED: bool.default('false'),
+  // A SEPARATE Gemini key for Warm Leads (its own Google Cloud project, restricted to the Generative Language API and
+  // this server's address). Every Gemini call made inside a Warm Leads budget uses THIS key and never GEMINI_API_KEY.
+  // Empty = Warm Leads cannot call Gemini at all (it stops safely and says why); it is never filled in from the shared key.
+  WARM_LEADS_GEMINI_API_KEY: z.string().default(''),
+  // The worker stops safely when the server's available memory (MB) drops below this, and starts a night only with
+  // 1 GB more (3072 / 4096 by default: the same rule as the approved isolated test).
+  WARM_LEADS_MIN_AVAILABLE_MB: z.coerce.number().int().min(256).max(65_536).default(3072),
+
 
   // ── Task #983: engagement tracking ──────────────────────────────────────
   /**
@@ -647,6 +683,18 @@ const schema = z.object({
    * field key would create a column nobody agreed to.
    */
   CRM_WRITE_ENABLED: bool.default('false'),
+  /**
+   * READ-ONLY MODE for the NXT Sales connection, enforced in the HTTP transport itself (crm/nxtSales/httpClient.ts
+   * crmFetch): only GET, only to a short list of read endpoints, never following a redirect. Every write path —
+   * crmPut, crmPost, the bulk-send API, the warm-lead sync — is blocked there EVEN IF its own switch is on. Off by
+   * default (the platform's normal behaviour is unchanged); the isolated warm-lead test switches it on.
+   */
+  CRM_READ_ONLY: bool.default('false'),
+  /**
+   * A pre-made, short-lived NXT Sales token. When set it is used as it is and nothing is signed, so the isolated
+   * test never needs the shared JWT_SECRET: whoever starts the test makes the token and the secret stays where it is.
+   */
+  NXT_SALES_STATIC_TOKEN: z.string().default(''),
   /**
    * Whether a write may target a NON-LOCAL NXT Sales, i.e. the real CRM.
    *

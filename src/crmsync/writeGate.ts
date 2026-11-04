@@ -58,6 +58,11 @@ export interface WriteCapability {
 /** Hosts where a mistake costs nothing. Anything else is treated as real. */
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'])
 
+/** Whether Warm Leads may write to the NXT Sales this server is connected to: a local one always, the live one only when WARM_LEADS_ALLOW_LIVE is on. */
+export function warmLeadsWriteTargetAllowed(): boolean {
+  return isLocalTarget(env.NXT_SALES_BASE_URL) || env.WARM_LEADS_ALLOW_LIVE
+}
+
 export function isLocalTarget(baseUrl: string): boolean {
   try {
     return LOCAL_HOSTS.has(new URL(baseUrl).hostname)

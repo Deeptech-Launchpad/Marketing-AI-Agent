@@ -1,6 +1,8 @@
 import pLimit from 'p-limit'
+import { recordGeminiFailure, reserveGeminiCallAsync } from './callCeiling.js'
 import type { z } from 'zod'
 import { env } from '../../config/env.js'
+import { resolveGeminiApiKey } from './apiKey.js'
 import { UpstreamError } from '../../platform/errors.js'
 import { logger } from '../../platform/logger.js'
 import { estimateCost } from '../costEstimator.js'
@@ -83,10 +85,14 @@ function firstText(res: GeminiResponse): string {
 }
 
 async function post(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: GeminiResponse }> {
+  // The key first (a missing dedicated key must not use up a reservation), then counted before the request is made;
+  // past the ceiling this throws and nothing is sent.
+  const apiKey = resolveGeminiApiKey()
+  await reserveGeminiCallAsync(path.replace(/^models\/[^:]+:/, ''))
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), env.GEMINI_ATTEMPT_TIMEOUT_MS)
   try {
-    const res = await fetch(`${env.GEMINI_API_BASE}/${path}?key=${env.GEMINI_API_KEY}`, {
+    const res = await fetch(`${env.GEMINI_API_BASE}/${path}?key=${apiKey}`, {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
@@ -213,6 +219,7 @@ export class GeminiGateway implements LlmPort {
       )
     }
 
+    recordGeminiFailure(lastError)
     throw new UpstreamError(
       `${lastError?.message ?? 'Gemini call failed'} (tried ${candidates.length} model(s))`,
       { retryable: false },
@@ -337,6 +344,7 @@ export class GeminiGateway implements LlmPort {
       }
     }
 
+    recordGeminiFailure(lastError)
     return {
       ok: false,
       provider: this.name,
@@ -457,7 +465,9 @@ export class GeminiGateway implements LlmPort {
 
   async health(): Promise<{ ok: boolean; detail?: string }> {
     try {
-      const res = await fetch(`${env.GEMINI_API_BASE}/models?key=${env.GEMINI_API_KEY}`, {
+      const apiKey = resolveGeminiApiKey()
+      await reserveGeminiCallAsync('models.list')
+      const res = await fetch(`${env.GEMINI_API_BASE}/models?key=${apiKey}`, {
         signal: AbortSignal.timeout(8_000),
       })
       // Never surface the response body here — it can echo the key back.

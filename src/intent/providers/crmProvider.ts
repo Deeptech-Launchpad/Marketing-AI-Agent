@@ -13,7 +13,7 @@ import type { IntentProvider, ProviderContext, ProviderResult } from './provider
 // an open opportunity or a suppression entry is a company where outreach is
 // inappropriate, and that is a finding worth surfacing rather than an omission.
 
-const RECENT_ACTIVITY_DAYS = 90
+export const RECENT_ACTIVITY_DAYS = 90
 
 export class CrmSignalProvider implements IntentProvider {
   readonly name = 'crm'

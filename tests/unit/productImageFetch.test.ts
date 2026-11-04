@@ -26,6 +26,7 @@ const lookup = vi.fn()
 vi.mock('node:dns/promises', () => ({ default: { lookup: (...a: unknown[]) => lookup(...a) } }))
 
 const { fetchProductImages } = await import('../../src/websiteaudit/productImages.js')
+const { setTransportForTests } = await import('../../src/research/pageFetch.js')
 
 /** One response, shaped the way fetchAsset actually reads a response. */
 function response(opts: {
@@ -93,9 +94,11 @@ beforeEach(() => {
     requested.push(url)
     return response({ headers: { 'content-type': 'image/jpeg' }, chunks: [PNG] })
   })
-  vi.stubGlobal('fetch', fetchMock)
+  // The reader no longer calls the global fetch (its connection is pinned); the mocked network goes in through its test seam.
+  setTransportForTests((url, headers, opts) => fetchMock(url.toString(), { redirect: 'manual', signal: opts.signal, headers }))
 })
 afterEach(() => {
+  setTransportForTests(null)
   vi.unstubAllGlobals()
 })
 

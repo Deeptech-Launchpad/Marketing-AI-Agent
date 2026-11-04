@@ -6,6 +6,7 @@ import {
   Send,
   GitBranch,
   Cloud,
+  Flame,
   type LucideIcon,
 } from 'lucide-react'
 import type { Theme } from './theme'
@@ -159,8 +160,32 @@ export const SETTINGS_TOOLS: EngineDef[] = [
   },
 ]
 
-/** Every workspace with an engine header — the rail's engines and the Settings tools. */
-const ALL_WORKSPACES: EngineDef[] = [...ENGINES, ...SETTINGS_TOOLS]
+/**
+ * Top-level tools that are NOT pipeline stages.
+ *
+ * Warm Leads evaluates the whole NXT Sales company list on its own schedule
+ * (a separate worker); it is not a step a company moves through. It has its
+ * own item on the rail, below the engines, with no stage number, so the six-stage
+ * pipeline, its numbering and its behaviour are unchanged. `stage` is 0.
+ */
+export const STANDALONE_TOOLS: EngineDef[] = [
+  {
+    id: 'warm-leads',
+    name: 'Warm Leads',
+    title: 'Warm Leads',
+    purpose: 'Finds which NXT Sales companies show real buying interest, in nightly batches, with the evidence.',
+    path: '/warm-leads',
+    icon: Flame,
+    accentVar: '--e-warmleads',
+    accent: '#ef4444',
+    accentLight: '#991b1b',
+    task: '',
+    stage: 0,
+  },
+]
+
+/** Every workspace with an engine header — the rail's engines, the standalone tools and the Settings tools. */
+const ALL_WORKSPACES: EngineDef[] = [...ENGINES, ...STANDALONE_TOOLS, ...SETTINGS_TOOLS]
 
 export const ENGINE_BY_ID = new Map(ALL_WORKSPACES.map((e) => [e.id, e]))
 

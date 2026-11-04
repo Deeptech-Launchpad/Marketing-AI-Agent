@@ -1,11 +1,13 @@
 import crypto from 'node:crypto'
+import http from 'node:http'
 import https from 'node:https'
-import { Readable } from 'node:stream'
+import { pipeline, Readable, type Transform } from 'node:stream'
 import tls from 'node:tls'
+import zlib from 'node:zlib'
 import { env } from '../config/env.js'
 import { prisma, newId } from '../platform/db.js'
 import { detectSignals, htmlToText, type PageSignals } from './htmlToText.js'
-import { assertPublicHost, normalizeUrl } from './ssrfGuard.js'
+import { assertAllowedPort, assertPublicHost, BlockedAddressError, createPinnedLookup, normalizeUrl } from './ssrfGuard.js'
 import { completeCertificateChain, isIncompleteChainError } from './tlsChain.js'
 
 // Server-side page fetch for prospect research, ported from NXT Sales'
@@ -112,6 +114,8 @@ function isXmlContentType(ctype: string): boolean {
  * accurately.
  */
 export function describeFetchFailure(err: unknown): string {
+  // A refusal by the SSRF guard keeps its own sentence (private address, port not allowed, unresolved).
+  if (err instanceof BlockedAddressError) return err.message
   const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } }
   if (e?.name === 'AbortError' || e?.name === 'TimeoutError') return 'The site took too long to respond.'
 
@@ -168,11 +172,7 @@ function deadline(): { signal: AbortSignal; release: () => void } {
 async function fetchOnce(url: URL, init: { headers: Record<string, string> }): Promise<Fetched> {
   const first = deadline()
   try {
-    const res = await fetch(url.toString(), {
-      redirect: 'manual',
-      signal: first.signal,
-      headers: init.headers,
-    })
+    const res = await transport(url, init.headers, { signal: first.signal })
     return { res, release: first.release }
   } catch (err) {
     first.release()
@@ -185,7 +185,7 @@ async function fetchOnce(url: URL, init: { headers: Record<string, string> }): P
     // body, not just the socket going idle.
     const retry = deadline()
     try {
-      const res = await httpsRequestVerified(url, init.headers, [...tls.rootCertificates, ...extra], retry.signal)
+      const res = await transport(url, init.headers, { signal: retry.signal, ca: [...tls.rootCertificates, ...extra] })
       return { res, release: retry.release }
     } catch (retryErr) {
       retry.release()
@@ -225,46 +225,172 @@ async function readBody(
 }
 
 /**
- * A single verified GET over node:https with an explicit trust set.
- *
- * `rejectUnauthorized` is left at its default of true and the `ca` list is the
- * platform roots PLUS the issuers the site published. Redirects are not
- * followed, matching `redirect: 'manual'` above.
+ * What a request needs: the deadline, and — only for the one retry after an
+ * incomplete certificate chain — the extra issuer certificates to trust.
  */
-function httpsRequestVerified(
-  url: URL,
-  headers: Record<string, string>,
-  ca: readonly string[],
-  signal?: AbortSignal,
-): Promise<Response> {
+export interface TransportOptions {
+  signal: AbortSignal
+  ca?: readonly string[]
+}
+export type Transport = (url: URL, headers: Record<string, string>, opts: TransportOptions) => Promise<Response>
+
+/** The two request functions a transport uses; a test hands in fakes (no sockets, no DNS). */
+export interface RequestDeps {
+  http: { request: typeof http.request }
+  https: { request: typeof https.request }
+}
+const realDeps: RequestDeps = { http, https }
+
+/** Errors reach describeFetchFailure the way fetch's did: the cause carries the code, aborts carry their name. */
+function asFetchError(err: unknown): unknown {
+  const e = err as { name?: string }
+  if (err instanceof BlockedAddressError || e?.name === 'AbortError' || e?.name === 'TimeoutError') return err
+  return Object.assign(new TypeError('fetch failed'), { cause: err })
+}
+
+/**
+ * ONE verified GET over node:http / node:https, with the connection PINNED.
+ *
+ * The socket layer asks `createPinnedLookup()` where to connect, and that
+ * lookup resolves the name ONCE, refuses the whole answer if any address in it
+ * is private or special, and returns only addresses that passed. The address
+ * that was validated is the address that is connected to — there is no second
+ * DNS query for a hostile name to answer differently (DNS rebinding).
+ *
+ *  - `agent: false`: a fresh connection every time, so no pooled socket can carry a
+ *    connection that skipped the lookup.
+ *  - Redirects are NOT followed here; the callers follow them by hand and re-check every hop.
+ *  - TLS verification is never relaxed; `ca` only ADDS issuers for the one chain-completion retry.
+ *  - The body is decoded (gzip, deflate, br) so what callers read is what fetch used to give them;
+ *    the byte cap they apply counts the DECODED bytes, so a compression bomb is cut off the same way.
+ */
+/**
+ * A Response for ANY status the server sends. The Response constructor only accepts 200-599 (and refuses a body for
+ * 204/205/304), but fetch() used to hand callers whatever the server said - LinkedIn answers bots with HTTP 999 - and
+ * callers treat such an answer as a fact ("login wall"), not as a crash. For a status the constructor refuses, the
+ * Response is built with a placeholder and its status/ok are overridden with the real values.
+ */
+function responseFor(status: number, body: ReadableStream<Uint8Array> | null, headers: Array<[string, string]>): Response {
+  const bodyless = status === 204 || status === 205 || status === 304 || (status >= 100 && status < 200)
+  const representable = status >= 200 && status <= 599 && status !== 205
+  if (representable) return new Response(bodyless ? null : body, { status, headers })
+  const r = new Response(bodyless ? null : body, { status: 200, headers })
+  Object.defineProperty(r, 'status', { value: status })
+  Object.defineProperty(r, 'ok', { value: status >= 200 && status < 300 })
+  return r
+}
+
+/** Lenient on purpose: servers truncate bodies, send empty gzip bodies, or mislabel raw deflate; fetch() coped with all of it. */
+const LENIENT = { flush: zlib.constants.Z_SYNC_FLUSH, finishFlush: zlib.constants.Z_SYNC_FLUSH }
+const LENIENT_BR = { flush: zlib.constants.BROTLI_OPERATION_FLUSH, finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH }
+
+/**
+ * The content codings of a response, in the order they must be undone, or null when one is unknown.
+ * "deflate" is sent both zlib-wrapped (RFC 1950) and raw (RFC 1951); see rawDeflate below.
+ */
+function codingsFor(header: string): string[] | null {
+  const tokens = header.split(',').map((x) => x.trim().toLowerCase()).filter((x) => x && x !== 'identity')
+  const known = tokens.every((t) => t === 'gzip' || t === 'x-gzip' || t === 'deflate' || t === 'br')
+  return known ? tokens.reverse() : null
+}
+
+function decodersFor(codings: string[], rawDeflate: boolean): Transform[] {
+  return codings.map((c) =>
+    c === 'br' ? zlib.createBrotliDecompress(LENIENT_BR) : c === 'deflate' ? (rawDeflate ? zlib.createInflateRaw(LENIENT) : zlib.createInflate(LENIENT)) : zlib.createGunzip(LENIENT),
+  )
+}
+
+export function pinnedRequest(url: URL, headers: Record<string, string>, opts: TransportOptions, deps: RequestDeps = realDeps): Promise<Response> {
   return new Promise((resolve, reject) => {
-    const req = https.request(
-      url,
-      { method: 'GET', headers, ca: [...ca], rejectUnauthorized: true, timeout: env.RESEARCH_FETCH_TIMEOUT_MS, signal },
-      (res) => {
+    const secure = url.protocol === 'https:'
+    const options: https.RequestOptions = {
+      method: 'GET',
+      headers: { 'Accept-Encoding': 'gzip, deflate, br', ...headers },
+      lookup: createPinnedLookup() as unknown as https.RequestOptions['lookup'],
+      agent: false,
+      timeout: env.RESEARCH_FETCH_TIMEOUT_MS,
+      signal: opts.signal,
+      ...(secure ? { rejectUnauthorized: true, ...(opts.ca ? { ca: [...opts.ca] } : {}) } : {}),
+    }
+    const timeoutError = () => Object.assign(new Error('The site took too long to respond.'), { name: 'TimeoutError' })
+    // Set once the response body is being read, so a deadline that fires mid-body is reported as "too slow", not "reset".
+    let failBody: ((err: Error) => void) | null = null
+
+    const req = (secure ? deps.https : deps.http).request(url, options, (res) => {
+      // This runs inside an event handler: anything thrown here would be an uncaught exception that kills the process.
+      try {
         const headerEntries: Array<[string, string]> = []
         for (const [k, v] of Object.entries(res.headers)) {
           if (typeof v === 'string') headerEntries.push([k, v])
           else if (Array.isArray(v)) headerEntries.push([k, v.join(', ')])
         }
-        // 204/304 carry no body, and Response refuses one for those statuses.
         const status = res.statusCode ?? 502
-        const bodyless = status === 204 || status === 304 || (status >= 100 && status < 200)
-        if (bodyless) res.resume()
-        resolve(
-          new Response(bodyless ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>), {
-            status,
-            headers: headerEntries,
-          }),
-        )
-      },
-    )
-    req.on('error', reject)
-    req.on('timeout', () => {
-      req.destroy(new Error(`The site took too long to respond.`))
+        // No body for these statuses (a Response refuses one).
+        if (status === 204 || status === 205 || status === 304 || (status >= 100 && status < 200)) {
+          res.resume()
+          resolve(responseFor(status, null, headerEntries))
+          return
+        }
+        const codings = codingsFor(String(res.headers['content-encoding'] ?? ''))
+        if (!codings) {
+          // An encoding this reader cannot undo. A page that was read OK is useless then; any other answer (a 404, a
+          // redirect) carries a body nobody reads, so it is reported as the fact it is, as fetch() did.
+          if (status >= 200 && status < 300) {
+            res.destroy()
+            reject(asFetchError(new Error('The site used a content encoding that cannot be read.')))
+            return
+          }
+        }
+        const start = (rawDeflate: boolean) => {
+          try {
+            const decoders = codings ? decodersFor(codings, rawDeflate) : []
+            // The same wiring as before the hardening: the response (through its decoders) IS the stream the reader consumes,
+            // so a cancel (the reader discarding a body it does not want) tears the whole chain down cleanly.
+            const out: Readable = decoders.length ? (pipeline as unknown as (...s: unknown[]) => Readable)(res, ...decoders, () => undefined) : res
+            // A deadline that fires mid-body ends this stream with the timeout error rather than a bare "connection reset".
+            failBody = (err: Error) => { if (!out.destroyed) out.destroy(asFetchError(err) as Error) }
+            const outHeaders = decoders.length ? headerEntries.filter(([k]) => !/^content-(encoding|length)$/i.test(k)) : headerEntries
+            resolve(responseFor(status, Readable.toWeb(out) as ReadableStream<Uint8Array>, outHeaders))
+          } catch (err) {
+            res.destroy()
+            reject(asFetchError(err))
+          }
+        }
+        if (codings && codings[0] === 'deflate') {
+          // Servers send both flavours under the name "deflate"; a zlib-wrapped stream starts with a byte whose low nibble is 8.
+          const onEarlyError = (err: Error) => reject(asFetchError(err))
+          res.once('error', onEarlyError)
+          res.once('readable', () => {
+            res.off('error', onEarlyError)
+            const first = res.read() as Buffer | null
+            if (first) res.unshift(first)
+            start(first ? (first[0]! & 0x0f) !== 8 : false)
+          })
+        } else {
+          start(false)
+        }
+      } catch (err) {
+        res.destroy()
+        reject(asFetchError(err))
+      }
     })
+    req.on('error', (err) => reject(asFetchError(err)))
+    req.on('timeout', () => {
+      const e = timeoutError()
+      failBody?.(e)
+      req.destroy(e)
+    })
+    // The deadline: report it as a timeout wherever it catches the request, headers or body.
+    opts.signal.addEventListener('abort', () => failBody?.(Object.assign(timeoutError(), { name: 'TimeoutError' })), { once: true })
     req.end()
   })
+}
+
+let transport: Transport = (url, headers, opts) => pinnedRequest(url, headers, opts)
+
+/** Tests only: replace the network. Pass null to restore the real, pinned transport. */
+export function setTransportForTests(t: Transport | null): void {
+  transport = t ?? ((url, headers, opts) => pinnedRequest(url, headers, opts))
 }
 
 async function fetchWithRedirects(
@@ -276,7 +402,9 @@ async function fetchWithRedirects(
 
   for (let hop = 0; hop <= env.RESEARCH_MAX_REDIRECTS; hop++) {
     // Re-validated on EVERY hop: a public URL must not be able to 302 into the
-    // private network.
+    // private network, or to a port that is not a website. The port is checked
+    // BEFORE anything is sent to it.
+    assertAllowedPort(url)
     await assertPublicHost(url.hostname)
 
     let fetched: Fetched
@@ -309,6 +437,7 @@ async function fetchWithRedirects(
         }
         url = next
         redirectChain.push(url.toString())
+        await res.body?.cancel().catch(() => undefined) // a redirect's body is never read: let the socket go now
         continue
       }
 
@@ -393,6 +522,7 @@ export async function fetchAsset(
   let url = start
   for (let hop = 0; hop <= env.RESEARCH_MAX_REDIRECTS; hop++) {
     // Re-validated on EVERY hop, exactly as fetchWithRedirects does.
+    assertAllowedPort(url)
     await assertPublicHost(url.hostname)
 
     let fetched: Fetched
@@ -416,6 +546,7 @@ export async function fetchAsset(
         } catch {
           return { ok: false, ...empty, reason: 'The site returned an invalid redirect.' }
         }
+        await res.body?.cancel().catch(() => undefined)
         continue
       }
 
