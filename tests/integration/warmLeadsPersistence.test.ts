@@ -62,7 +62,7 @@ afterAll(async () => {
     await prisma.warmLeadUsage.deleteMany({ where: { tenantId: t } })
     await prisma.warmLeadSettings.deleteMany({ where: { tenantId: t } })
   }
-  await prisma.warmLeadRun.deleteMany({ where: { tenantId: T } })
+  await prisma.warmLeadRun.deleteMany({ where: { tenantId: { in: [T, T2] } } })
   await prisma.warmLeadCompany.deleteMany({ where: { tenantId: T } })
   await prisma.warmLeadUsage.deleteMany({ where: { tenantId: T } })
   await prisma.warmLeadSettings.deleteMany({ where: { tenantId: T } })
