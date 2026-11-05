@@ -416,11 +416,14 @@ export async function computeEvaluation(input: { tenantId: string; crmCompanyId:
     // provider's own engagement signal (which counts any inbound message) is replaced by one that does not.
     let activities
     try {
-      activities = await getCrm().listActivities({ companyId: company.id, type: 'email' })
+      // The same read as always; `withBody` keeps each email's text (already in the response) so a refusal written inside a reply
+      // can be told from interest. The text is used in memory only and is not stored, logged or copied into a result.
+      activities = await getCrm().listActivities({ companyId: company.id, type: 'email', withBody: true })
     } catch (err) {
       throw new Error(`The emails of this company could not be read from NXT Sales (${(err as Error).message}). Retry it.`)
     }
-    const engagement = engagementSignal(activities, new Date(), undefined, env.INTENT_FRESH_DAYS)
+    // requireText: a reply whose text is not available is "unverified" - listed, scored 0, never taken as interest.
+    const engagement = engagementSignal(activities, new Date(), undefined, env.INTENT_FRESH_DAYS, { requireText: true })
     const crm = {
       ok: true,
       signals: [...crmResult.signals.filter((d) => d.signalType !== 'inbound_engagement' && d.signalType !== 'recent_outbound_only').map(crmObserved), ...(engagement ? [engagement] : [])],

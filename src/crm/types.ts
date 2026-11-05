@@ -118,7 +118,15 @@ export interface CrmActivity {
   subject: string | null
   direction: string | null
   createdAt: string
+  /**
+   * The message text (plain text, tags removed, at most ACTIVITY_BODY_MAX characters), present ONLY when the caller asked for it
+   * with `withBody`. Written by third parties: it is read in memory by Warm Leads to tell a refusal from interest and is never
+   * stored, logged, sent to a model or copied into a result.
+   */
+  body?: string | null
 }
+
+export const ACTIVITY_BODY_MAX = 3000
 
 export interface CrmDropdownOption {
   value: string

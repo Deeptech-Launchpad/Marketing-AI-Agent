@@ -136,30 +136,115 @@ const noStop = (t: string) => t.trim().replace(/[.\s]+$/, '')
 const CONFIDENCE_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 }
 const FRESHNESS_RANK: Record<string, number> = { fresh: 3, aging: 2, unknown: 1, stale: 0 }
 
+const STOP_WORDS = new Set(['that', 'this', 'with', 'from', 'have', 'been', 'will', 'were', 'their', 'there', 'about', 'which', 'after', 'into', 'also', 'announced', 'announces', 'company'])
+/** The meaningful words of a sentence (4+ letters, no filler), for comparing two descriptions of one event. */
+const wordsOf = (t: string): Set<string> => new Set(t.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w)))
+/** A page address without scheme, "www.", query, fragment or trailing slash, so one page has one spelling. */
+const pageOf = (u: string | null): string => (u ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[?#].*$/, '').replace(/\/+$/, '')
+/**
+ * Two descriptions say the same thing: at least 4 meaningful words in common AND those words are at least 60% of all the
+ * meaningful words either uses. One announcement retold ("... service center" / "... service center for respiratory
+ * devices, trade press reports") shares nearly everything.
+ */
+function sameWords(a: string, b: string): boolean {
+  const x = wordsOf(a)
+  const y = wordsOf(b)
+  let shared = 0
+  for (const w of x) if (y.has(w)) shared++
+  return shared >= 4 && shared / (x.size + y.size - shared) >= 0.6
+}
+
+const NOT_A_FACT = new Set(['the', 'this', 'that', 'these', 'those', 'with', 'for', 'and', 'but', 'its', 'our', 'their', 'they', 'his', 'her', 'has', 'was', 'were', 'new', 'now'])
+/**
+ * The specific facts a sentence names: numbers, and capitalised words other than the first (places, companies, products). Two
+ * descriptions that are nearly the same but name DIFFERENT facts ("a warehouse in Pune" / "a warehouse in Delhi", "hiring 5" /
+ * "hiring 50", "an agreement with Acme" / "with Globex") are different developments, whatever else they share.
+ */
+function factsOf(text: string): Set<string> {
+  const out = new Set<string>()
+  text
+    .replace(/[^A-Za-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .forEach((tok, i) => {
+      if (i === 0) return // the first word of a sentence is capitalised anyway
+      const t = tok.toLowerCase()
+      if (NOT_A_FACT.has(t)) return
+      if (/\d/.test(tok) || (tok.length >= 3 && /^[A-Z][a-z]/.test(tok))) out.add(t)
+    })
+  return out
+}
+/** One description may add detail to the other, but neither may name a fact the other lacks. */
+function factsConsistent(a: string, b: string): boolean {
+  const x = factsOf(a)
+  const y = factsOf(b)
+  const within = (p: Set<string>, q: Set<string>) => [...p].every((f) => q.has(f))
+  return within(x, y) || within(y, x)
+}
+
+/** A news item is republished within about a week; the same words long after are a new item. */
+export const REPUBLISH_WINDOW_DAYS = 7
+const dayNumber = (d: Date | string | null): number | null => {
+  const day = iso(d)
+  return day ? Date.parse(day) / 86_400_000 : null
+}
+
+/** One announcement told again: same kind, dated within a week of each other, in nearly the same words, naming the same facts. */
+function sameStory(a: ObservedSignal, b: ObservedSignal): boolean {
+  const da = dayNumber(a.observedAt)
+  const db = dayNumber(b.observedAt)
+  return da !== null && db !== null && a.signalType === b.signalType && Math.abs(da - db) <= REPUBLISH_WINDOW_DAYS && sameWords(a.summary, b.summary) && factsConsistent(a.summary, b.summary)
+}
+/** Two items that look alike but name different facts: a signal must not be pulled into an event whose other copies disagree. */
+function conflicts(a: ObservedSignal, b: ObservedSignal): boolean {
+  const da = dayNumber(a.observedAt)
+  const db = dayNumber(b.observedAt)
+  return da !== null && db !== null && a.signalType === b.signalType && Math.abs(da - db) <= REPUBLISH_WINDOW_DAYS && !factsConsistent(a.summary, b.summary)
+}
+/** The same page, on the same day or with one date missing: the page is the event. */
+function samePage(a: ObservedSignal, b: ObservedSignal): boolean {
+  const pa = pageOf(a.sourceUrl)
+  const dayA = iso(a.observedAt)
+  const dayB = iso(b.observedAt)
+  return pa !== '' && pa === pageOf(b.sourceUrl) && (dayA === dayB || !dayA || !dayB)
+}
+
 /**
  * ONE EVENT, ONE SIGNAL. The same announcement is often recorded more than once — a later run finds it again in
- * different words, or two pages quote it. Pro Safety's single announcement (23 Oct, on its blog) was counted twice
- * on the second test (+25 +25) and turned a 35-point early signal into a "warm" 60. Signals from the same source
- * page on the same day are the same event: only the best is counted, the others are listed with 0 points.
+ * different words, two pages quote it, a news site republishes it the next day, or its date was not captured the second
+ * time. Pro Safety's single announcement (23 Oct, on its blog) was counted twice on the second test (+25 +25) and turned
+ * a 35-point early signal into a "warm" 60; the same announcement on a second site a day later did the same.
+ * Two signals are the same event when
+ *   - they come from the same page and are dated the same day (or one of them has no date), or
+ *   - they are of the same kind, dated within a week of each other, describe it in nearly the same words, and name the same
+ *     facts (places, companies, numbers) - the same news on another page, or republished.
+ * A signal is never pulled into an event if another copy of it names a different fact. Only the best of each group is
+ * counted (the best evidenced; if equal, the EARLIEST, so a republication never makes old news look fresh); the others are
+ * listed with 0 points. A different development - another place, company or number, another kind, or the same words long
+ * afterwards - stays its own event.
  */
 function duplicateEvents(signals: ObservedSignal[]): Set<ObservedSignal> {
-  const groups = new Map<string, ObservedSignal[]>()
-  for (const s of signals) {
-    if (!INTENT_CATEGORIES.has(s.signalCategory) || s.polarity !== 'positive' || s.status !== 'active') continue
-    const day = iso(s.observedAt)
-    const page = (s.sourceUrl ?? '').trim().toLowerCase().replace(/[?#].*$/, '').replace(/\/+$/, '')
-    if (!day || !page) continue
-    const key = `${page}|${day}`
-    groups.set(key, [...(groups.get(key) ?? []), s])
+  // A fixed order, so the same signals give the same groups whatever order they arrive in.
+  const cands = signals
+    .filter((s) => INTENT_CATEGORIES.has(s.signalCategory) && s.polarity === 'positive' && s.status === 'active')
+    .sort((a, b) => (iso(a.observedAt) ?? '').localeCompare(iso(b.observedAt) ?? '') || pageOf(a.sourceUrl).localeCompare(pageOf(b.sourceUrl)) || a.summary.localeCompare(b.summary) || a.evidence.localeCompare(b.evidence))
+  const groups: ObservedSignal[][] = []
+  for (const s of cands) {
+    const home = groups.find((g) => g.some((m) => samePage(s, m)) || (g.some((m) => sameStory(s, m)) && !g.some((m) => conflicts(s, m))))
+    if (home) home.push(s)
+    else groups.push([s])
   }
   const losers = new Set<ObservedSignal>()
-  for (const g of groups.values()) {
+  for (const g of groups) {
     if (g.length < 2) continue
     const best = [...g].sort(
       (a, b) =>
+        (b.sourceUrl ? 1 : 0) - (a.sourceUrl ? 1 : 0) || // an event that can be checked beats one that cannot
         (CONFIDENCE_RANK[b.confidence] ?? 0) - (CONFIDENCE_RANK[a.confidence] ?? 0) ||
+        (iso(a.observedAt) ?? '9999').localeCompare(iso(b.observedAt) ?? '9999') || // then the earliest: the original, not its republication
         (FRESHNESS_RANK[b.freshness] ?? 0) - (FRESHNESS_RANK[a.freshness] ?? 0) ||
-        b.evidence.length - a.evidence.length,
+        b.evidence.length - a.evidence.length ||
+        a.summary.localeCompare(b.summary), // last: a fixed order, so the same signals always give the same score
     )[0]!
     for (const s of g) if (s !== best) losers.add(s)
   }
@@ -263,6 +348,7 @@ export function classify(input: EvaluationInput): EvaluationResult {
 
   // ── Web research (only for companies the screen flagged) ───────────────
   let publicPoints = 0
+  let fitFromPlatformChanges = 0 // platform detections are the same kind of fact however many times they are recorded: one block of points
   const sameEvent = duplicateEvents(input.deep.signals)
   for (const s of input.deep.signals) {
     if (s.signalCategory === 'crm') continue // already counted from the CRM read above
@@ -273,7 +359,16 @@ export function classify(input: EvaluationInput): EvaluationResult {
     if (s.signalType === 'technology_added' && s.polarity === 'positive') {
       // A platform CHANGE is still a platform detection: it carries its points but never qualifies a company as
       // warm or an early signal on its own (2026-10-31 decision) — it is not added to `verified`.
-      add({ signal: s.signalType, polarity: 'positive', points: POINTS.technologyAdded, summary: `${s.summary} (platform detection: fit, not a qualifying intent signal)`, ...base })
+      // Repeated or re-found platform detections must not stack: the same fit counted again is duplicate evidence.
+      const pts = Math.max(0, Math.min(POINTS.technologyAdded, POINTS.technologyAdded - fitFromPlatformChanges))
+      fitFromPlatformChanges += pts
+      add({
+        signal: s.signalType,
+        polarity: 'positive',
+        points: pts,
+        summary: `${s.summary} (platform detection: fit, not a qualifying intent signal${pts ? '' : '; fit points were already counted'})`,
+        ...base,
+      })
       continue
     }
     // Only an EVENT is intent: something the company did or that happened to it

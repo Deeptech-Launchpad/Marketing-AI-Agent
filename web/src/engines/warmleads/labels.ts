@@ -57,6 +57,7 @@ export const STOPPED: Record<string, string> = {
   company_limit: 'the daily company limit was reached',
   gemini_ceiling: 'the Gemini call ceiling was reached',
   nothing_to_do: 'nothing was left to evaluate',
+  repeated_failures: 'too many companies failed in a row, so it paused for 30 minutes before trying again',
   error: 'an error stopped it',
 }
 
