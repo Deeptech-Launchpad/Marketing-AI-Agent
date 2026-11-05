@@ -223,7 +223,7 @@ export class FakeCrmAdapter implements CrmPort {
     }
   }
 
-  async listActivities(params: { companyId: string }): Promise<CrmActivity[]> {
+  async listActivities(params: { companyId: string; type?: string; withBody?: boolean }): Promise<CrmActivity[]> {
     return [
       {
         id: `act_${params.companyId}`,

@@ -10,6 +10,7 @@ import type {
   CrmEmailSummary,
   CrmUser,
 } from '../types.js'
+import { ACTIVITY_BODY_MAX } from '../types.js'
 import type { QueryParams } from './httpClient.js'
 
 // ALL knowledge of NXT Sales' literal response shapes is confined to this file.
@@ -160,7 +161,19 @@ export function toEmailSummary(raw: Raw): CrmEmailSummary {
   }
 }
 
-export function toActivity(raw: Raw): CrmActivity {
+/** An email's text as plain text: tags and entities removed, white space collapsed, cut to a fixed length. */
+function plainBody(v: unknown): string {
+  return String(v ?? '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, ACTIVITY_BODY_MAX)
+}
+
+/** `withBody`: keep the message text (see CrmActivity.body). Without it the object is exactly what it always was. */
+export function toActivity(raw: Raw, withBody = false): CrmActivity {
   return {
     id: String(raw.id),
     type: String(raw.type ?? ''),
@@ -168,6 +181,7 @@ export function toActivity(raw: Raw): CrmActivity {
     subject: str(raw.subject) ?? str(raw.title),
     direction: str(raw.direction),
     createdAt: iso(raw.createdAt),
+    ...(withBody ? { body: plainBody(raw.body) } : {}),
   }
 }
 

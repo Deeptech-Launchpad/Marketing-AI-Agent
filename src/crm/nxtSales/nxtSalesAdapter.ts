@@ -103,12 +103,13 @@ export class NxtSalesAdapter implements CrmPort {
    * dashboard view. Only the company-scoped form is used here (recent-contact
    * suppression), so companyId is mandatory in the signature.
    */
-  async listActivities(params: { companyId: string; type?: string }): Promise<CrmActivity[]> {
+  async listActivities(params: { companyId: string; type?: string; withBody?: boolean }): Promise<CrmActivity[]> {
     const data = await crmGet<Raw[]>('/api/activities', {
       companyId: params.companyId,
       type: params.type,
     })
-    return (Array.isArray(data) ? data : []).map(toActivity)
+    // The same request as always (the response already carries each email's text); the text is kept only when asked for.
+    return (Array.isArray(data) ? data : []).map((raw) => toActivity(raw, params.withBody === true))
   }
 
   async getDropdownFields(): Promise<CrmDropdownField[]> {

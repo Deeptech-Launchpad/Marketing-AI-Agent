@@ -61,6 +61,34 @@ Leads tables. It follows `20261030120000_warm_lead_evaluation` and `202610311000
 which are not deployed either, so **three** migrations will be pending on the first deploy. No existing
 table of another feature is touched.
 
+## Rules the classifier follows (score.ts, replies.ts) — verified by tests
+
+- **Warm** = score >= 50 AND at least one verified intent signal. **Early signal** = score 25-49 AND a verified, *fresh* intent
+  signal. **Cold** = research finished (or a website was read) and nothing current. Not-enough-data, Failed / retry, Existing
+  customer, Active opportunity and Do not contact are separate statuses and are never shown as Cold.
+- Intent is only an *event* (a reply a person wrote; a business/news event with a source address that can be checked). A shop,
+  a platform, a product catalogue or a technology change is **fit**: it earns at most 20 points in total (10 for the site, one
+  block of 10 for platform detections however many are recorded) and can never qualify a company.
+- **Duplicate evidence counts once.** The same page on the same day (or with no date), or the same news in nearly the same words
+  on another page the same day, is one event; the best copy scores, the rest are listed with 0 points. Scores are worked out
+  afresh from the evidence every time, so re-evaluating never adds up.
+- A reply counts as interest only if what the person wrote is read and refuses nothing. The subject AND the text of the message
+  (already returned by the authorised `GET /api/activities?type=email`; quoted earlier messages, signatures and footers are cut
+  off first) are checked for *unsubscribe / stop / not interested / wrong person* and the like: a refusal is listed
+  (`reply_declined`, 0 points, never intent). A reply whose text is not available, or holds nothing of the person's own words,
+  is `reply_unverified` (0 points, never intent). The newest message decides (a refusal after a friendly reply withdraws it;
+  an unreadable newest reply is not rescued by an older friendly one). The text is read in memory only: it is never stored,
+  logged, sent to Gemini or copied into a result (only the few matched words are kept as evidence).
+- A failed, unreadable or incomplete evaluation never replaces a company's current result: Warm / Early signal stay, marked
+  "re-check due". Incomplete research (Gemini ceiling or cap) is never Cold.
+- Existing customers, open deals and suppression-list companies are recognised first and their websites are never read.
+
+## Is the pilot ready to be requested? (read-only check)
+
+`npx tsx scripts/warmleads-pilot-readiness.ts [--tenant <id>]` prints PASS / FAIL / INFO for the database tables, the dedicated
+Gemini key, sending off, live-write off, paused, the 100 / 1,200 and 25 / 300 limits, the size of the NXT Sales list (one GET),
+memory and the window. No Gemini call, no write, nothing requested or started. Exit 0 = ready, 1 = something stands in the way.
+
 ## Proposed rollout (each step needs approval)
 
 0. Local development and tests — **done**.
@@ -96,7 +124,12 @@ ceiling, priced cost, calls without a price, why the night stopped); `WarmLeadUs
 
 Backend unit: `npm test` (all pass; on a laptop whose temp drive has < 5 GB free the 39 ZIP tests in
 `bulkEmail.test.ts` fail on the free-disk guard — not a code problem). Web: `cd web && npm test`.
-Database integration (needs Postgres with the new migration):
-`npx vitest run tests/integration/warmLeadsPersistence.test.ts --pool=forks --poolOptions.forks.singleFork=true`
+Database integration (needs Postgres 16 with pgvector and all migrations; a disposable local one is
+`docker run -d -e POSTGRES_PASSWORD=... -e POSTGRES_DB=marketing_agent_dev -p 127.0.0.1:5434:5432 pgvector/pgvector:pg16`,
+then `CREATE EXTENSION vector SCHEMA marketing` and `npx prisma migrate deploy`):
+`TEST_USE_REAL=1 npx vitest run tests/integration/warmLeadsPersistence.test.ts tests/integration/warmLeadsWorkflow.test.ts --pool=forks --poolOptions.forks.singleFork=true`
+— `warmLeadsWorkflow` runs the whole thing (list -> pilot -> worker cycles -> screening, research, scoring -> stored results,
+counts, approval, a failed re-check, the Gemini ceiling) with a fake CRM, website and research, and the real database,
+scheduler, scoring and call budget.
 — **13/13 passed on 2026-11-04 on the isolated server database `marketing_warmtest`** (never on the laptop,
 never on production). The production deployment procedure is kept with the maintainers (it holds server details).
