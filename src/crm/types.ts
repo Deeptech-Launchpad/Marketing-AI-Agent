@@ -132,7 +132,7 @@ export interface CrmActivity {
   fromAddresses?: string[]
   /** The company address this conversation was matched to (NXT Sales `matchedCompanyEmail`), bare and lower-case. Same conditions. */
   matchedAddress?: string | null
-  /** Our own addresses on the message (connected mailbox, the CRM user, the inbound `toEmail`): never the contact. Same conditions. */
+  /** Our own addresses on the message (the connected mailbox and the CRM user - NXT Sales' own records; NOT the message's To / Cc headers, which a sender writes): never the contact. Same conditions. */
   ownAddresses?: string[]
 }
 
@@ -146,6 +146,12 @@ export const ACTIVITY_BODY_MAX = 6000
  * email, so no cost may grow with it. Real replies keep their own words at the top; the rest is quoted history, a signature or markup.
  */
 export const ACTIVITY_BODY_RAW_MAX = 60_000
+/**
+ * Put at the END of a body whose raw text was longer than ACTIVITY_BODY_RAW_MAX: everything after the cut was never read. It is an internal
+ * flag carried in the text, never part of what the person wrote - the reply engine removes it before judging and never infers interest from a
+ * message that carries it.
+ */
+export const ACTIVITY_UNREAD_MARKER = '[the rest of this message was not read]'
 /** The text is read only for messages inside this many days (the same window Warm Leads reads replies in; a test pins them equal). */
 export const ACTIVITY_BODY_WINDOW_DAYS = 90
 

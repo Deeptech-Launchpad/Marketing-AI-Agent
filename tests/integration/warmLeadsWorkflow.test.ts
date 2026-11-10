@@ -209,6 +209,9 @@ const S = SCENARIOS
 
 const { env } = await import('../../src/config/env.js')
 const { prisma } = await import('../../src/platform/db.js')
+// Server-side settings the opt-out code needs (test values only): the dedicated fingerprint key, and which domains are OURS.
+env.WARM_LEADS_OPT_OUT_FINGERPRINT_KEY = 'integration-test-fingerprint-key-0123456789abcdef-NOT-A-SECRET'
+env.WARM_LEADS_OWN_DOMAINS = 'ours.example'
 const saved = { worker: env.WARM_LEADS_WORKER_ENABLED, key: env.WARM_LEADS_GEMINI_API_KEY, sync: env.WARM_LEADS_SYNC_ENABLED, fresh: env.INTENT_FRESH_DAYS, seed: env.WARM_LEADS_SAMPLE_SEED }
 /** This test writes rows and removes them again: it only ever runs against a database on THIS machine. */
 function assertLocalDatabase(): void {
@@ -776,8 +779,73 @@ describeIfDb('approving a stored opt-out proposal (real database, fake CRM): onl
   const COMPANY = S.latestRefusal // its evaluation stored a dry-run proposal for activity "act-lr" during the pilot
   const approve = async (over: Record<string, unknown> = {}) => {
     const { approveOptOut } = await import('../../src/warmleads/optOutApproval.js')
-    return approveOptOut({ tenantId: T, approverCrmUserId: 'admin-1', crmCompanyId: COMPANY, activityId: 'act-lr', independentlyVerified: true, ...over })
+    return approveOptOut({ tenantId: T, approverCrmUserId: 'admin-1', crmCompanyId: COMPANY, activityId: 'act-lr', independentlyVerified: true, verificationMethod: 'phone_call_known_number', ...over })
   }
+  const reveal = async (over: Record<string, unknown> = {}) => {
+    const { revealOptOutAddress } = await import('../../src/warmleads/optOutApproval.js')
+    return revealOptOutAddress({ tenantId: T, adminCrmUserId: 'admin-1', crmCompanyId: COMPANY, activityId: 'act-lr', ...over })
+  }
+  /** the approval and reveal audit rows this suite's tenant has for the proposal */
+  const decisionAudits = () => prisma.auditEvent.count({ where: { tenantId: { startsWith: T }, action: { in: ['warmleads.opt_out_approved', 'warmleads.opt_out_address_revealed'] }, resourceId: `${COMPANY}|act-lr` } })
+
+  it('NULL or MISMATCHED company id on the activity: approval and reveal are refused (real database) - nothing is written, nothing is audited', async () => {
+    const original = world.mail[COMPANY]!
+    const before = await decisionAudits()
+    try {
+      env.WARM_LEADS_RECORD_OPT_OUTS = true
+      for (const [companyId, expected] of [[null, /does not link that email to any company/], [undefined, /does not link that email to any company/], ['', /does not link that email to any company/], ['wf-some-other-company', /different company than the one submitted/], [COMPANY.toUpperCase(), /different company than the one submitted/]] as const) {
+        world.mail[COMPANY] = original.map((m) => (m.id === 'act-lr' ? { ...m, companyId } : m))
+        await expect(approve(), String(companyId)).rejects.toThrow(expected)
+        await expect(reveal(), String(companyId)).rejects.toThrow(expected)
+      }
+      expect(await lrRows()).toHaveLength(0)
+      expect(await decisionAudits()).toBe(before)
+    } finally {
+      world.mail[COMPANY] = original
+      env.WARM_LEADS_RECORD_OPT_OUTS = false
+    }
+  })
+
+  it('CROSS-TENANT (real database): another tenant - with the same company on its own list, or none - can neither approve nor reveal this tenant\'s proposal', async () => {
+    const other = `${T}-other`
+    await prisma.warmLeadCompany.create({ data: { id: `${other}-row`, tenantId: other, crmCompanyId: COMPANY, name: 'Same company id, other tenant' } })
+    const before = await decisionAudits()
+    try {
+      env.WARM_LEADS_RECORD_OPT_OUTS = true
+      // it has the company on its list, but no proposal of its own: the activity id of ANOTHER tenant's proposal is not accepted
+      await expect(approve({ tenantId: other })).rejects.toThrow(/no opt-out proposal/)
+      await expect(reveal({ tenantId: other })).rejects.toThrow(/no opt-out proposal/)
+      // a tenant without the company on its list never gets as far as the proposals
+      await expect(approve({ tenantId: `${T}-nobody` })).rejects.toThrow(/not in your Warm Leads list/)
+      await expect(reveal({ tenantId: `${T}-nobody` })).rejects.toThrow(/not in your Warm Leads list/)
+      expect(await lrRows()).toHaveLength(0)
+      expect(await prisma.suppressionEntry.count({ where: { tenantId: { startsWith: `${T}-` } } })).toBe(0)
+      expect(await decisionAudits()).toBe(before)
+    } finally {
+      env.WARM_LEADS_RECORD_OPT_OUTS = false
+      await prisma.warmLeadCompany.deleteMany({ where: { tenantId: other } })
+    }
+  })
+
+  it('an administrator can REVEAL the exact address of the proposal (real database): audited without the address, nothing stored, nothing suppressed', async () => {
+    try {
+      env.WARM_LEADS_RECORD_OPT_OUTS = true
+      const before = await decisionAudits()
+      const r = await reveal()
+      expect(r).toMatchObject({ address: 'lr@latestrefusal.example', masked: 'l***@latestrefusal.example', activityId: 'act-lr', authenticated: false })
+      const rows = await prisma.auditEvent.findMany({ where: { tenantId: T, action: 'warmleads.opt_out_address_revealed', resourceId: `${COMPANY}|act-lr` } })
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ actorCrmUserId: 'admin-1', actorType: 'user', dataClass: 'customer_pii' })
+      expect(await decisionAudits()).toBe(before + 1)
+      // the exact address is nowhere in what is stored: not the audit, not any evaluation's reasons
+      expect(JSON.stringify(rows)).not.toContain('lr@latestrefusal')
+      const evals = await prisma.warmLeadEvaluation.findMany({ where: { tenantId: T }, select: { reasons: true } })
+      expect(JSON.stringify(evals)).not.toContain('lr@latestrefusal')
+      expect(await lrRows()).toHaveLength(0)
+    } finally {
+      env.WARM_LEADS_RECORD_OPT_OUTS = false
+    }
+  })
   const lrRows = () => prisma.suppressionEntry.findMany({ where: { tenantId: T, matchValue: 'lr@latestrefusal.example' } })
 
   it('with the switch OFF it refuses, reads nothing and writes nothing', async () => {
@@ -814,6 +882,46 @@ describeIfDb('approving a stored opt-out proposal (real database, fake CRM): onl
     } finally {
       world.mail[COMPANY] = original
       env.WARM_LEADS_RECORD_OPT_OUTS = false
+    }
+  })
+
+  it('CONCURRENT approvals of the same address (real database): exactly one row, exactly one "recorded", the others "already_listed", all audited, none failed', async () => {
+    const { writeApprovedOptOut } = await import('../../src/warmleads/optOut.js')
+    const proposalFor = (address: string, n: number) => ({ address, masked: 'c***@race.example', fingerprint: null, keyId: null, suggestion: null, receivedOn: '2026-11-03', activityId: `race-act-${n}`, mode: 'record' as const, phrase: 'UNSUBSCRIBE' })
+    try {
+      env.WARM_LEADS_RECORD_OPT_OUTS = true
+      for (let round = 0; round < 12; round++) {
+        const address = `concurrent${round}@race.example`
+        const resourceId = `race|${round}`
+        const audit = { resourceId, summary: (s: string) => `approved (${s})`, metadata: { independentlyVerifiedConfirmed: true } }
+        const results = await Promise.all([1, 2, 3, 4].map(() => writeApprovedOptOut(T, proposalFor(address, round), 'admin-1', audit)))
+        const statuses = results.map((r) => r.status).sort()
+        expect(statuses, `round ${round}`).toEqual(['already_listed', 'already_listed', 'already_listed', 'recorded'])
+        expect(await prisma.suppressionEntry.count({ where: { tenantId: T, matchValue: address } }), `round ${round}`).toBe(1)
+        const audits = await prisma.auditEvent.findMany({ where: { tenantId: T, action: 'warmleads.opt_out_approved', resourceId }, select: { summary: true } })
+        expect(audits, `round ${round}`).toHaveLength(4) // each approval is a real, recorded decision
+        expect(audits.filter((a) => a.summary === 'approved (recorded)'), `round ${round}`).toHaveLength(1) // and only ONE of them says a row was added
+      }
+    } finally {
+      env.WARM_LEADS_RECORD_OPT_OUTS = false
+      await prisma.suppressionEntry.deleteMany({ where: { tenantId: T, matchValue: { endsWith: '@race.example' } } })
+      await prisma.auditEvent.deleteMany({ where: { tenantId: T, action: 'warmleads.opt_out_approved', resourceId: { startsWith: 'race|' } } })
+    }
+  })
+
+  it('a TEMPORARY entry that appears for the address is never reported as "recorded" (real database)', async () => {
+    const { writeApprovedOptOut } = await import('../../src/warmleads/optOut.js')
+    const address = 'temporary@race.example'
+    await prisma.suppressionEntry.create({ data: { id: 'race-temp-1', tenantId: T, scope: 'global', matchType: 'email', matchValue: address, reason: 'temporary', source: 'manual', expiresAt: new Date(Date.now() + 86_400_000) } })
+    try {
+      env.WARM_LEADS_RECORD_OPT_OUTS = true
+      const res = await writeApprovedOptOut(T, { address, masked: 't***@race.example', fingerprint: null, keyId: null, suggestion: null, receivedOn: '2026-11-03', activityId: 'race-act-t', mode: 'record', phrase: 'UNSUBSCRIBE' }, 'admin-1', { resourceId: 'race|temp', summary: (s) => `approved (${s})`, metadata: {} })
+      expect(res.status).toBe('needs_person')
+      expect(await prisma.suppressionEntry.count({ where: { tenantId: T, matchValue: address } })).toBe(1) // untouched
+      expect(await prisma.auditEvent.count({ where: { tenantId: T, resourceId: 'race|temp' } })).toBe(0)
+    } finally {
+      env.WARM_LEADS_RECORD_OPT_OUTS = false
+      await prisma.suppressionEntry.deleteMany({ where: { tenantId: T, matchValue: address } })
     }
   })
 
@@ -864,6 +972,10 @@ describeIfDb('approving a stored opt-out proposal (real database, fake CRM): onl
       expect(audits).toHaveLength(2) // the approval, and the second approval of the same address (audited too, nothing written)
       expect(audits[0]).toMatchObject({ actorCrmUserId: 'admin-1', resourceId: `${COMPANY}|act-lr`, actorType: 'user' })
       expect(JSON.stringify(audits)).not.toContain('lr@latestrefusal')
+      // who, when and how: the admin's id, the approval time and the structured verification method
+      expect(audits[0]!.metadata).toMatchObject({ approvedByCrmUserId: 'admin-1', verification: { method: 'phone_call_known_number', independentlyVerifiedConfirmed: true, attestedByCrmUserId: 'admin-1' }, crmCompanyId: COMPANY, activityId: 'act-lr' })
+      expect(Math.abs(Date.parse((audits[0]!.metadata as { approvedAt: string }).approvedAt) - audits[0]!.createdAt.getTime())).toBeLessThan(10_000)
+      expect(rows[0]!.reason).toContain('(phone_call_known_number)')
       // the review list now shows it as recorded, and who approved it
       const { optOutReview } = await import('../../src/warmleads/optOutReview.js')
       const review = await optOutReview(T)

@@ -31,6 +31,12 @@ export function PilotPanel({ o, admin, act, busy, refreshKey }: { o: Overview; a
         <p className="note">
           <CheckCircle2 size={14} /> Approved {fmt(p.approvedAt)}{p.approvedBy ? ` by ${p.approvedBy}` : ''}. Daily processing is now allowed, but it stays paused until you press Start under Controls.
         </p>
+        {/* The opt-out proposals stay reviewable (and, with the server switch on, approvable) for administrators after the pilot is approved. With the switch OFF they are read-only. */}
+        {admin && (
+          <div style={{ marginTop: 'var(--s4)' }}>
+            <OptOutReview enabled refreshKey={refreshKey} admin={admin} />
+          </div>
+        )}
       </Panel>
     )
   }

@@ -46,6 +46,10 @@ export interface ReadinessSnapshot {
   crmDriver: string
   /** WARM_LEADS_RECORD_OPT_OUTS: whether opt-outs are written to the shared suppression list. Must be off until the pilot has been reviewed. */
   recordOptOuts: boolean
+  /** WARM_LEADS_OPT_OUT_FINGERPRINT_KEY is set (32+ characters): without it an opt-out proposal cannot be approved. */
+  fingerprintKeyConfigured: boolean
+  /** Our own domains are known from server-side configuration (WARM_LEADS_OWN_DOMAINS and the configured sender addresses): without them NO proposal is made. */
+  ownDomainsConfigured: boolean
   workerEnabled: boolean
   syncSwitchOn: boolean
   allowLive: boolean
@@ -110,6 +114,19 @@ export function evaluateReadiness(s: ReadinessSnapshot): { checks: Check[]; read
       : pilotApproved
         ? 'WARM_LEADS_RECORD_OPT_OUTS is on: explicit opt-outs found in replies are proposed and an administrator approves each one before it is added to the shared suppression list (nothing is added automatically)'
         : 'WARM_LEADS_RECORD_OPT_OUTS is on before the pilot was reviewed and approved: it must stay off for the pilot',
+  )
+  // Approving a proposal needs the dedicated fingerprint key; proposing one needs to know which domains are ours. Both fail closed in the code; this says so before it matters.
+  add(
+    'opt_out_key',
+    'The opt-out fingerprint key is set (a dedicated key - never JWT_SECRET)',
+    s.fingerprintKeyConfigured ? 'pass' : s.recordOptOuts ? 'fail' : 'info',
+    s.fingerprintKeyConfigured ? 'WARM_LEADS_OPT_OUT_FINGERPRINT_KEY is set' : s.recordOptOuts ? 'recording is on but WARM_LEADS_OPT_OUT_FINGERPRINT_KEY is not set: no proposal can be approved' : 'WARM_LEADS_OPT_OUT_FINGERPRINT_KEY is not set: proposals are listed but cannot be approved until it is',
+  )
+  add(
+    'own_domains',
+    'Our own domains are configured (server side) for the opt-out sender check',
+    s.ownDomainsConfigured ? 'pass' : s.recordOptOuts ? 'fail' : 'info',
+    s.ownDomainsConfigured ? 'own domains are known from server-side configuration' : 'no own domain is configured (WARM_LEADS_OWN_DOMAINS or a configured sender address): ownership is unknown, so NO opt-out proposal is made - every opt-out is listed as "not recorded"',
   )
 
   add('live_write', 'Writing to the live NXT Sales is not allowed', s.allowLive ? 'fail' : 'pass', s.allowLive ? 'WARM_LEADS_ALLOW_LIVE is on' : 'WARM_LEADS_ALLOW_LIVE is off')

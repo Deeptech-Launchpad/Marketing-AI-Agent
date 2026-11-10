@@ -1,6 +1,7 @@
+import { createHmac } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // EXPLICIT MARKETING OPT-OUTS (owner decisions of 2026-11-05 and 2026-11-06):
 //   - buying intent and permission to contact are separate;
@@ -19,6 +20,7 @@ const db = vi.hoisted(() => ({
   failFor: new Set<string>(),
   failAudit: false,
   transactions: 0,
+  race: null as null | { row: { expiresAt: Date | null } | 'gone' },
   others: [] as string[],
 }))
 vi.mock('../../src/platform/db.js', () => {
@@ -55,6 +57,12 @@ vi.mock('../../src/platform/db.js', () => {
       },
       createMany: async (a: { data: Array<Record<string, any>> }) => {
         for (const d of a.data) if (db.failFor.has(d.matchValue)) throw new Error(`P1001 for ${d.matchValue}`)
+        if (db.race) {
+          // another writer inserted this address between our read and our insert: skipDuplicates does nothing and reports count 0
+          if (db.race.row !== 'gone') db.existing.set(a.data[0]!.matchValue, db.race.row)
+          db.race = null
+          return { count: 0 }
+        }
         db.creates.push(...a.data)
         return { count: a.data.length }
       },
@@ -72,12 +80,17 @@ vi.mock('../../src/platform/db.js', () => {
 import { env } from '../../src/config/env.js'
 import { ACTIVITY_ADDRESSES_MAX } from '../../src/crm/types.js'
 import { lookupAddresses, parseAddresses, toActivity } from '../../src/crm/nxtSales/mappers.js'
-import { candidateAddresses, isIndividualOptOutRow, maskAddress, optOutSignals, persistedOptOuts, proposeOptOuts, signalsToReasons, writeApprovedOptOut } from '../../src/warmleads/optOut.js'
+import { addressFingerprint, candidateAddresses, fingerprintKeyConfigured, fingerprintKeyId, isIndividualOptOutRow, maskAddress, normaliseDomains, optOutSignals, persistedOptOuts, proposeOptOuts, signalsToReasons, trustedOwnDomains, writeApprovedOptOut } from '../../src/warmleads/optOut.js'
 import { itemsFromReasons, latestPerSource } from '../../src/warmleads/optOutReview.js'
+import { redactReasons } from '../../src/warmleads/reasonsPublic.js'
 import { affirmsMarketingConsent, assessReply, engagementSignal, isStandaloneOptOut, summariseInbound } from '../../src/warmleads/replies.js'
 import { LISTED_IN_CRM, DEFINITIVE, syncAction } from '../../src/warmleads/companyState.js'
 import { assertNxtSendable, NXT_ACCEPTED_CLASSIFICATIONS, runSummaryPayload } from '../../src/warmleads/runSummary.js'
 import { classify, type EvaluationInput, type ObservedSignal } from '../../src/warmleads/score.js'
+
+// Server-side settings the opt-out code needs (test values only): the dedicated fingerprint key, and which domains are OURS.
+env.WARM_LEADS_OPT_OUT_FINGERPRINT_KEY = 'unit-test-fingerprint-key-0123456789abcdef-NOT-A-SECRET'
+env.WARM_LEADS_OWN_DOMAINS = 'ours.example'
 
 const NOW = new Date('2026-11-01T00:00:00Z')
 const day = (n: number) => new Date(NOW.getTime() - n * 86_400_000).toISOString()
@@ -111,6 +124,7 @@ beforeEach(() => {
   db.audits.length = 0
   db.failAudit = false
   db.transactions = 0
+  db.race = null
   db.finds.length = 0
   db.raw.length = 0
   db.rawRows = []
@@ -301,7 +315,7 @@ describe('which address an explicit, strict opt-out may suppress', () => {
   it('never a domain-level or company-level row: a proposal is one bare address', () => {
     for (const body of ['Please remove our whole company from your database.', 'Unsubscribe everyone at acme.example', 'Stop emailing anyone at Acme', OPT]) {
       for (const p of propose([mail(body)], true).proposals) {
-        expect(Object.keys(p).sort()).toEqual(['activityId', 'address', 'fingerprint', 'masked', 'mode', 'phrase', 'receivedOn', 'suggestion'])
+        expect(Object.keys(p).sort()).toEqual(['activityId', 'address', 'fingerprint', 'keyId', 'masked', 'mode', 'phrase', 'receivedOn', 'suggestion'])
         expect(p.address).toMatch(/^[^@\s]+@[^@\s]+$/)
       }
     }
@@ -311,18 +325,12 @@ describe('which address an explicit, strict opt-out may suppress', () => {
     expect(d.proposals).toHaveLength(1)
     expect(d.proposals[0]).toMatchObject({ receivedOn: day(20).slice(0, 10), activityId: 'newer' })
   })
-  it('different senders are different addresses (each wrote its own opt-out); more than ten are NOT silently dropped - they are listed for a person', () => {
-    const many = Array.from({ length: 13 }, (_, i) => mail(OPT, { from: `u${i}@acme.example`, id: `act_${i}` }))
-    const d = propose(many)
-    expect(d.proposals).toHaveLength(10)
-    expect(d.refused).toHaveLength(3)
-    expect(d.refused.every((r) => /more than 10 different senders/.test(r.reason))).toBe(true)
-  })
   it('forged mail from many other senders cannot push the real contact (the address we mailed) out of the capped list', () => {
     const real = mail(OPT, { from: 'real@cust.example', id: 'real', daysAgo: 60, matched: 'real@cust.example' })
-    const forged = Array.from({ length: 14 }, (_, i) => mail(OPT, { from: `forged${i}@evil.example`, id: `f_${i}`, daysAgo: 1, matched: 'real@cust.example' }))
+    const forged = Array.from({ length: 40 }, (_, i) => mail(OPT, { from: `forged${i}@evil.example`, id: `f_${i}`, daysAgo: 1, matched: 'real@cust.example' }))
     const d = propose([...forged, real])
-    expect(d.proposals).toHaveLength(10)
+    expect(d.proposals).toHaveLength(25)
+    expect(d.omitted!.proposals).toBe(16)
     expect(d.proposals.map((p) => p.activityId)).toContain('real') // the sender who IS the address we mailed comes first, however old
   })
   it('a sender on a SUBDOMAIN of one of our own domains is a colleague, not a proposal', () => {
@@ -340,6 +348,149 @@ describe('which address an explicit, strict opt-out may suppress', () => {
     const padded = toActivity({ id: 'pad', type: 'email', companyId: 'c1', subject: 'Re: hi', direction: 'inbound', createdAt: day(2), body: `UNSUBSCRIBE${' '.repeat(70_000)}but please send me a quote`, fromEmail: 'p@cust.example', mailboxEmail: 'sales@ours.example', toEmail: 'sales@ours.example' }, true, NOW)
     expect(padded.body).toMatch(/not read/)
     expect(propose([padded]).proposals).toEqual([])
+  })
+})
+
+describe('bounded evidence: nothing grows with the number of hostile messages, and nothing is dropped silently', () => {
+  it('more than 25 different senders: the first 25 are proposed and the rest are COUNTED (omitted)', () => {
+    const many = Array.from({ length: 30 }, (_, i) => mail(OPT, { from: `u${i}@acme.example`, id: `act_${i}` }))
+    const d = propose(many)
+    expect(d.proposals).toHaveLength(25)
+    expect(d.omitted).toEqual({ proposals: 5, notRecorded: 0 })
+    expect(d.refused).toEqual([])
+  })
+  it('thousands of hostile "unsubscribe, and also send a quote" messages: 20 are listed, the rest counted, a few KB of stored reasons - not megabytes', () => {
+    const msgs = Array.from({ length: 2000 }, (_, i) => mail('Unsubscribe me, and also please send a quote', { from: `h${i}@evil.example`, id: `h_${i}` }))
+    const assessed = assess(msgs)
+    const d = proposeOptOuts(assessed, false)
+    expect(d.proposals).toEqual([])
+    expect(d.refused).toHaveLength(20)
+    expect(d.omitted).toEqual({ proposals: 0, notRecorded: 1980 })
+    const reasons = signalsToReasons(optOutSignals({ assessed, decision: d, persisted: [], record: false }))
+    expect(JSON.stringify(reasons).length).toBeLessThan(30_000)
+    const om = reasons.find((r) => r.signal === 'opt_out_omitted')!
+    expect(om.evidence).toBe('omitted proposals: 0 · not recorded: 1980')
+    expect(om.summary).toMatch(/nothing was dropped silently|Nothing was dropped silently/)
+  })
+  it('the listed "not recorded" messages are the NEWEST ones', () => {
+    const msgs = Array.from({ length: 30 }, (_, i) => mail('Unsubscribe me, and also please send a quote', { from: `h${i}@evil.example`, id: `h_${i}`, daysAgo: i + 1 }))
+    const d = proposeOptOuts(assess(msgs), false)
+    expect(d.refused.map((r) => r.activityId)).toContain('h_0')
+    expect(d.refused.map((r) => r.activityId)).not.toContain('h_29')
+  })
+  it('re-consent candidates: at most one per sender, at most 10, however many messages', () => {
+    const optOut = mail(OPT, { from: 'a@acme.example', id: 'first', daysAgo: 40 })
+    const again = Array.from({ length: 50 }, (_, i) => mail('Please subscribe me again', { from: 'a@acme.example', id: `re_${i}`, daysAgo: 1 + (i % 5) }))
+    const assessed = assess([optOut, ...again])
+    const sig = optOutSignals({ assessed, decision: proposeOptOuts(assessed, false), persisted: [], record: false })
+    expect(sig.filter((s) => s.signalType === 'reconsent_candidate')).toHaveLength(1)
+  })
+})
+
+describe('OUR OWN domains come from SERVER-SIDE configuration, never from the message; unknown ownership fails closed', () => {
+  const restore = () => {
+    env.WARM_LEADS_OWN_DOMAINS = 'ours.example'
+    env.OUTREACH_FROM_EMAIL = ''
+    env.SMTP_FROM = ''
+    env.SMTP_USER = ''
+  }
+  beforeEach(restore)
+  afterAll(restore)
+
+  it('normalisation: lower case, no "@" or trailing dot, only well-formed names, no duplicates', () => {
+    expect(normaliseDomains(' Ours.Example, @mail.ours.example; bad_domain  ours.example. , -x.example, a..b.example, localhost ')).toEqual(['ours.example', 'mail.ours.example'])
+    expect(normaliseDomains('')).toEqual([])
+    expect(normaliseDomains(undefined)).toEqual([])
+  })
+  it('trustedOwnDomains = WARM_LEADS_OWN_DOMAINS plus the domains of the configured sender addresses (OUTREACH_FROM_EMAIL, SMTP_FROM, SMTP_USER)', () => {
+    env.OUTREACH_FROM_EMAIL = 'AltiusNXT <Sales@Sender.Example>'
+    env.SMTP_FROM = 'noreply@smtp.example'
+    env.SMTP_USER = 'mailer@ours.example'
+    expect(trustedOwnDomains().sort()).toEqual(['ours.example', 'sender.example', 'smtp.example'])
+  })
+  it('UNKNOWN ownership fails closed: with no configured domain NO opt-out is proposed - each is listed as "not recorded" with the reason', () => {
+    env.WARM_LEADS_OWN_DOMAINS = ''
+    expect(trustedOwnDomains()).toEqual([])
+    const d = propose([mail(OPT, { id: 'x' })], true)
+    expect(d.proposals).toEqual([])
+    expect(d.refused[0]).toMatchObject({ activityId: 'x' })
+    expect(d.refused[0]!.reason).toMatch(/which domains are ours is not configured on the server/)
+  })
+  it('an attacker-controlled To header padded with junk addresses changes NOTHING: a colleague is still refused (the To header is not read at all)', () => {
+    const junk = Array.from({ length: 30 }, (_, i) => `junk${i}@spam.example`).join(', ')
+    const padded = toActivity({ id: 'pad-to', type: 'email', companyId: 'c1', subject: 'Re: hi', direction: 'inbound', createdAt: day(2), body: 'UNSUBSCRIBE', fromEmail: 'colleague@ours.example', toEmail: `${junk}, sales@ours.example`, mailboxEmail: 'sales@ours.example' }, true, NOW)
+    expect(padded.ownAddresses).toEqual(['sales@ours.example']) // from NXT Sales' own record of the mailbox - NOT from the To header
+    const d = proposeOptOuts(assess([padded]), true)
+    expect(d.proposals).toEqual([])
+    expect(d.refused[0]!.reason).toMatch(/own domains/)
+    // with NO mailbox / user known and the To header padded the same way: still nothing (and the To header is never an "own address")
+    const noMailbox = toActivity({ id: 'pad-to-2', type: 'email', companyId: 'c1', subject: 'Re: hi', direction: 'inbound', createdAt: day(2), body: 'UNSUBSCRIBE', fromEmail: 'colleague@ours.example', toEmail: `${junk}, sales@ours.example` }, true, NOW)
+    expect(noMailbox.ownAddresses).toEqual([])
+    expect(proposeOptOuts(assess([noMailbox]), true).proposals).toEqual([])
+  })
+  it('the To header cannot ADD an own address either: a message "to" a stranger\'s address does not make that stranger "ours"', () => {
+    const a = mail(OPT, { to: 'victim@thirdparty.example', from: 'victim@thirdparty.example', id: 'to-victim' })
+    expect(a.ownAddresses).not.toContain('victim@thirdparty.example')
+  })
+  it('colleagues, own subdomains, plus aliases and robots are refused; an outsider is proposed', () => {
+    const one = (from: string) => propose([mail(OPT, { from, id: 'x' })], true)
+    expect(one('Bob <bob@ours.example>').proposals).toEqual([])
+    expect(one('Bob <bob@mail.eu.ours.example>').proposals).toEqual([])
+    expect(one('Ravi <ravi+news@acme.example>').proposals).toEqual([])
+    expect(one('no-reply@acme.example').proposals).toEqual([])
+    expect(one('Ravi <ravi@acme.example>').proposals).toHaveLength(1)
+    // a look-alike domain that merely ENDS with ours is not ours
+    expect(one('Eve <eve@notours.example>').proposals).toHaveLength(1)
+  })
+  it('an explicit allowlist can be passed in (pure function): the only thing that decides is that list', () => {
+    const a = mail(OPT, { from: 'Bob <bob@acme.example>', id: 'x' })
+    expect(proposeOptOuts(assess([a]), true, ['acme.example']).proposals).toEqual([])
+    expect(proposeOptOuts(assess([a]), true, ['other.example']).proposals).toHaveLength(1)
+    expect(proposeOptOuts(assess([a]), true, []).proposals).toEqual([])
+  })
+})
+
+describe('the fingerprint uses a DEDICATED key (never JWT_SECRET); a missing key fails closed', () => {
+  const KEY = 'unit-test-fingerprint-key-0123456789abcdef-NOT-A-SECRET'
+  beforeEach(() => {
+    env.WARM_LEADS_OPT_OUT_FINGERPRINT_KEY = KEY
+  })
+  afterAll(() => {
+    env.WARM_LEADS_OPT_OUT_FINGERPRINT_KEY = KEY
+  })
+  it('a configured key gives a 16-hex fingerprint and an 8-hex key id; neither contains or equals the address, and JWT_SECRET plays no part', () => {
+    const p = propose([mail(OPT, { id: 'x' })], true).proposals[0]!
+    expect(p.fingerprint).toMatch(/^[0-9a-f]{16}$/)
+    expect(p.keyId).toMatch(/^[0-9a-f]{8}$/)
+    const viaJwt = createHmac('sha256', env.JWT_SECRET).update('warmleads-optout|ravi@acme.example').digest('hex').slice(0, 16)
+    expect(p.fingerprint).not.toBe(viaJwt)
+    env.JWT_SECRET = 'a-completely-different-jwt-secret-for-this-test'
+    expect(addressFingerprint('ravi@acme.example')).toBe(p.fingerprint) // changing JWT_SECRET changes nothing
+  })
+  it('NO key (or one under 32 characters) = NO fingerprint and no key id - JWT_SECRET is NEVER used instead', () => {
+    for (const k of ['', 'too-short-key']) {
+      env.WARM_LEADS_OPT_OUT_FINGERPRINT_KEY = k
+      expect(fingerprintKeyConfigured()).toBe(false)
+      expect(fingerprintKeyId()).toBeNull()
+      expect(addressFingerprint('ravi@acme.example')).toBeNull()
+      const p = propose([mail(OPT, { id: 'x' })], true).proposals[0]!
+      expect(p).toMatchObject({ fingerprint: null, keyId: null }) // still listed - but it cannot be approved
+    }
+  })
+  it('another key gives another fingerprint and another key id (so a changed key is recognised)', () => {
+    const a = { fp: addressFingerprint('ravi@acme.example'), id: fingerprintKeyId() }
+    env.WARM_LEADS_OPT_OUT_FINGERPRINT_KEY = 'a-second-dedicated-key-0123456789abcdef-NOT-A-SECRET'
+    expect(addressFingerprint('ravi@acme.example')).not.toBe(a.fp)
+    expect(fingerprintKeyId()).not.toBe(a.id)
+  })
+  it('the evidence line carries fp and key (server side) - and reasonsPublic removes exactly those', () => {
+    const p = propose([mail(OPT, { id: 'act_9' })], true).proposals
+    const sig = optOutSignals({ assessed: assess([mail(OPT, { id: 'act_9' })]), decision: { proposals: p, refused: [] }, persisted: [], record: true })
+    const line = signalsToReasons(sig).find((r) => r.signal === 'opt_out_proposal')!
+    expect(line.evidence).toMatch(/ · fp [0-9a-f]{16} · key [0-9a-f]{8} · phrase: UNSUBSCRIBE/)
+    const out = redactReasons([line])[0] as { evidence: string }
+    expect(out.evidence).not.toMatch(/ · fp |· key |[0-9a-f]{16}/)
+    expect(out.evidence).toMatch(/^status: awaiting_approval · NXT activity act_9 · received \d{4}-\d{2}-\d{2} · phrase: UNSUBSCRIBE/)
   })
 })
 
@@ -379,7 +530,7 @@ describe('FAIL CLOSED: an unauthenticated or forged sender can never create a su
     const sig = optOutSignals({ assessed: assess([mail(OPT, { id: 'act_9' })]), decision: { proposals: p, refused: [] }, persisted: [], record: true })
     const line = signalsToReasons(sig).find((r) => r.signal === 'opt_out_proposal')!
     expect(line.summary).toMatch(/is NOT added yet: the sender of an email cannot be verified, so a person must approve it first/)
-    expect(line.evidence).toMatch(/^status: awaiting_approval · NXT activity act_9 · received \d{4}-\d{2}-\d{2} · fp [0-9a-f]{16} · phrase: UNSUBSCRIBE/)
+    expect(line.evidence).toMatch(/^status: awaiting_approval · NXT activity act_9 · received \d{4}-\d{2}-\d{2} · fp [0-9a-f]{16} · key [0-9a-f]{8} · phrase: UNSUBSCRIBE/)
   })
   it('a spoofed address that is OUR OWN, a colleague, a robot or ambiguous is refused even before approval is possible', () => {
     expect(propose([mail(OPT, { from: 'Sales <sales@ours.example>' })], true).proposals).toEqual([])
@@ -422,6 +573,24 @@ describe('the ONLY writer: an administrator\'s approval (writeApprovedOptOut) - 
     expect(db.creates).toEqual([]) // the stand-in transaction restores its state exactly as the real one does (proved on a real database in warmLeadsWorkflow.test.ts)
     expect(db.audits).toEqual([])
     expect(db.transactions).toBe(1) // both writes went through the one transaction
+  })
+  it('"recorded" ONLY when a new row was really inserted: if another writer got there first (insert count 0) and left a PERMANENT row, the answer is "already_listed" - and still audited as an approval', async () => {
+    env.WARM_LEADS_RECORD_OPT_OUTS = true
+    db.race = { row: { expiresAt: null } }
+    const res = await writeApprovedOptOut('t1', rec()[0]!, 'u', AUDIT)
+    expect(res.status).toBe('already_listed')
+    expect(db.creates).toEqual([]) // nothing was inserted by us
+    expect(db.audits).toHaveLength(1)
+    expect(db.audits[0]).toMatchObject({ summary: 'approved: already_listed' })
+  })
+  it('... if the other writer left a TEMPORARY row, or the row is gone again, it is "needs_person" - never a success, and nothing is audited', async () => {
+    env.WARM_LEADS_RECORD_OPT_OUTS = true
+    db.race = { row: { expiresAt: new Date(Date.now() + 86_400_000) } }
+    expect((await writeApprovedOptOut('t1', rec()[0]!, 'u', AUDIT)).status).toBe('needs_person')
+    db.race = { row: 'gone' }
+    expect((await writeApprovedOptOut('t1', rec()[0]!, 'u', AUDIT)).status).toBe('needs_person')
+    expect(db.audits).toEqual([])
+    expect(db.creates).toEqual([])
   })
   it('an approval needs an approver', async () => {
     env.WARM_LEADS_RECORD_OPT_OUTS = true
@@ -523,7 +692,7 @@ describe('persistence beyond the 90-day window, and which existing rows count as
     const p = permission.find((s) => s.signalType === 'opt_out_proposal')!
     expect(p.summary).toMatch(/^r\*\*\*@acme\.example \(the sender of the opt-out of \d{4}-\d{2}-\d{2}\) is PROPOSED for the suppression list — DRY RUN: nothing was written/)
     expect(p.summary).not.toMatch(/would be added/)
-    expect(p.evidence).toMatch(/^status: dry_run · NXT activity act_5 · received \d{4}-\d{2}-\d{2} · fp [0-9a-f]{16}/)
+    expect(p.evidence).toMatch(/^status: dry_run · NXT activity act_5 · received \d{4}-\d{2}-\d{2} · fp [0-9a-f]{16} · key [0-9a-f]{8}/)
     expect(JSON.stringify(permission)).not.toContain('ravi@acme.example')
     expect(permission.every((s) => s.polarity === 'neutral')).toBe(true)
   })
@@ -667,6 +836,7 @@ describe('what automation may never do', () => {
     const using = (re: RegExp) => all.filter((f) => re.test(fs.readFileSync(f, 'utf8'))).map(rel).sort()
     expect(using(/\bwriteApprovedOptOut\(/)).toEqual(['warmleads/optOut.ts', 'warmleads/optOutApproval.ts']) // its definition, and its one caller
     expect(using(/\bapproveOptOut\(/)).toEqual(['api/routes/warmLeads.routes.ts', 'warmleads/optOutApproval.ts']) // its definition, and the admin route
+    expect(using(/\brevealOptOutAddress\(/)).toEqual(['api/routes/warmLeads.routes.ts', 'warmleads/optOutApproval.ts']) // the reveal: its definition, and the admin route
     // the automatic-write path no longer exists anywhere in the product code
     expect(using(/\bsenderVerified\b|\bsenderAuthenticated\b|\brecordOptOuts\(|\bapplyOptOutResults\b/)).toEqual([])
     // the worker's import closure never includes the approval module

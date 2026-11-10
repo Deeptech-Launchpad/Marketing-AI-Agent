@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '../platform/db.js'
+import { fingerprintKeyConfigured, fingerprintKeyId } from './optOut.js'
 
 // WARM LEADS — THE OPT-OUT REVIEW LIST (pilot review). Read only.
 //
@@ -13,7 +14,7 @@ import { prisma } from '../platform/db.js'
 // are pending in total and whether the whole history was read (`complete`). A ceiling on the number of evaluations read exists only as a
 // backstop against a runaway table, and if it is ever reached `complete` is false and the screen says so.
 
-export type OptOutReviewKind = 'proposal' | 'not_recorded' | 'reconsent'
+export type OptOutReviewKind = 'proposal' | 'not_recorded' | 'reconsent' | 'omitted'
 
 export interface OptOutReviewItem {
   kind: OptOutReviewKind
@@ -30,8 +31,13 @@ export interface OptOutReviewItem {
   receivedOn: string | null
   /** The NXT Sales activity the opt-out was read from. */
   activityId: string | null
-  /** Keyed fingerprint of the proposed address (not reversible without the server secret): what an approval is checked against. */
+  /** SERVER SIDE ONLY - never sent to a browser (see toPublicItem): keyed fingerprint of the proposed address, what an approval is checked against. */
   fingerprint: string | null
+  /** SERVER SIDE ONLY: id of the key that made the fingerprint. */
+  keyId: string | null
+  /** For the line of kind 'omitted' only: how many senders / messages were found but not listed. */
+  omittedProposals: number
+  omittedNotRecorded: number
   /** The standard phrase the email consists of, by OUR canonical label ("UNSUBSCRIBE", "STOP"...); never the person's words. */
   phrase: string | null
   /** The exact reason this proposal was generated, in words (from the phrase). */
@@ -42,9 +48,12 @@ export interface OptOutReviewItem {
 }
 
 export interface OptOutReviewResult {
+  /** Every listed line (proposals, not-recorded, re-consent), WITHOUT the 'omitted' counters. */
   items: OptOutReviewItem[]
-  /** Proposals not yet recorded (dry run, awaiting approval, failed or held for a person): the number still to be decided. */
+  /** Proposals not yet recorded (dry run, awaiting approval, failed or held for a person), INCLUDING those counted but not listed (omitted): the number still to be decided. */
   pendingCount: number
+  /** Found by the evaluations but NOT listed because of their per-check caps (the newest check of each company): counted, never silently dropped. */
+  omitted: { proposals: number; notRecorded: number }
   /** false only if the backstop ceiling was reached: more evaluations exist than were read. */
   complete: boolean
 }
@@ -55,8 +64,9 @@ interface StoredReason {
   evidence?: unknown
 }
 
-const KIND: Record<string, OptOutReviewKind> = { opt_out_proposal: 'proposal', opt_out_not_recorded: 'not_recorded', reconsent_candidate: 'reconsent' }
-const EVIDENCE = /^status: (\w+) · NXT activity (.+?) · received (\d{4}-\d{2}-\d{2})(?: · fp ([0-9a-f]{16}))?(?: · phrase: ([A-Z][A-Z /-]{0,60}))?/
+const KIND: Record<string, OptOutReviewKind> = { opt_out_proposal: 'proposal', opt_out_not_recorded: 'not_recorded', reconsent_candidate: 'reconsent', opt_out_omitted: 'omitted' }
+const EVIDENCE = /^status: (\w+) · NXT activity (.+?) · received (\d{4}-\d{2}-\d{2})(?: · fp ([0-9a-f]{16}))?(?: · key ([0-9a-f]{8}))?(?: · phrase: ([A-Z][A-Z /-]{0,60}))?/
+const OMITTED = /^omitted proposals: (\d{1,9}) · not recorded: (\d{1,9})/
 const MASKED = /(\S*\*\*\*@\S+)/
 
 /** The words for the reviewer: why this email became a proposal. */
@@ -72,17 +82,22 @@ export function itemsFromReasons(reasons: unknown, base: { crmCompanyId: string;
   for (const r of reasons as StoredReason[]) {
     const kind = typeof r?.signal === 'string' ? KIND[r.signal] : undefined
     if (!kind || typeof r.summary !== 'string') continue
-    const ev = typeof r.evidence === 'string' ? EVIDENCE.exec(r.evidence) : null
-    const phrase = kind === 'proposal' ? (ev?.[5]?.trim() || null) : null
+    const om = kind === 'omitted' && typeof r.evidence === 'string' ? OMITTED.exec(r.evidence) : null
+    if (kind === 'omitted' && !om) continue
+    const ev = kind !== 'omitted' && typeof r.evidence === 'string' ? EVIDENCE.exec(r.evidence) : null
+    const phrase = kind === 'proposal' ? (ev?.[6]?.trim() || null) : null
     out.push({
       kind,
       ...base,
       companyClassification: null,
-      status: ev?.[1] ?? 'unknown',
+      status: kind === 'omitted' ? 'info' : (ev?.[1] ?? 'unknown'),
       masked: kind === 'not_recorded' ? null : (MASKED.exec(r.summary)?.[1] ?? null),
       receivedOn: ev?.[3] ?? null,
       activityId: ev?.[2] ?? null,
       fingerprint: ev?.[4] ?? null,
+      keyId: ev?.[5] ?? null,
+      omittedProposals: om ? Number(om[1]) : 0,
+      omittedNotRecorded: om ? Number(om[2]) : 0,
       phrase,
       reason: reasonFor(phrase),
       summary: r.summary.slice(0, 600),
@@ -97,7 +112,7 @@ export function latestPerSource(items: OptOutReviewItem[]): OptOutReviewItem[] {
   const seen = new Set<string>()
   const out: OptOutReviewItem[] = []
   for (const it of items) {
-    const key = `${it.crmCompanyId}|${it.kind}|${it.activityId ?? it.masked ?? it.summary}`
+    const key = it.kind === 'omitted' ? `${it.crmCompanyId}|omitted` : `${it.crmCompanyId}|${it.kind}|${it.activityId ?? it.masked ?? it.summary}`
     if (seen.has(key)) continue
     seen.add(key)
     out.push(it)
@@ -160,12 +175,15 @@ async function load(tenantId: string, crmCompanyId?: string): Promise<OptOutRevi
     for (const e of events) if (!approvedBy.has(e.resourceId ?? '')) approvedBy.set(e.resourceId ?? '', e.actorCrmUserId ?? 'a person')
   }
 
+  const counters = items.filter((i) => i.kind === 'omitted')
+  items = items.filter((i) => i.kind !== 'omitted')
+  const omitted = { proposals: counters.reduce((n, c) => n + c.omittedProposals, 0), notRecorded: counters.reduce((n, c) => n + c.omittedNotRecorded, 0) }
   const out = items.map((it) => {
     const withClass = { ...it, companyClassification: classification.get(it.crmCompanyId) ?? null }
     const who = it.kind === 'proposal' ? approvedBy.get(`${it.crmCompanyId}|${it.activityId}`) : undefined
     return who ? { ...withClass, status: 'recorded', approvedBy: who } : withClass
   })
-  return { items: out, pendingCount: out.filter((i) => i.kind === 'proposal' && !DONE.has(i.status)).length, complete }
+  return { items: out, pendingCount: out.filter((i) => i.kind === 'proposal' && !DONE.has(i.status)).length + omitted.proposals, omitted, complete }
 }
 
 /** Every opt-out proposal, "not recorded" opt-out and re-consent candidate of the tenant, newest evaluation first, with the total still pending. Tenant-scoped by the query itself. */
@@ -176,4 +194,42 @@ export async function optOutReview(tenantId: string): Promise<OptOutReviewResult
 /** The same, for ONE company (what an approval checks the request against). */
 export async function optOutReviewForCompany(tenantId: string, crmCompanyId: string): Promise<OptOutReviewItem[]> {
   return (await load(tenantId, crmCompanyId)).items
+}
+
+// ── What a browser may see ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type ApprovalBlockedReason =
+  | 'switch_off' // WARM_LEADS_RECORD_OPT_OUTS is off on this server: proposals are read-only
+  | 'key_not_configured' // the dedicated fingerprint key is not set: nothing can be approved (fail closed)
+  | 'key_changed' // the key was changed since this proposal was made: the company must be evaluated again and the new proposal reviewed
+  | 'no_fingerprint' // an older proposal without a fingerprint: evaluate the company again
+
+export type PublicOptOutItem = Omit<OptOutReviewItem, 'fingerprint' | 'keyId' | 'omittedProposals' | 'omittedNotRecorded'> & {
+  /** true only when an administrator may approve this proposal right now. A boolean - the fingerprint itself never leaves the server. */
+  approvable: boolean
+  /** For a pending proposal that cannot be approved: why, in a code the screen turns into words. */
+  approvalBlockedReason: ApprovalBlockedReason | null
+}
+
+const PENDING = new Set(['dry_run', 'awaiting_approval'])
+
+/** The line as a browser may receive it: no fingerprint, no key id - only whether (and if not, why not) it can be approved. */
+export function toPublicItem(it: OptOutReviewItem, recordingEnabled: boolean): PublicOptOutItem {
+  const { fingerprint, keyId, omittedProposals: _op, omittedNotRecorded: _on, ...rest } = it
+  let reason: ApprovalBlockedReason | null = null
+  if (it.kind === 'proposal' && PENDING.has(it.status)) {
+    const current = fingerprintKeyId()
+    if (!recordingEnabled) reason = 'switch_off'
+    else if (!fingerprintKeyConfigured() || !current) reason = 'key_not_configured'
+    else if (!fingerprint || !keyId) reason = 'no_fingerprint'
+    else if (keyId !== current) reason = 'key_changed'
+  }
+  return { ...rest, approvable: it.kind === 'proposal' && PENDING.has(it.status) && reason === null, approvalBlockedReason: reason }
+}
+
+/** Pending proposals first (newest first), then everything else (newest first) - and at most `limit` of them. The total is reported separately. */
+export function pageOfItems(items: OptOutReviewItem[], limit: number): OptOutReviewItem[] {
+  const rank = (i: OptOutReviewItem) => (i.kind === 'proposal' && !DONE.has(i.status) ? 0 : 1)
+  const day = (i: OptOutReviewItem) => i.receivedOn ?? ''
+  return [...items].sort((a, b) => rank(a) - rank(b) || (day(a) < day(b) ? 1 : day(a) > day(b) ? -1 : 0)).slice(0, limit)
 }

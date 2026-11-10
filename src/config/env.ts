@@ -513,6 +513,15 @@ const schema = z.object({
   // required for development and the first 100-company pilot): the evaluation lists the masked address it proposes and writes nothing.
   // Turning it on needs the owner's separate approval (src/warmleads/optOut.ts is the only place that writes).
   WARM_LEADS_RECORD_OPT_OUTS: bool.default('false'),
+  // The key (server side only, at least 32 characters, never JWT_SECRET and never a fallback to it) that fingerprints the address of an
+  // opt-out proposal, so that an approval can prove the address it re-reads from the source email is EXACTLY the one that was proposed. Empty
+  // = proposals are still listed but cannot be approved (fail closed). Changing it makes pending proposals need a fresh review.
+  // Nothing in the code generates or stages a value; production needs its own, set by whoever deploys.
+  WARM_LEADS_OPT_OUT_FINGERPRINT_KEY: z.string().default(''),
+  // Domains that are OURS (comma / space separated, e.g. "example.com"): an opt-out proposal is never made for a sender on one of them or on a
+  // subdomain (colleagues). Added to the domains of OUTREACH_FROM_EMAIL / SMTP_FROM / SMTP_USER. Never derived from an incoming From / To / Cc.
+  // Empty (and no such sender setting) = ownership is unknown, so NO proposal is made (fail closed).
+  WARM_LEADS_OWN_DOMAINS: z.string().default(''),
   // The web research (Intent Signals, Gemini + search — the only paid step)
   // runs for at most this many companies per run. The fast screen has no cap.
   WARM_LEADS_DEEP_MAX_PER_RUN: z.coerce.number().int().min(0).max(50).default(10),

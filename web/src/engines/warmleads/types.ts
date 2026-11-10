@@ -102,7 +102,7 @@ export interface Reason {
 
 /** One opt-out found in a reply: masked address, day, status and the NXT Sales activity to open. Never a raw address or message text. */
 export interface OptOutReviewItem {
-  kind: 'proposal' | 'not_recorded' | 'reconsent'
+  kind: 'proposal' | 'not_recorded' | 'reconsent' | 'omitted'
   crmCompanyId: string
   companyName: string | null
   evaluationId: string
@@ -113,8 +113,10 @@ export interface OptOutReviewItem {
   activityId: string | null
   /** The company's CURRENT classification: a customer / active opportunity / do-not-contact is a warning for the approver. */
   companyClassification?: string | null
-  /** Keyed fingerprint of the proposed address (not reversible): only present when the proposal can be approved. */
-  fingerprint?: string | null
+  /** true only when an administrator may approve this proposal right now (the server decides; the fingerprint itself never reaches the browser). */
+  approvable?: boolean
+  /** For a pending proposal that cannot be approved: why (switch_off | key_not_configured | key_changed | no_fingerprint). */
+  approvalBlockedReason?: string | null
   /** The standard phrase the email consists of, by our own label. */
   phrase?: string | null
   /** The exact reason this proposal was generated, in words. */

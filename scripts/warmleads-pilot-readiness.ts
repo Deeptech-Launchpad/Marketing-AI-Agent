@@ -17,6 +17,7 @@ import { withCrmReadOnly } from '../src/crm/nxtSales/httpClient.js'
 import { warmLeadsKeyProblem } from '../src/llm/gemini/apiKey.js'
 import { prisma } from '../src/platform/db.js'
 import { redactDatabaseUrl, parseMemAvailableMb } from '../src/warmleads/isolatedTestSafety.js'
+import { fingerprintKeyConfigured, trustedOwnDomains } from '../src/warmleads/optOut.js'
 import { evaluateReadiness, resolveTenant, type ReadinessSnapshot, type TenantState } from '../src/warmleads/readiness.js'
 import { windowOpen } from '../src/warmleads/window.js'
 
@@ -88,6 +89,8 @@ async function main(): Promise<number> {
     llmDriver: env.LLM_DRIVER,
     crmDriver: env.CRM_DRIVER,
     recordOptOuts: env.WARM_LEADS_RECORD_OPT_OUTS,
+    fingerprintKeyConfigured: fingerprintKeyConfigured(),
+    ownDomainsConfigured: trustedOwnDomains().length > 0,
     workerEnabled: env.WARM_LEADS_WORKER_ENABLED,
     syncSwitchOn: env.WARM_LEADS_SYNC_ENABLED,
     allowLive: env.WARM_LEADS_ALLOW_LIVE,

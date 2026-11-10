@@ -4,6 +4,7 @@ import { prisma } from '../platform/db.js'
 import { logger } from '../platform/logger.js'
 import { syncAction } from './companyState.js'
 import { assertNxtSendable } from './runSummary.js'
+import { redactReasons } from './reasonsPublic.js'
 
 // SENDING THE CURRENT WARM / EARLY SIGNAL LIST TO NXT SALES - built, and OFF.
 //
@@ -70,7 +71,7 @@ export async function syncPending(tenantId: string, max = 50): Promise<SyncResul
           score: e.score,
           confidence: e.confidence,
           summary: e.summary,
-          reasons: e.reasons ?? [],
+          reasons: redactReasons(e.reasons ?? []), // the server-only fingerprint never goes to NXT Sales
           deepCheck: e.deepCheck,
           error: null,
           evaluatedAt: (e.evaluatedAt ?? new Date()).toISOString(),

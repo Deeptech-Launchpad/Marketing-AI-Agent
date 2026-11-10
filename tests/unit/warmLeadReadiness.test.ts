@@ -8,6 +8,8 @@ const good = (over: Partial<ReadinessSnapshot> = {}): ReadinessSnapshot => ({
   llmDriver: 'real',
   crmDriver: 'real',
   recordOptOuts: false,
+  fingerprintKeyConfigured: true,
+  ownDomainsConfigured: true,
   workerEnabled: false,
   syncSwitchOn: false,
   allowLive: false,
@@ -140,6 +142,23 @@ describe('review fixes - a check that was not actually made is never a pass', ()
     expect(check(early, 'record_opt_outs')!.detail).toMatch(/must stay off for the pilot/)
     const approved = good({ recordOptOuts: true, settings: { ...good().settings!, pilotApprovedAt: new Date('2026-11-06') } })
     expect(check(approved, 'record_opt_outs')).toMatchObject({ status: 'info' })
+  })
+
+  it('the opt-out fingerprint key and our own domains: only information while recording is off; a FAIL once recording is on without them', () => {
+    // recording OFF (the default): a missing key / missing domains is information - proposals are listed but cannot be approved / are not made
+    const off = good({ fingerprintKeyConfigured: false, ownDomainsConfigured: false })
+    expect(check(off, 'opt_out_key')).toMatchObject({ status: 'info' })
+    expect(check(off, 'own_domains')).toMatchObject({ status: 'info' })
+    expect(check(off, 'own_domains')!.detail).toMatch(/NO opt-out proposal is made/)
+    expect(evaluateReadiness(off).ready).toBe(true)
+    // recording ON after the pilot is approved: both are required
+    const approvedOn = (over: Partial<ReadinessSnapshot>) => good({ recordOptOuts: true, settings: { ...good().settings!, pilotApprovedAt: new Date('2026-11-06') }, ...over })
+    expect(failing(approvedOn({ fingerprintKeyConfigured: false }))).toEqual(['opt_out_key'])
+    expect(check(approvedOn({ fingerprintKeyConfigured: false }), 'opt_out_key')!.detail).toMatch(/no proposal can be approved/)
+    expect(failing(approvedOn({ ownDomainsConfigured: false }))).toEqual(['own_domains'])
+    expect(failing(approvedOn({}))).toEqual([])
+    expect(check(approvedOn({}), 'opt_out_key')).toMatchObject({ status: 'pass' })
+    expect(check(approvedOn({}), 'own_domains')).toMatchObject({ status: 'pass' })
   })
 
   it('"paused" is not a failure while the requested pilot is queued or running', () => {

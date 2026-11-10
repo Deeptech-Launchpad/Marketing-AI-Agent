@@ -20,6 +20,7 @@ import { candidateAddresses, optOutSignals, persistedOptOuts, proposeOptOuts, si
 import { engagementSignal, summariseInbound } from './replies.js'
 import { assertNxtSendable, runSummaryPayload } from './runSummary.js'
 import { interpretWebsiteFailure, looksLikeBlockPage, looksLikePlaceholderSite, looksLikeStubPage, researchUnreadable } from './websiteAccess.js'
+import { publicEvaluation, redactReasons } from './reasonsPublic.js'
 
 // WARM LEADS (2026-10-30).
 //
@@ -585,7 +586,7 @@ export async function syncEvaluation(evaluationId: string): Promise<void> {
       score: e.score,
       confidence: e.confidence,
       summary: e.summary,
-      reasons: e.reasons ?? [],
+      reasons: redactReasons(e.reasons ?? []), // the server-only fingerprint never goes to NXT Sales
       deepCheck: e.deepCheck,
       error: e.error,
       evaluatedAt: (e.evaluatedAt ?? new Date()).toISOString(),
@@ -729,6 +730,6 @@ export async function runDetail(tenantId: string, runId: string) {
   const evaluations = await prisma.warmLeadEvaluation.findMany({ where: { runId }, orderBy: { createdAt: 'asc' } })
   return {
     run: { ...run, costUsd: Number(run.costUsd), counts: await runCounts(runId) },
-    evaluations: evaluations.map((e) => ({ ...e, costUsd: Number(e.costUsd) })),
+    evaluations: evaluations.map((e) => publicEvaluation({ ...e, costUsd: Number(e.costUsd) })), // reasons without the server-only fingerprint
   }
 }

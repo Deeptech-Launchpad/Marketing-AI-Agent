@@ -10,7 +10,7 @@ import type {
   CrmEmailSummary,
   CrmUser,
 } from '../types.js'
-import { ACTIVITY_ADDRESSES_MAX, ACTIVITY_BODY_MAX, ACTIVITY_BODY_RAW_MAX, ACTIVITY_BODY_WINDOW_DAYS } from '../types.js'
+import { ACTIVITY_ADDRESSES_MAX, ACTIVITY_BODY_MAX, ACTIVITY_BODY_RAW_MAX, ACTIVITY_BODY_WINDOW_DAYS, ACTIVITY_UNREAD_MARKER } from '../types.js'
 import type { QueryParams } from './httpClient.js'
 
 // ALL knowledge of NXT Sales' literal response shapes is confined to this file.
@@ -220,6 +220,8 @@ export function plainBody(v: unknown): string {
   const whole = String(v ?? '')
   const unread = whole.length > ACTIVITY_BODY_RAW_MAX
   let t = whole.slice(0, ACTIVITY_BODY_RAW_MAX)
+  // an embedded image (data: URI) is not text: it must not fill the part of the message that is kept (linear: a bounded character class)
+  if (t.includes('data:')) t = t.replace(DATA_URI, ' ')
   if (t.includes('<')) {
     t = dropBlocks(t, '<!--', '-->')
     t = dropBlocks(t, '<style', '</style')
@@ -235,9 +237,10 @@ export function plainBody(v: unknown): string {
     .trim()
   // Text beyond the raw cut was never read: say so in the text itself, so a short "UNSUBSCRIBE" followed by a wall of white space can never
   // look like a complete standalone message (the marker is other content, so the message is not a plain opt-out).
-  return (unread ? `${tidy}\n${UNREAD_MARKER}` : tidy).slice(0, ACTIVITY_BODY_MAX)
+  // room is reserved for the marker, so it can never be cut off by the length limit: a message that was not read in full always says so
+  return unread ? `${tidy.slice(0, ACTIVITY_BODY_MAX - ACTIVITY_UNREAD_MARKER.length - 1)}\n${ACTIVITY_UNREAD_MARKER}` : tidy.slice(0, ACTIVITY_BODY_MAX)
 }
-const UNREAD_MARKER = '[the rest of this message was not read]'
+const DATA_URI = /data:[\w/+.-]{1,60};base64,[A-Za-z0-9+/=]{100,}/g
 
 /** A whole token that is exactly one plain address: ASCII local part, dotted ASCII domain with a letters-only ending. Nothing else is an address. */
 const STRICT_ADDRESS = /^[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,6}[a-z]{2,24}$/i
@@ -312,7 +315,7 @@ export function toActivity(raw: Raw, withBody = false, now: Date = new Date()): 
           body: plainBody(raw.body),
           fromAddresses: parseAddresses(raw.fromEmail),
           matchedAddress: parseAddresses(raw.matchedCompanyEmail)[0] ?? null,
-          ownAddresses: [...new Set([...parseAddresses(raw.mailboxEmail), ...parseAddresses((raw.user as Raw | undefined)?.email), ...parseAddresses(raw.toEmail)])].slice(0, ACTIVITY_ADDRESSES_MAX),
+          ownAddresses: [...new Set([...parseAddresses(raw.mailboxEmail), ...parseAddresses((raw.user as Raw | undefined)?.email)])].slice(0, ACTIVITY_ADDRESSES_MAX),
         }
       : {}),
   }

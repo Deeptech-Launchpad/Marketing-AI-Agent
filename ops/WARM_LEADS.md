@@ -99,7 +99,11 @@ table of another feature is touched.
 - **Privacy.** The email text is read in memory only: it is never stored, logged, sent to Gemini or copied into a result or to NXT
   Sales; no customer phrase and not even the subject of a refusing reply is kept - only the kind, the date and the fact that an
   inbound email exists. The mapper reads the text only for an inbound email inside the 90-day window, cuts the raw text to 60,000
-  characters before any pattern runs, removes style / script / head / comments, decodes entities, and keeps 6,000 characters.
+  characters before any pattern runs, removes style / script / head / comments and embedded (base64) images, decodes entities, and keeps 6,000
+  characters. **A message whose raw text was longer than that limit was not read in full, and says so in its own text (an internal marker, never the
+  person's words): the marker is removed before judging, nothing positive is ever inferred from such a message - what would have been interest is
+  `reply_unverified`, because a refusal may sit in the part that was cut off - and it is never a standalone opt-out.** A refusal found in the part
+  that WAS read still counts.
 - **Marketing opt-outs (decisions of 2026-11-05 and 2026-11-06).** Buying intent and permission to contact are separate. An explicit
   opt-out withdraws *marketing* permission; "not interested", a rejection of one product, a wrong-person answer or a declined meeting never
   do. The shared suppression list (`SuppressionEntry`) is what the sending gates already check, so recording an address there is all it
@@ -114,8 +118,12 @@ table of another feature is touched.
     `email` row (global, `source: unsubscribe`, no expiry, tenant-scoped). The header is parsed token by token; if anything in it is not a plain
     address (an apostrophe or `&` in the name, a non-ASCII letter, a quoted part, a very long header) **nothing is suppressed** - an address is
     never "repaired" into a different one. The address is validated again at the writer. Refused: several or no sender, our own mailbox / the
-    CRM user / the inbound `toEmail` / **any address on one of our own domains** (colleagues) / a plus-alias / no-reply, postmaster,
-    mailer-daemon, bounce, alert or system addresses, and any message whose own mailbox is unknown. The address we mailed on the conversation
+    CRM user (NXT Sales' own records of the mailbox - **not** the message's To / Cc headers, which a sender writes) / **any address on one of OUR
+    domains or their subdomains** (colleagues) / a plus-alias / no-reply, postmaster, mailer-daemon, bounce, alert or system addresses, and any
+    message whose own mailbox is unknown. **Our own domains come from SERVER-SIDE configuration only**: `WARM_LEADS_OWN_DOMAINS` (comma / space
+    separated; lower-cased, `@` and trailing dot removed, only well-formed names kept) plus the domains of `OUTREACH_FROM_EMAIL`, `SMTP_FROM` and
+    `SMTP_USER`; nothing is derived from an incoming From / To / Cc. **If no own domain is configured, ownership is unknown and NO proposal is made at
+    all** (every opt-out is listed as "not recorded" with that reason) - set `WARM_LEADS_OWN_DOMAINS` before the pilot if its dry-run proposals are to be read. The address we mailed on the conversation
     (`matchedCompanyEmail`), when different, is shown as a masked SUGGESTION and is never suppressed. Never a domain row, a company row, or a
     second address. The `From` header is not authenticated by NXT Sales: a forged "unsubscribe" could name a third party's address - one
     more reason the switch stays off until the pilot's dry-run proposals have been read.
@@ -129,16 +137,35 @@ table of another feature is touched.
     its current classification, the masked address, the NXT Sales activity id and date, the warning **SENDER NOT AUTHENTICATED**, a warning for an
     existing customer / active opportunity / do-not-contact company, and the exact reason the proposal was generated (the standard phrase, by our
     own label, e.g. "UNSUBSCRIBE" - never the customer's words). The administrator must tick an explicit confirmation that **the request was verified
-    independently through a trusted contact channel** - reading the (unverified) email itself is not verification. The request carries the two ids
-    and that confirmation, and never an address: the server checks that the proposal is a stored one of the caller's tenant, re-reads that one email
+    independently through a trusted contact channel** - reading the (unverified) email itself is not verification - **and choose HOW from a fixed list**
+    (`verificationMethod`: phone call to a known number / a NEW email to the address on file / the account owner confirmed / meeting or video call / another
+    trusted channel; never free text). The request carries the two ids, that confirmation and the method, and never an address, a tenant, an approver or a
+    time (those come from the login and the server clock): the server checks that the proposal is a stored one of the caller's tenant, re-reads that one email
     from NXT Sales (read only), works the address out AGAIN from it by the strict rules, and refuses if the email is no longer a plain standalone
     opt-out from one safe sender, if its sender is no longer EXACTLY the address that was proposed (compared by a keyed fingerprint stored with
-    the proposal - a mask would let a similar address through; a proposal stored without one cannot be approved), or if the CRM returns the email for
-    another company (or the email is older than 90 days - add the address by hand in the suppression list screen). It then writes the one row naming
+    the proposal - a mask would let a similar address through), or if NXT Sales does not tie the email to
+    EXACTLY the submitted company (**an activity whose `companyId` is missing/null, or differs even by case, is refused - fail closed; an email with no company is
+    not even proposed, it is listed for a person**), or if the email is older than 90 days - in all these cases a person adds the address by hand in the suppression
+    list screen. Tenant isolation: the company must be on the caller's own list and the proposal must be one of the caller's own tenant, so another tenant's
+    company id, proposal or activity id is refused (404) before NXT Sales is asked anything. It then writes the one row naming
     the approver (`createdByCrmUserId`) **and its audit entry in ONE database transaction**: if the audit entry cannot be written, the row is rolled
-    back too ("no record, no change"). The audit entry holds the masked address, the activity id, the company's classification and the recorded
-    confirmation - never the address. A trustworthy stored authentication result would have to be added to NXT Sales' data first - a separate,
+    back too ("no record, no change"). The audit entry holds the **approver's id, the approval time and the structured verification method**, the masked address, the company and activity ids, the
+    company's classification and the recorded confirmation - never the address, the subject or any message text (the suppression row's reason names the method too).
+    **Seeing the exact contact:** the list shows masked addresses only. Inside the approval form an administrator can press "Show the exact address"
+    (`POST /api/warm-leads/opt-outs/reveal`, admin only; same conditions as an approval: switch on, key configured, a proposal of the caller's tenant). The server
+    re-reads the email from NXT Sales (read only), checks it against the proposal exactly as an approval would, and returns the address in that response only
+    (`Cache-Control: no-store`) together with a notice that the From line is unauthenticated and that reading it is NOT verification. **The view is audited**
+    (`warmleads.opt_out_address_revealed`: who, when, which proposal - never the address) and **fails closed**: if that audit entry cannot be written the address is
+    not returned. The address is never stored, never put in an evaluation's reasons, a log line or an audit text; the screen shows it for two minutes at most. A trustworthy stored authentication result would have to be added to NXT Sales' data first - a separate,
     reviewed change - before even a design for recording without a person could be considered.
+  - **The fingerprint key.** The fingerprint is an HMAC-SHA-256 made with a **dedicated, server-side key**, `WARM_LEADS_OPT_OUT_FINGERPRINT_KEY` (at least
+    32 characters). It is **never** `JWT_SECRET` (which NXT Sales shares) and there is no fallback to it or to any other secret; nothing in the code
+    generates or stages a value - production needs its own, set by whoever deploys. **Missing or too short = fail closed**: proposals are still listed but
+    show "approval is blocked" and the approval refuses before reading anything. The fingerprint and the 8-character id of the key are **server side
+    only**: they are removed from every API response (company detail, pilot results, run detail, the opt-out list) and from everything sent to NXT Sales;
+    the browser only receives `approvable` and, if it is false, a reason code. If the key is **changed**, pending proposals can no longer be checked: the
+    screen and the approval say, in plain words, that the company must be evaluated again and the NEW proposal reviewed (it is not reported as a wrong
+    address). The readiness check reports the key and the own domains (information while recording is off; a FAIL if recording is on without them).
   - **The switch `WARM_LEADS_RECORD_OPT_OUTS` is OFF by default** and stays off for development and the first 100-company pilot (the
     readiness check fails if it is on before the pilot is approved). Off = dry run: each evaluation stores a line like `r***@acme.example
     (the sender of the opt-out of 2026-11-03) is PROPOSED for the suppression list — DRY RUN: nothing was written`, with
@@ -149,10 +176,15 @@ table of another feature is touched.
     `writeApprovedOptOut` is called only from the approval module, which only the admin route calls and the worker cannot reach.
   - **Dry-run evidence is kept and reviewable, and nothing is silently left out.** The lines live in the stored reasons of the evaluation (masked
     address, day, status, NXT activity id - never a raw address or message text), also on an evaluation that FAILED (site unreadable) and across
-    later re-checks. The pilot review shows them in one list ("Opt-outs found in replies", `GET /api/warm-leads/pilot/opt-outs`, tenant-scoped, same
-    permission as the pilot results), still there after the email has left the 90-day window. The evaluations are read in batches until there are no
+    later re-checks. The review shows them in one list ("Opt-outs found in replies", `GET /api/warm-leads/pilot/opt-outs`, tenant-scoped, same
+    permission as the pilot results), still there after the email has left the 90-day window. **Where it is shown:** during the pilot (as before) **and, for
+    administrators, after the pilot is approved (the daily stage)** - the only stage in which the owner may switch recording on. **With recording OFF the
+    list is read-only and says so** ("Approval is disabled because recording is switched OFF"). The evaluations are read in batches until there are no
     more (no 1,000-row cut-off); the list shows the **total number of pending proposals** and, only if a backstop ceiling is ever reached, says in
-    red that the list is NOT complete. The screen pages 25 at a time. The activity id is a CRM id, not personal data; the email is opened in NXT
+    red that the list is NOT complete. **The response is paginated** (`?limit=`, default 50, never more than 500; pending proposals first) and always reports the total. **Per check, at most
+    25 senders are proposed and 20 non-proposable opt-out messages are listed (newest first), and at most 10 re-consent candidates**; whatever is above
+    those limits is **counted** and shown ("N further opt-out sender(s) and M further message(s) were found but are not listed - nothing was dropped
+    silently"), so a flood of hostile mail grows the stored reasons by a few KB, not megabytes; the pending count includes the counted ones. The activity id is a CRM id, not personal data; the email is opened in NXT
     Sales under NXT Sales' own access rules - Marketing does not open it.
   - **Failure-safe, atomic and idempotent writes.** Each approval is its own transaction. A stored line says "added" only after the transaction
     committed. An approval that fails (database error, or the audit entry could not be written) is reported to the administrator as a failure and
@@ -190,9 +222,11 @@ table of another feature is touched.
       Email's own unsubscribe (`a.b@gmail.com` and `ab@gmail.com` differ). The mapper gives sender addresses only under the same opt-in as the
       email text (inbound, within 90 days); a full address is never logged or put in a result - only a masked form.
   - **Known limits:** phrase matching can miss an opt-out in unusual wording or another language (it then looks like interest or
-    `unverified`); at most 10 senders per company are proposed in one evaluation (the address we actually mailed first, then the newest; the
-    rest are listed "not recorded" for a person), and a message dated in the future or with text beyond the first 60,000 characters is not read
-    as a standalone opt-out; the approval needs the email to be inside the 90-day window; meeting cancellations are recognised only in calendar-system wording ("Declined:", "has declined this invitation"), not
+    `unverified`); at most 25 senders per company are proposed in one check (the address we actually mailed first, then the newest; the rest are
+    counted, see above); **a message dated more than 10 minutes in the future is not read at all** (its text is ignored, so a refusal in it is
+    missed - a skewed Date header can hide one), and a message with text beyond the first 60,000 characters is `unverified` and never a standalone
+    opt-out; the approval needs the email to be inside the 90-day window and an activity tied by NXT Sales to exactly the submitted company
+    (a missing company id is refused); meeting cancellations are recognised only in calendar-system wording ("Declined:", "has declined this invitation"), not
     in a person's own words; a row of any other source on one of a company's addresses is enforced but does not by itself hold the company.
 - **NXT Sales run summary.** NXT Sales has no field for `human_review` and is not changed: companies held for review are not counted as
   `processed` in the summary sent there, so its categories add up. The count stays on the Marketing screens.

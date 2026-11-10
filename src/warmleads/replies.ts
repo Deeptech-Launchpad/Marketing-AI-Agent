@@ -1,4 +1,4 @@
-import type { CrmActivity } from '../crm/types.js'
+import { ACTIVITY_UNREAD_MARKER, type CrmActivity } from '../crm/types.js'
 import { RECENT_ACTIVITY_DAYS } from '../intent/providers/crmProvider.js'
 import type { ObservedSignal } from './score.js'
 
@@ -304,7 +304,8 @@ const OWN_MAX = 6000
  * not; neither is theirs.)
  */
 export function ownWords(text: string | null | undefined): string {
-  let t = (text ?? '').replace(/\r\n?/g, '\n').slice(0, OWN_MAX)
+  // the mapper's "not read in full" marker is not the person's text: it is removed before anything is judged (see wasTruncated)
+  let t = (text ?? '').split(ACTIVITY_UNREAD_MARKER).join('').replace(/\r\n?/g, '\n').slice(0, OWN_MAX)
   const hasLines = t.includes('\n')
   // 1. quoted blocks that carry no ">" prefix
   let cut = t.length
@@ -486,6 +487,11 @@ function subjectRefusal(a: CrmActivity, textUnavailable: boolean): RefusalKind |
   return null
 }
 
+/** The text of this message was cut before the person's actual reply could be fully read (see ACTIVITY_UNREAD_MARKER). */
+export function wasTruncated(a: CrmActivity): boolean {
+  return typeof a.body === 'string' && a.body.includes(ACTIVITY_UNREAD_MARKER)
+}
+
 /** Whether the message is mail-system output: by its subject, or - for a short message that neither refuses nor asks for anything - by what it says. */
 export function isAutomatedMessage(a: CrmActivity): boolean {
   if (isAutomatedEmail(a.subject)) return true
@@ -505,7 +511,11 @@ export function isAutomatedMessage(a: CrmActivity): boolean {
  * With `requireText` false and no text loaded (the test sample only needs to find replies) only the subject is read.
  */
 function assessBase(a: CrmActivity, requireText: boolean): Omit<ReplyAssessment, 'reconsent' | 'strictOptOut' | 'strictPhrase'> {
-  const done = (verdict: ReplyVerdict, kind: RefusalKind | null, basis: ReplyAssessment['basis']): Omit<ReplyAssessment, 'reconsent' | 'strictOptOut' | 'strictPhrase'> => ({ activity: a, verdict, kind, basis })
+  // A message that was not read in full may hold a refusal in the part that was cut off, so NOTHING positive is inferred from it: whatever would
+  // have been "interested" is "unverified". A refusal found in the part that WAS read still counts (that can only make the company more careful).
+  const truncated = wasTruncated(a)
+  const done = (verdict: ReplyVerdict, kind: RefusalKind | null, basis: ReplyAssessment['basis']): Omit<ReplyAssessment, 'reconsent' | 'strictOptOut' | 'strictPhrase'> =>
+    truncated && verdict === 'interested' ? { activity: a, verdict: 'unverified', kind: null, basis: 'no_text' } : { activity: a, verdict, kind, basis }
   const noBody = a.body === undefined || a.body === null
   const own = noBody ? '' : ownWords(a.body)
   const bySubject = subjectRefusal(a, noBody || own === '')
@@ -550,7 +560,8 @@ export const affirmsMarketingConsent = (own: string): boolean => {
 export function assessReply(a: CrmActivity, requireText: boolean): ReplyAssessment {
   const r = assessBase(a, requireText)
   const body = a.body === undefined || a.body === null ? '' : ownWords(a.body)
-  const strictPhrase = r.verdict === 'declined' && r.kind === 'opt_out' && r.basis === 'text' && body !== '' ? standaloneOptOutPhrase(substanceOf(body)) : null
+  // a message that was not read in full is never a STANDALONE opt-out (something unread may follow the phrase)
+  const strictPhrase = r.verdict === 'declined' && r.kind === 'opt_out' && r.basis === 'text' && body !== '' && !wasTruncated(a) ? standaloneOptOutPhrase(substanceOf(body)) : null
   return { ...r, reconsent: r.verdict !== 'declined' && body !== '' && affirmsMarketingConsent(body), strictOptOut: strictPhrase !== null, strictPhrase }
 }
 

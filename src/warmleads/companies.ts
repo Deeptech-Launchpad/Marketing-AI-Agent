@@ -6,6 +6,7 @@ import { logger } from '../platform/logger.js'
 import { applyOutcome, DEFINITIVE, MAX_AUTO_ATTEMPTS, type CompanyState } from './companyState.js'
 import { allCompanies } from './sample.js'
 import type { ComputedEvaluation } from './service.js'
+import { publicEvaluation } from './reasonsPublic.js'
 
 // THE PERSISTENT COMPANY LIST (WarmLeadCompany) AND THE WORK QUEUE ON TOP OF IT.
 //
@@ -412,7 +413,7 @@ export async function companyDetail(tenantId: string, crmCompanyId: string) {
   const company = await prisma.warmLeadCompany.findUnique({ where: { tenantId_crmCompanyId: { tenantId, crmCompanyId } } })
   if (!company) return null
   const history = await prisma.warmLeadEvaluation.findMany({ where: { tenantId, crmCompanyId }, orderBy: { createdAt: 'desc' }, take: 20 })
-  return { company, history: history.map((e) => ({ ...e, costUsd: Number(e.costUsd) })) }
+  return { company, history: history.map((e) => publicEvaluation({ ...e, costUsd: Number(e.costUsd) })) } // reasons without the server-only fingerprint
 }
 
 /**

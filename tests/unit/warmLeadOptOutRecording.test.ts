@@ -42,6 +42,10 @@ import { optOutSignals, proposeOptOuts, signalsToReasons } from '../../src/warml
 import { summariseInbound } from '../../src/warmleads/replies.js'
 import type { ComputedEvaluation } from '../../src/warmleads/service.js'
 
+// Server-side settings the opt-out code needs (test values only): the dedicated fingerprint key, and which domains are OURS.
+env.WARM_LEADS_OPT_OUT_FINGERPRINT_KEY = 'unit-test-fingerprint-key-0123456789abcdef-NOT-A-SECRET'
+env.WARM_LEADS_OWN_DOMAINS = 'ours.example'
+
 const NOW = new Date('2026-11-05T01:00:00Z')
 const act = (id: string, from: string) =>
   toActivity({ id, type: 'email', companyId: 'c1', subject: 'Re: hi', direction: 'inbound', createdAt: '2026-11-03T10:00:00Z', body: 'UNSUBSCRIBE', fromEmail: from, matchedCompanyEmail: from, mailboxEmail: 'sales@ours.example', toEmail: 'sales@ours.example' }, true, NOW)
@@ -85,7 +89,7 @@ describe('the evaluation never writes to the suppression list: the switch alone 
     const r = await run(computed(['a@acme.example'], { record: false }))
     expect(h.suppressionTouched).toEqual([])
     expect(proposalLines()[0]!.summary).toMatch(/DRY RUN: nothing was written/)
-    expect(proposalLines()[0]!.evidence).toMatch(/^status: dry_run · NXT activity act_0 · received 2026-11-03 · fp [0-9a-f]{16} · phrase: UNSUBSCRIBE/)
+    expect(proposalLines()[0]!.evidence).toMatch(/^status: dry_run · NXT activity act_0 · received 2026-11-03 · fp [0-9a-f]{16} · key [0-9a-f]{8} · phrase: UNSUBSCRIBE/)
     expect(r.state).not.toBe('needs_reevaluation')
   })
 

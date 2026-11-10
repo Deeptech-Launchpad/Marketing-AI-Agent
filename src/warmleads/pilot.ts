@@ -7,6 +7,7 @@ import { logger } from '../platform/logger.js'
 import { finishRunIfIdle, refreshCompanyList } from './companies.js'
 import { buildSample } from './sample.js'
 import { ensureSettings } from './settings.js'
+import { publicEvaluation } from './reasonsPublic.js'
 
 // THE PILOT: 100 representative companies, evaluated on the REAL NXT Sales data, results kept only
 // in the Marketing database, reviewed by an admin before anything else is processed.
@@ -149,7 +150,7 @@ export async function pilotResults(tenantId: string) {
   const latest = await latestPilotEvaluations((ids, since) => prisma.warmLeadEvaluation.findMany({ where: { tenantId, crmCompanyId: { in: ids }, createdAt: { gte: since } } }), run)
   // best score first, as before
   latest.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.createdAt.getTime() - b.createdAt.getTime())
-  return latest.map((e) => ({ ...e, costUsd: Number(e.costUsd) }))
+  return latest.map((e) => publicEvaluation({ ...e, costUsd: Number(e.costUsd) })) // reasons without the server-only fingerprint
 }
 
 /** An admin approves the finished pilot. Only then may daily processing start. */

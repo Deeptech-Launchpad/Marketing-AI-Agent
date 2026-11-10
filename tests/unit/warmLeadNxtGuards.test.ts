@@ -150,3 +150,24 @@ describe('the company sync (sync.ts syncPending): defence in depth', () => {
     expect(h.puts).toEqual([])
   })
 })
+
+describe('the server-only fingerprint never reaches NXT Sales', () => {
+  const LINE = { signal: 'opt_out_proposal', summary: 'r***@acme.example is PROPOSED', evidence: 'status: dry_run · NXT activity act_1 · received 2026-11-03 · fp 0123456789abcdef · key 89abcdef · phrase: UNSUBSCRIBE · one address only' }
+  it('syncEvaluation sends the reasons without the fingerprint and the key id (everything else is unchanged)', async () => {
+    h.evaluations.set('e9', ev('e9', { classification: 'cold', reasons: [LINE] }))
+    await syncEvaluation('e9')
+    const sent = h.puts[0]!.body.reasons as Array<{ evidence: string; summary: string }>
+    expect(JSON.stringify(sent)).not.toMatch(/0123456789abcdef|89abcdef| fp | key /)
+    expect(sent[0]!.evidence).toBe('status: dry_run · NXT activity act_1 · received 2026-11-03 · phrase: UNSUBSCRIBE · one address only')
+    expect(sent[0]!.summary).toBe('r***@acme.example is PROPOSED')
+  })
+  it('the company sync (syncPending) sends them redacted too', async () => {
+    env.WARM_LEADS_SYNC_ENABLED = true
+    h.settings = { pilotApprovedAt: new Date(), syncEnabled: true, syncApprovedAt: new Date() }
+    h.queue = [{ id: 'k9' }]
+    h.companies.set('k9', { id: 'k9', crmCompanyId: 'c-k9', classification: 'warm', currentEvaluationId: 'e-k9', syncedEvaluationId: null })
+    h.evaluations.set('e-k9', ev('e-k9', { reasons: [LINE] }))
+    await syncPending('t1')
+    expect(JSON.stringify(h.puts[0]!.body.reasons)).not.toMatch(/0123456789abcdef|89abcdef| fp | key /)
+  })
+})
