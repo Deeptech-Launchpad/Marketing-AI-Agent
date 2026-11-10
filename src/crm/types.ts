@@ -118,7 +118,42 @@ export interface CrmActivity {
   subject: string | null
   direction: string | null
   createdAt: string
+  /**
+   * The message text (plain text, tags removed, at most ACTIVITY_BODY_MAX characters), present ONLY when the caller asked for it
+   * with `withBody`. Written by third parties: it is read in memory by Warm Leads to tell a refusal from interest and is never
+   * stored, logged, sent to a model or copied into a result.
+   */
+  body?: string | null
+  /**
+   * Who sent an INBOUND email: the bare, lower-case addresses found in NXT Sales' raw `fromEmail` header ("Name <A@B.com>"), at most
+   * ACTIVITY_ADDRESSES_MAX. Present only with `withBody`, only for inbound mail inside the window, like `body`. Used by Warm Leads to
+   * identify the contact who sent an explicit opt-out; never logged or copied into a result (only a masked form is shown).
+   */
+  fromAddresses?: string[]
+  /** The company address this conversation was matched to (NXT Sales `matchedCompanyEmail`), bare and lower-case. Same conditions. */
+  matchedAddress?: string | null
+  /** Our own addresses on the message (the connected mailbox and the CRM user - NXT Sales' own records; NOT the message's To / Cc headers, which a sender writes): never the contact. Same conditions. */
+  ownAddresses?: string[]
 }
+
+/** At most this many addresses are read from one header. */
+export const ACTIVITY_ADDRESSES_MAX = 10
+
+/** At most this much of the cleaned text is kept. */
+export const ACTIVITY_BODY_MAX = 6000
+/**
+ * At most this much of the RAW text is looked at, and it is cut BEFORE any pattern is run on it: a sender controls the size of an
+ * email, so no cost may grow with it. Real replies keep their own words at the top; the rest is quoted history, a signature or markup.
+ */
+export const ACTIVITY_BODY_RAW_MAX = 60_000
+/**
+ * Put at the END of a body whose raw text was longer than ACTIVITY_BODY_RAW_MAX: everything after the cut was never read. It is an internal
+ * flag carried in the text, never part of what the person wrote - the reply engine removes it before judging and never infers interest from a
+ * message that carries it.
+ */
+export const ACTIVITY_UNREAD_MARKER = '[the rest of this message was not read]'
+/** The text is read only for messages inside this many days (the same window Warm Leads reads replies in; a test pins them equal). */
+export const ACTIVITY_BODY_WINDOW_DAYS = 90
 
 export interface CrmDropdownOption {
   value: string

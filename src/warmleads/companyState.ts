@@ -19,7 +19,7 @@ import type { Classification, Confidence } from './score.js'
 export type CompanyState = 'pending' | 'queued' | 'running' | 'evaluated' | 'failed' | 'needs_reevaluation'
 
 /** Results that settle what a company is. */
-export const DEFINITIVE: ReadonlySet<string> = new Set(['warm', 'early_signal', 'cold', 'existing_customer', 'active_opportunity', 'do_not_contact'])
+export const DEFINITIVE: ReadonlySet<string> = new Set(['warm', 'early_signal', 'cold', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review'])
 /** The results NXT Sales lists on its Warm Leads tab. */
 export const LISTED_IN_CRM: ReadonlySet<string> = new Set(['warm', 'early_signal'])
 
@@ -49,7 +49,7 @@ export interface CompanySnapshot extends CompanyResult {
 }
 
 export type Outcome =
-  | { kind: 'failed'; evaluationId: string; error: string; now: Date }
+  | { kind: 'failed'; evaluationId: string; error: string; now: Date; refusal?: boolean }
   | {
       kind: 'classified'
       evaluationId: string
@@ -61,6 +61,8 @@ export type Outcome =
       researchIncomplete: boolean
       /** The call ceiling was the reason (not the company): the attempt is not counted against it. */
       deferredByCeiling: boolean
+      /** The newest reply asked not to be contacted / said no (a company-level refusal), whether or not this evaluation could finish. */
+      refusal?: boolean
       now: Date
     }
 
@@ -73,7 +75,24 @@ export interface CompanyPatch extends CompanyResult {
   lastEvaluationId: string
 }
 
+/**
+ * A refusal seen by an evaluation that could not finish (the site could not be read, research was cut short, too little data) must
+ * not leave an earlier Warm / Early Signal listed as an actionable lead: the company is held for a person (human_review), keeping
+ * its earlier score and evidence, and is withdrawn from NXT Sales. The evaluation is still marked for a re-check.
+ */
 export function applyOutcome(prev: CompanySnapshot, o: Outcome): CompanyPatch {
+  const patch = applyOutcomeBase(prev, o)
+  if (o.refusal && (patch.classification === 'warm' || patch.classification === 'early_signal') && patch.currentEvaluationId === prev.currentEvaluationId) {
+    return {
+      ...patch,
+      classification: 'human_review',
+      summary: `Human review required: this company was ${patch.classification === 'warm' ? 'Warm' : 'an Early Signal'} (score ${patch.score}), but its newest reply asked not to be contacted or said no. It is not listed as an actionable lead until a person decides. ${patch.summary ?? ''}`.trim(),
+    }
+  }
+  return patch
+}
+
+function applyOutcomeBase(prev: CompanySnapshot, o: Outcome): CompanyPatch {
   const keep: CompanyResult = {
     currentEvaluationId: prev.currentEvaluationId,
     classification: prev.classification,

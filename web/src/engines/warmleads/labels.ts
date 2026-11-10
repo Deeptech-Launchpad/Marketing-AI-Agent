@@ -10,6 +10,7 @@ export const CLASS: Record<string, { label: string; tone: Tone }> = {
   existing_customer: { label: 'Existing customer', tone: 'ok' },
   active_opportunity: { label: 'Active opportunity', tone: 'info' },
   do_not_contact: { label: 'Do not contact', tone: 'danger' },
+  human_review: { label: 'Human review required — a reply refused', tone: 'warn' },
 }
 
 export const DEEP: Record<string, string> = {
@@ -34,6 +35,7 @@ export const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: 'existing_customer', label: 'Existing customer' },
   { value: 'active_opportunity', label: 'Active opportunity' },
   { value: 'do_not_contact', label: 'Do not contact' },
+  { value: 'human_review', label: 'Human review required' },
 ]
 
 /** The one status a company row shows. Incomplete research and "not enough data" are never merged, and neither is ever called Cold. */
@@ -57,6 +59,7 @@ export const STOPPED: Record<string, string> = {
   company_limit: 'the daily company limit was reached',
   gemini_ceiling: 'the Gemini call ceiling was reached',
   nothing_to_do: 'nothing was left to evaluate',
+  repeated_failures: 'too many companies failed in a row, so it paused for 30 minutes before trying again',
   error: 'an error stopped it',
 }
 

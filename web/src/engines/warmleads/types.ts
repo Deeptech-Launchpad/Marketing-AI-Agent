@@ -14,6 +14,7 @@ export interface Counts {
   existingCustomer: number
   activeOpportunity: number
   doNotContact: number
+  humanReview: number
   failed: number
   needsReevaluation: number
   researchIncomplete: number
@@ -49,6 +50,7 @@ export interface PilotCounts {
   earlySignal: number
   cold: number
   insufficientData: number
+  humanReview: number
   other: number
 }
 
@@ -98,6 +100,32 @@ export interface Reason {
   source: string
 }
 
+/** One opt-out found in a reply: masked address, day, status and the NXT Sales activity to open. Never a raw address or message text. */
+export interface OptOutReviewItem {
+  kind: 'proposal' | 'not_recorded' | 'reconsent' | 'omitted'
+  crmCompanyId: string
+  companyName: string | null
+  evaluationId: string
+  evaluatedAt: string | null
+  status: string
+  masked: string | null
+  receivedOn: string | null
+  activityId: string | null
+  /** The company's CURRENT classification: a customer / active opportunity / do-not-contact is a warning for the approver. */
+  companyClassification?: string | null
+  /** true only when an administrator may approve this proposal right now (the server decides; the fingerprint itself never reaches the browser). */
+  approvable?: boolean
+  /** For a pending proposal that cannot be approved: why (switch_off | key_not_configured | key_changed | no_fingerprint). */
+  approvalBlockedReason?: string | null
+  /** The standard phrase the email consists of, by our own label. */
+  phrase?: string | null
+  /** The exact reason this proposal was generated, in words. */
+  reason?: string | null
+  summary: string
+  /** The person who approved the proposal, when one did. */
+  approvedBy?: string | null
+}
+
 export interface Evaluation {
   id: string
   crmCompanyId: string
@@ -143,4 +171,4 @@ export interface CompanyRow {
   syncError: string | null
 }
 
-export type Filter = 'all' | 'pending' | 'in_progress' | 'warm' | 'early_signal' | 'cold' | 'insufficient_data' | 'existing_customer' | 'active_opportunity' | 'do_not_contact' | 'failed' | 'needs_reevaluation' | 'research_incomplete'
+export type Filter = 'all' | 'pending' | 'in_progress' | 'warm' | 'early_signal' | 'cold' | 'insufficient_data' | 'existing_customer' | 'active_opportunity' | 'do_not_contact' | 'human_review' | 'failed' | 'needs_reevaluation' | 'research_incomplete'
