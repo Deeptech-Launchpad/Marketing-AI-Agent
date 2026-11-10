@@ -205,6 +205,8 @@ describeIfDb('what an outcome does to a company', () => {
       enrichmentId: null,
       intentRunId: null,
       costUsd: 0,
+      refusal: false,
+      optOuts: [],
       failure: classification ? null : { message: 'The website could not be read.', reasons: [] },
       result: classification ? { classification, score: classification === 'warm' ? 60 : 5, confidence: 'high', summary: `is ${classification}`, reasons: [] } : null,
       ...over,

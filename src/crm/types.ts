@@ -124,9 +124,30 @@ export interface CrmActivity {
    * stored, logged, sent to a model or copied into a result.
    */
   body?: string | null
+  /**
+   * Who sent an INBOUND email: the bare, lower-case addresses found in NXT Sales' raw `fromEmail` header ("Name <A@B.com>"), at most
+   * ACTIVITY_ADDRESSES_MAX. Present only with `withBody`, only for inbound mail inside the window, like `body`. Used by Warm Leads to
+   * identify the contact who sent an explicit opt-out; never logged or copied into a result (only a masked form is shown).
+   */
+  fromAddresses?: string[]
+  /** The company address this conversation was matched to (NXT Sales `matchedCompanyEmail`), bare and lower-case. Same conditions. */
+  matchedAddress?: string | null
+  /** Our own addresses on the message (connected mailbox, the CRM user, the inbound `toEmail`): never the contact. Same conditions. */
+  ownAddresses?: string[]
 }
 
-export const ACTIVITY_BODY_MAX = 3000
+/** At most this many addresses are read from one header. */
+export const ACTIVITY_ADDRESSES_MAX = 10
+
+/** At most this much of the cleaned text is kept. */
+export const ACTIVITY_BODY_MAX = 6000
+/**
+ * At most this much of the RAW text is looked at, and it is cut BEFORE any pattern is run on it: a sender controls the size of an
+ * email, so no cost may grow with it. Real replies keep their own words at the top; the rest is quoted history, a signature or markup.
+ */
+export const ACTIVITY_BODY_RAW_MAX = 60_000
+/** The text is read only for messages inside this many days (the same window Warm Leads reads replies in; a test pins them equal). */
+export const ACTIVITY_BODY_WINDOW_DAYS = 90
 
 export interface CrmDropdownOption {
   value: string

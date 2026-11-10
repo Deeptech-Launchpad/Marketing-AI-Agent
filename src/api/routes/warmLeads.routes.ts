@@ -2,6 +2,9 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { NotFoundError } from '../../platform/errors.js'
 import { companyDetail, listCompanies, retryFailed } from '../../warmleads/companies.js'
+import { env } from '../../config/env.js'
+import { approveOptOut } from '../../warmleads/optOutApproval.js'
+import { optOutReview } from '../../warmleads/optOutReview.js'
 import { approvePilot, pilotResults, requestPilot } from '../../warmleads/pilot.js'
 import { runDetail } from '../../warmleads/service.js'
 import { approveScale, approveSync, disableSync, ensureSettings, requestListRefresh, setPaused, updateLimits, updateWindow } from '../../warmleads/settings.js'
@@ -12,13 +15,14 @@ import { validateBody } from '../middleware/validate.js'
 
 // WARM LEADS (permanent module). Reading is open to every member; every control is an admin action.
 //
-// This API only READS the Marketing database and WRITES settings / requests. It never calls NXT Sales,
+// This API only READS the Marketing database and WRITES settings / requests. It never calls NXT Sales (one exception: approving an opt-out
+// proposal re-reads that single email, READ ONLY, to work the address out on the server),
 // never starts an evaluation, and never touches Gemini: the dedicated worker (src/warmleadsWorker.ts) does
 // the work when the settings allow it. So nothing here can send an email or spend an API call.
 
 export const warmLeadsRoutes = Router()
 
-const FILTERS = ['all', 'pending', 'in_progress', 'warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'failed', 'needs_reevaluation', 'research_incomplete'] as const
+const FILTERS = ['all', 'pending', 'in_progress', 'warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review', 'failed', 'needs_reevaluation', 'research_incomplete'] as const
 const Confirm = z.object({ confirm: z.literal(true) })
 
 warmLeadsRoutes.get(
@@ -60,6 +64,31 @@ warmLeadsRoutes.get(
   requirePermission('view'),
   asyncHandler(async (req, res) => {
     res.json({ evaluations: await pilotResults(req.principal!.tenantId) })
+  }),
+)
+
+// The opt-outs found in replies (masked proposals, with the NXT activity id and date), across ALL evaluations of THIS tenant - read only.
+warmLeadsRoutes.get(
+  '/pilot/opt-outs',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const r = await optOutReview(req.principal!.tenantId)
+    res.json({ items: r.items, pendingCount: r.pendingCount, complete: r.complete, recordingEnabled: env.WARM_LEADS_RECORD_OPT_OUTS })
+  }),
+)
+
+// A person approves ONE opt-out proposal (admin only). The switch WARM_LEADS_RECORD_OPT_OUTS alone never writes: the From header is not
+// authenticated. The address is re-derived on the server from the source email (read only) - the request carries only ids, never an address.
+// `independentlyVerified` is the administrator's explicit confirmation that the request was verified through a trusted contact channel - not by
+// reading the (unauthenticated) email itself. Without it the request is refused.
+const ApproveOptOut = z.object({ crmCompanyId: z.string().min(1).max(200), activityId: z.string().min(1).max(200), confirm: z.literal(true), independentlyVerified: z.literal(true) }).strict()
+warmLeadsRoutes.post(
+  '/opt-outs/approve',
+  requirePermission('admin'),
+  validateBody(ApproveOptOut),
+  asyncHandler(async (req, res) => {
+    const b = req.body as z.infer<typeof ApproveOptOut>
+    res.json(await approveOptOut({ tenantId: req.principal!.tenantId, approverCrmUserId: req.principal!.crmUserId, crmCompanyId: b.crmCompanyId, activityId: b.activityId, independentlyVerified: b.independentlyVerified }))
   }),
 )
 

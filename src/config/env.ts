@@ -507,6 +507,12 @@ const schema = z.object({
   // Writing to a NON-local NXT Sales needs this as well — same rule as
   // CRM_WRITE_ALLOW_LIVE: a live CRM is never written to by accident.
   WARM_LEADS_ALLOW_LIVE: bool.default('false'),
+  // An explicit marketing opt-out found in an email reply (unsubscribe / stop / remove me / do not email) is added to the shared
+  // suppression list (SuppressionEntry, matchType 'email', source 'unsubscribe') only when this is on AND an administrator approves that
+  // individual proposal - the sender of an email is not authenticated, so this switch alone never writes anything. Off (the default, and
+  // required for development and the first 100-company pilot): the evaluation lists the masked address it proposes and writes nothing.
+  // Turning it on needs the owner's separate approval (src/warmleads/optOut.ts is the only place that writes).
+  WARM_LEADS_RECORD_OPT_OUTS: bool.default('false'),
   // The web research (Intent Signals, Gemini + search — the only paid step)
   // runs for at most this many companies per run. The fast screen has no cap.
   WARM_LEADS_DEEP_MAX_PER_RUN: z.coerce.number().int().min(0).max(50).default(10),

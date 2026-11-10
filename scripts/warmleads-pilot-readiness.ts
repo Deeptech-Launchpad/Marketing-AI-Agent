@@ -6,6 +6,8 @@
 // INFO for everything that must be true before an administrator requests the 100-company pilot. It makes no Gemini call, sends no
 // email, writes nothing to the database and nothing to NXT Sales, and requests and starts nothing.
 //
+// With several tenants, --tenant is required; a tenant that has no Warm Leads settings is reported as FAIL, never as ready.
+//
 // Exit code: 0 ready · 1 something stands in the way · 2 error
 
 import { readFileSync } from 'node:fs'
@@ -15,31 +17,54 @@ import { withCrmReadOnly } from '../src/crm/nxtSales/httpClient.js'
 import { warmLeadsKeyProblem } from '../src/llm/gemini/apiKey.js'
 import { prisma } from '../src/platform/db.js'
 import { redactDatabaseUrl, parseMemAvailableMb } from '../src/warmleads/isolatedTestSafety.js'
-import { evaluateReadiness, type ReadinessSnapshot } from '../src/warmleads/readiness.js'
+import { evaluateReadiness, resolveTenant, type ReadinessSnapshot, type TenantState } from '../src/warmleads/readiness.js'
 import { windowOpen } from '../src/warmleads/window.js'
 
+/** The address of the CRM without anything that could be a credential: scheme, host and port only. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return '(unreadable address)'
+  }
+}
+
 async function main(): Promise<number> {
-  const tenantArg = process.argv.includes('--tenant') ? process.argv[process.argv.indexOf('--tenant') + 1] : undefined
+  // --tenant <id>. Any other spelling (--tenant=<id>, a missing value) is refused: a tenant that was named must be the one checked.
+  const args = process.argv.slice(2)
+  const at = args.indexOf('--tenant')
+  if (args.some((a) => a.startsWith('--tenant=')) || (at >= 0 && (!args[at + 1] || args[at + 1]!.startsWith('--')))) {
+    console.error('Usage: npx tsx scripts/warmleads-pilot-readiness.ts [--tenant <id>]   (write the id after a space: --tenant=<id> is not accepted)')
+    return 2
+  }
+  const tenantArg = at >= 0 ? args[at + 1] : undefined
   const dbUrl = process.env.MARKETING_DATABASE_URL ?? ''
   console.log(`Database: ${redactDatabaseUrl(dbUrl)}`)
-  console.log(`NXT Sales: ${env.NXT_SALES_BASE_URL}  (read-only; ${env.CRM_READ_ONLY ? 'CRM_READ_ONLY=true' : 'writes are not used by this check'})\n`)
+  console.log(`NXT Sales: ${originOf(env.NXT_SALES_BASE_URL)}  (read-only; ${env.CRM_READ_ONLY ? 'CRM_READ_ONLY=true' : 'writes are not used by this check'})\n`)
 
+  // 1. Can the database be queried at all? ("the tables are missing" and "the database is down" are different problems.)
+  let databaseOk = false
+  let databaseError: string | undefined
   let migrationApplied = false
   try {
     const r = await prisma.$queryRaw<Array<{ t: string | null }>>`SELECT to_regclass('"WarmLeadUsage"')::text AS t`
+    databaseOk = true
     migrationApplied = Boolean(r[0]?.t)
-  } catch {
-    migrationApplied = false
+  } catch (err) {
+    databaseError = (err as Error).message.split('\n')[0]!.slice(0, 160)
   }
 
-  let tenantId = tenantArg
-  if (!tenantId && migrationApplied) {
-    const tenants = await prisma.warmLeadSettings.findMany({ select: { tenantId: true } })
-    tenantId = tenants.length === 1 ? tenants[0]!.tenantId : undefined
-    if (tenants.length > 1) console.log(`More than one tenant has Warm Leads settings (${tenants.map((t) => t.tenantId).join(', ')}); pass --tenant <id>.\n`)
+  // 2. WHICH tenant. Nothing is read for a tenant that was not identified.
+  let tenantId: string | undefined
+  let tenant: { state: TenantState; detail: string } = { state: 'none', detail: 'the database was not read' }
+  if (databaseOk && migrationApplied) {
+    const tenants = (await prisma.warmLeadSettings.findMany({ select: { tenantId: true } })).map((t) => t.tenantId)
+    const resolved = resolveTenant(tenantArg, tenants)
+    tenantId = resolved.tenantId
+    tenant = { state: resolved.state, detail: resolved.detail }
   }
-  const settings = migrationApplied && tenantId ? await prisma.warmLeadSettings.findUnique({ where: { tenantId } }) : null
-  const pilotRun = migrationApplied && tenantId ? await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot' }, orderBy: { createdAt: 'desc' }, select: { status: true } }) : null
+  const settings = tenantId ? await prisma.warmLeadSettings.findUnique({ where: { tenantId } }) : null
+  const pilotRun = tenantId ? await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot' }, orderBy: { createdAt: 'desc' }, select: { status: true } }) : null
 
   let crm: ReadinessSnapshot['crm']
   try {
@@ -60,11 +85,17 @@ async function main(): Promise<number> {
 
   const snapshot: ReadinessSnapshot = {
     geminiKeyProblem: warmLeadsKeyProblem(),
+    llmDriver: env.LLM_DRIVER,
+    crmDriver: env.CRM_DRIVER,
+    recordOptOuts: env.WARM_LEADS_RECORD_OPT_OUTS,
     workerEnabled: env.WARM_LEADS_WORKER_ENABLED,
     syncSwitchOn: env.WARM_LEADS_SYNC_ENABLED,
     allowLive: env.WARM_LEADS_ALLOW_LIVE,
     crmReadOnlyGlobal: env.CRM_READ_ONLY,
+    databaseOk,
+    databaseError,
     migrationApplied,
+    tenant,
     settings: settings
       ? {
           paused: settings.paused,

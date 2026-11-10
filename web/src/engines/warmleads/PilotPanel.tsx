@@ -5,6 +5,7 @@ import { useAsync } from '../../lib/hooks'
 import { Button, Metric, MetricRow, Panel } from '../../components/ui/primitives'
 import { ErrorState, LoadingState } from '../../components/ui/states'
 import { EvaluationCard } from './EvaluationCard'
+import { OptOutReview } from './OptOutReview'
 import { fmt, num } from './labels'
 import type { Evaluation, Overview } from './types'
 
@@ -79,6 +80,7 @@ export function PilotPanel({ o, admin, act, busy, refreshKey }: { o: Overview; a
             <Metric label="Companies" value={`${p.counts.done + p.counts.failed}/${p.counts.total}`} hint="processed" />
             <Metric label="Warm" value={num(p.counts.warm)} accent />
             <Metric label="Early signal" value={num(p.counts.earlySignal)} />
+            <Metric label="Human review" value={num(p.counts.humanReview)} />
             <Metric label="Cold" value={num(p.counts.cold)} />
             <Metric label="Not enough data" value={num(p.counts.insufficientData)} />
             <Metric label="Research incomplete" value={num(p.counts.incomplete)} hint="not Cold" />
@@ -125,6 +127,7 @@ export function PilotPanel({ o, admin, act, busy, refreshKey }: { o: Overview; a
 
       {(o.stage === 'pilot_running' || o.stage === 'pilot_review') && (
         <div style={{ marginTop: 'var(--s4)', display: 'grid', gap: 'var(--s3)' }}>
+          <OptOutReview enabled refreshKey={refreshKey} admin={admin} />
           {!results.data ? (
             results.error ? <ErrorState error={results.error} what="The pilot results could not be read" onRetry={results.refresh} /> : <LoadingState what="Reading the pilot results" />
           ) : (

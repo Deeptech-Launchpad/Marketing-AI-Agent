@@ -233,7 +233,7 @@ describe('warm-lead classification', () => {
       expect(r.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(1)
     }
     // the better-evidenced copy is the one kept, whichever order they arrive in
-    const worse = sig({ signalType: 'public_business_activity', summary: 'same', sourceUrl: url, observedAt: '2026-10-23', confidence: 'medium' })
+    const worse = sig({ signalType: 'public_business_activity', summary: 'ProSafety officially became a CleanSpace service centre for devices', sourceUrl: url, observedAt: '2026-10-23', confidence: 'medium' })
     const kept = classify(input({ deep: { status: 'done', signals: [worse, a] } }))
     expect(kept.reasons.find((x) => x.points > 0 && x.source === 'web_research')!.summary).toBe(a.summary)
   })

@@ -8,11 +8,15 @@ describe('Warm Leads labels', () => {
     for (const reason of ['company_limit', 'gemini_ceiling', 'nothing_to_do', 'repeated_failures', 'error']) expect(STOPPED[reason], reason).toMatch(/\w/)
   })
 
-  it('all seven classifications have their own label, and Failed / Research incomplete / Pending are separate filters', () => {
-    expect(Object.keys(CLASS).sort()).toEqual(['active_opportunity', 'cold', 'do_not_contact', 'early_signal', 'existing_customer', 'insufficient_data', 'warm'])
-    expect(new Set(Object.values(CLASS).map((c) => c.label)).size).toBe(7)
+  it('all eight classifications have their own label, and Failed / Research incomplete / Pending are separate filters', () => {
+    expect(Object.keys(CLASS).sort()).toEqual(['active_opportunity', 'cold', 'do_not_contact', 'early_signal', 'existing_customer', 'human_review', 'insufficient_data', 'warm'])
+    expect(new Set(Object.values(CLASS).map((c) => c.label)).size).toBe(8)
     const filters = FILTERS.map((f) => f.value)
-    for (const f of ['warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'failed', 'research_incomplete', 'needs_reevaluation', 'pending']) expect(filters, f).toContain(f)
+    for (const f of ['warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review', 'failed', 'research_incomplete', 'needs_reevaluation', 'pending']) expect(filters, f).toContain(f)
+  })
+
+  it('a company held for human review shows its own status, not Warm', () => {
+    expect(statusOf({ state: 'evaluated', classification: 'human_review', researchIncomplete: false }).label).toMatch(/^Human review required/)
   })
 
   it('a company with a kept result and a failed re-check still shows its result, marked for a re-check - never Failed or Cold', () => {

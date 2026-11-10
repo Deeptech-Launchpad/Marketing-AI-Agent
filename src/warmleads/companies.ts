@@ -213,6 +213,11 @@ export async function recordOutcome(claim: Claim, c: ComputedEvaluation, extra: 
     evaluatedAt: now,
   }
 
+  // The evaluation NEVER writes to the suppression list (owner decision of 2026-11-10: the sender of an email is not authenticated, so no
+  // email-derived proposal may be recorded automatically). An opt-out found in a reply is only stored here as a PROPOSAL in the reasons of the
+  // evaluation ("dry run" with the switch off, "awaiting approval" with it on); an administrator approves each one individually (optOutApproval.ts).
+  const companyRow = await prisma.warmLeadCompany.findUniqueOrThrow({ where: { id: claim.companyRowId } })
+
   const failed = Boolean(c.failure) || !c.result
   if (failed) {
     await prisma.warmLeadEvaluation.update({
@@ -241,7 +246,7 @@ export async function recordOutcome(claim: Claim, c: ComputedEvaluation, extra: 
     })
   }
 
-  const company = await prisma.warmLeadCompany.findUniqueOrThrow({ where: { id: claim.companyRowId } })
+  const company = companyRow
   const patch = applyOutcome(
     {
       attempts: company.attempts,
@@ -253,7 +258,7 @@ export async function recordOutcome(claim: Claim, c: ComputedEvaluation, extra: 
       evaluatedAt: company.evaluatedAt,
     },
     failed
-      ? { kind: 'failed', evaluationId: claim.evaluationId, error: c.failure?.message ?? 'The evaluation produced no result.', now }
+      ? { kind: 'failed', evaluationId: claim.evaluationId, error: c.failure?.message ?? 'The evaluation produced no result.', now, refusal: c.refusal }
       : {
           kind: 'classified',
           evaluationId: claim.evaluationId,
@@ -263,6 +268,7 @@ export async function recordOutcome(claim: Claim, c: ComputedEvaluation, extra: 
           summary: c.result!.summary,
           researchIncomplete: incomplete,
           deferredByCeiling: c.deep === 'skipped_ceiling',
+          refusal: c.refusal,
           now,
         },
   )
@@ -313,6 +319,8 @@ export interface CompanyCounts {
   existingCustomer: number
   activeOpportunity: number
   doNotContact: number
+  /** Would be Warm / Early Signal, but the newest reply refused: a person decides. Not listed in NXT Sales. */
+  humanReview: number
   /** Failed with no valid result; waiting for a retry. */
   failed: number
   /** Has a result but the latest attempt failed / was incomplete: re-checked later. */
@@ -324,7 +332,7 @@ export interface CompanyCounts {
 
 export async function companyCounts(tenantId: string): Promise<CompanyCounts> {
   const rows = await prisma.warmLeadCompany.groupBy({ by: ['inCrm', 'state', 'classification', 'researchIncomplete'], where: { tenantId }, _count: { _all: true } })
-  const c: CompanyCounts = { total: 0, pending: 0, inProgress: 0, evaluated: 0, warm: 0, earlySignal: 0, cold: 0, insufficientData: 0, existingCustomer: 0, activeOpportunity: 0, doNotContact: 0, failed: 0, needsReevaluation: 0, researchIncomplete: 0, notInCrm: 0 }
+  const c: CompanyCounts = { total: 0, pending: 0, inProgress: 0, evaluated: 0, warm: 0, earlySignal: 0, cold: 0, insufficientData: 0, existingCustomer: 0, activeOpportunity: 0, doNotContact: 0, humanReview: 0, failed: 0, needsReevaluation: 0, researchIncomplete: 0, notInCrm: 0 }
   const KEY: Record<string, keyof CompanyCounts> = {
     warm: 'warm',
     early_signal: 'earlySignal',
@@ -333,6 +341,7 @@ export async function companyCounts(tenantId: string): Promise<CompanyCounts> {
     existing_customer: 'existingCustomer',
     active_opportunity: 'activeOpportunity',
     do_not_contact: 'doNotContact',
+    human_review: 'humanReview',
   }
   for (const r of rows) {
     const n = r._count._all
@@ -354,7 +363,7 @@ export async function companyCounts(tenantId: string): Promise<CompanyCounts> {
   return c
 }
 
-export type CompanyFilter = 'all' | 'pending' | 'in_progress' | 'warm' | 'early_signal' | 'cold' | 'insufficient_data' | 'existing_customer' | 'active_opportunity' | 'do_not_contact' | 'failed' | 'needs_reevaluation' | 'research_incomplete'
+export type CompanyFilter = 'all' | 'pending' | 'in_progress' | 'warm' | 'early_signal' | 'cold' | 'insufficient_data' | 'existing_customer' | 'active_opportunity' | 'do_not_contact' | 'human_review' | 'failed' | 'needs_reevaluation' | 'research_incomplete'
 
 function whereFor(tenantId: string, filter: CompanyFilter, search?: string): Prisma.WarmLeadCompanyWhereInput {
   const where: Prisma.WarmLeadCompanyWhereInput = { tenantId, inCrm: true }

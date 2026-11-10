@@ -149,7 +149,7 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
     recentlyContacted: new Set<string>(),
   })
 
-  const eligible: Array<{ company: CrmCompany; score: number }> = []
+  const eligible: Array<{ company: CrmCompany; score: number; excluded: number }> = []
   let totalSuppressed = 0
 
   for (const company of matched.items) {
@@ -158,7 +158,7 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
       totalSuppressed++
       continue
     }
-    eligible.push({ company, score: score(company, query) })
+    eligible.push({ company, score: score(company, query), excluded: decision.excludedEmails?.length ?? 0 })
   }
 
   eligible.sort((a, b) => b.score - a.score || a.company.name.localeCompare(b.company.name))
@@ -170,7 +170,7 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
   // A company that drops out is replaced by the next-ranked one, so the list
   // is never short because of CRM order, and never includes an unchecked row.
   const cutoff = Date.now() - RECENT_CONTACT_WINDOW_DAYS * 86_400_000
-  const included: Array<{ company: CrmCompany; score: number }> = []
+  const included: Array<{ company: CrmCompany; score: number; excluded: number }> = []
   let cursor = 0
   while (included.length < cap && cursor < eligible.length) {
     const batch = eligible.slice(cursor, cursor + Math.min(cap - included.length, CONTACT_CHECK_CONCURRENCY))
@@ -205,7 +205,7 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
     })
     if (included.length) {
       await tx.audienceMember.createMany({
-        data: included.map(({ company, score: s }) => ({
+        data: included.map(({ company, score: s, excluded }) => ({
           id: newId(),
           tenantId,
           snapshotId,
@@ -218,7 +218,7 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
           country: company.country,
           cms: company.cms,
           ownerCrmUserId: company.ownerId,
-          includeReason: explain(company, query, !includeOpenDeals),
+          includeReason: explain(company, query, !includeOpenDeals) + (excluded ? ` ${excluded} saved address(es) on the opt-out list are left out; the other contacts stay.` : ''),
           score: s,
         })),
       })
@@ -232,12 +232,12 @@ export async function resolveAudience(input: ResolveInput): Promise<ResolveResul
     totalIncluded: included.length,
     truncated,
     capApplied: cap,
-    sample: included.slice(0, 10).map(({ company }) => ({
+    sample: included.slice(0, 10).map(({ company, excluded }) => ({
       crmCompanyId: company.id,
       companyName: company.name,
       industry: company.industry,
       country: company.country,
-      includeReason: explain(company, query, !includeOpenDeals),
+      includeReason: explain(company, query, !includeOpenDeals) + (excluded ? ` ${excluded} saved address(es) on the opt-out list are left out; the other contacts stay.` : ''),
     })),
   }
 }

@@ -100,7 +100,7 @@ export async function latestPilotEvaluations<T extends { crmCompanyId: string; c
 
 export interface PilotView {
   run: { id: string; status: string; total: number; startedAt: Date | null; finishedAt: Date | null; failureReason: string | null; sample: unknown } | null
-  counts: { total: number; queued: number; running: number; done: number; failed: number; incomplete: number; warm: number; earlySignal: number; cold: number; insufficientData: number; other: number }
+  counts: { total: number; queued: number; running: number; done: number; failed: number; incomplete: number; warm: number; earlySignal: number; cold: number; insufficientData: number; humanReview: number; other: number }
   approvedAt: Date | null
   approvedBy: string | null
   canApprove: boolean
@@ -109,7 +109,7 @@ export interface PilotView {
 export async function pilotView(tenantId: string): Promise<PilotView> {
   const s = await ensureSettings(tenantId)
   const run = await prisma.warmLeadRun.findFirst({ where: { tenantId, kind: 'pilot' }, orderBy: { createdAt: 'desc' } })
-  const counts = { total: 0, queued: 0, running: 0, done: 0, failed: 0, incomplete: 0, warm: 0, earlySignal: 0, cold: 0, insufficientData: 0, other: 0 }
+  const counts = { total: 0, queued: 0, running: 0, done: 0, failed: 0, incomplete: 0, warm: 0, earlySignal: 0, cold: 0, insufficientData: 0, humanReview: 0, other: 0 }
   if (run) {
     const latest = await latestPilotEvaluations(
       (ids, since) => prisma.warmLeadEvaluation.findMany({ where: { tenantId, crmCompanyId: { in: ids }, createdAt: { gte: since } }, select: { crmCompanyId: true, createdAt: true, status: true, classification: true, researchIncomplete: true } }),
@@ -128,6 +128,7 @@ export async function pilotView(tenantId: string): Promise<PilotView> {
         else if (r.classification === 'early_signal') counts.earlySignal += n
         else if (r.classification === 'cold') counts.cold += n
         else if (r.classification === 'insufficient_data') counts.insufficientData += n
+        else if (r.classification === 'human_review') counts.humanReview += n
         else counts.other += n
       }
     }
