@@ -83,4 +83,22 @@ describe('every API output of stored reasons is redacted', () => {
       expect(raw.length, `${f} sends a raw e.reasons`).toBe(0)
     }
   })
+  it('SOURCE SCAN: no other code path reads stored evaluations (and so raw reasons) - the unused recentEvaluations() helper stays removed', () => {
+    // Every file under src that reads WarmLeadEvaluation rows is one of these, each checked above (or, for optOutReview, reduced to booleans and
+    // reason codes by toPublicItem). A new reader must be added here deliberately, after it redacts - that is the point of this list.
+    const READERS = new Set(['warmleads/sync.ts', 'warmleads/optOutReview.ts', 'warmleads/service.ts', 'warmleads/companies.ts', 'warmleads/pilot.ts'])
+    const found: string[] = []
+    const walk = (dir: string) => {
+      for (const n of fs.readdirSync(dir)) {
+        const p = path.join(dir, n)
+        if (fs.statSync(p).isDirectory()) walk(p)
+        else if (p.endsWith('.ts') && /warmLeadEvaluation\.(?:find|aggregate|groupBy)|FROM "WarmLeadEvaluation"/.test(fs.readFileSync(p, 'utf8'))) found.push(path.relative(path.resolve('src'), p).split(path.sep).join('/'))
+      }
+    }
+    walk(path.resolve('src'))
+    expect(found.filter((f) => !READERS.has(f))).toEqual([])
+    const view = fs.readFileSync(path.resolve('src/warmleads/view.ts'), 'utf8')
+    expect(view).not.toMatch(/recentEvaluations|warmLeadEvaluation/)
+    for (const f of found) expect(fs.readFileSync(path.resolve('src', f), 'utf8'), `${f} must not export a raw evaluation reader`).not.toMatch(/export (?:async )?function recentEvaluations/)
+  })
 })

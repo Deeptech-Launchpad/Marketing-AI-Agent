@@ -80,6 +80,67 @@ describe('a truncated message never becomes buying intent', () => {
     expect(assessReply(a, true).verdict).toBe('unverified')
   })
 
+  describe('the 6,000-character limit on the cleaned text (well below the 60,000 raw cut)', () => {
+    const signal = (a: ReturnType<typeof mk>) => engagementSignal([a], NOW, undefined, 30, { requireText: true })
+    const LEAD = 'Thanks, please send a quote for 500 crates. '
+    const FILLER = 'We make steel drums for the food trade. '
+    const LATE_REFUSAL = 'Please remove us from your mailing list.'
+
+    it('BOUNDARY: exactly 6,000 characters is read in full (no marker); 6,001 is not, and says so', () => {
+      const exact = mk(LEAD + 'a'.repeat(ACTIVITY_BODY_MAX - LEAD.length))
+      expect(exact.body).toHaveLength(ACTIVITY_BODY_MAX)
+      expect(exact.body).not.toContain(ACTIVITY_UNREAD_MARKER)
+      expect(assessReply(exact, true).verdict).toBe('interested') // read in full: as before
+      const over = mk(LEAD + 'a'.repeat(ACTIVITY_BODY_MAX - LEAD.length + 1))
+      expect(over.body).toHaveLength(ACTIVITY_BODY_MAX) // the limit itself did not move
+      expect(over.body!.endsWith(ACTIVITY_UNREAD_MARKER)).toBe(true)
+      expect(assessReply(over, true)).toMatchObject({ verdict: 'unverified', kind: null })
+      expect(positive([over])).toBe(false)
+    })
+
+    it('an 8,000-character reply that is friendly at first and refuses at the end is NOT interest: unverified, signal reply_unverified', () => {
+      const a = mk('Yes, interested, please send the quote for 500 crates. ' + FILLER.repeat(200) + LATE_REFUSAL)
+      expect(a.body).toContain(ACTIVITY_UNREAD_MARKER)
+      expect(a.body).not.toContain('remove us') // the refusal was not read...
+      expect(assessReply(a, true)).toMatchObject({ verdict: 'unverified', kind: null, strictOptOut: false })
+      expect(positive([a])).toBe(false) // ...and that is why nothing positive is inferred
+      expect(signal(a)).toMatchObject({ signalType: 'reply_unverified', polarity: 'neutral' })
+      expect(summariseInbound([a], NOW, undefined, true).replies).toEqual([]) // not listed as a reply that shows interest
+    })
+
+    it('a clear refusal inside the part that WAS read is kept (declined), even though the rest was cut - never a standalone opt-out', () => {
+      const a = mk(LATE_REFUSAL + ' ' + FILLER.repeat(200))
+      expect(a.body).toContain(ACTIVITY_UNREAD_MARKER)
+      expect(assessReply(a, true)).toMatchObject({ verdict: 'declined', kind: 'opt_out', strictOptOut: false, strictPhrase: null })
+      expect(signal(a)).toMatchObject({ signalType: 'reply_opt_out' })
+    })
+
+    it('&zwnj;&nbsp; padding carries no text: 24k of it does not hide the refusal that follows it (it is read, and it is a refusal)', () => {
+      const a = mk('<p>Yes, please send a quote for 500 crates.</p>' + '&zwnj;&nbsp;'.repeat(2_000) + '<p>' + LATE_REFUSAL + '</p>')
+      expect(a.body).not.toContain(ACTIVITY_UNREAD_MARKER)
+      expect(a.body).toContain('remove us')
+      expect(assessReply(a, true)).toMatchObject({ verdict: 'declined', kind: 'opt_out' })
+      expect(positive([a])).toBe(false)
+      // the same with the hidden word-splitters a sender may use inside the phrase
+      expect(assessReply(mk('un&shy;sub&zwj;scribe'), true)).toMatchObject({ verdict: 'declined', kind: 'opt_out' })
+    })
+
+    it('padding that IS kept as characters (numeric invisible characters) and pushes the refusal past 6,000: unread, so unverified - never interest', () => {
+      const a = mk('Yes, please send a quote for 500 crates. ' + '&#8204;'.repeat(7_000) + ' ' + LATE_REFUSAL)
+      expect(a.body).toContain(ACTIVITY_UNREAD_MARKER)
+      expect(assessReply(a, true).verdict).toBe('unverified')
+      expect(positive([a])).toBe(false)
+      expect(signal(a)).toMatchObject({ signalType: 'reply_unverified' })
+    })
+
+    it('&zwnj;&nbsp; padding beyond the 60,000 raw cut is unread as before: unverified', () => {
+      const a = mk('Yes, please send a quote for 500 crates.' + '&zwnj;&nbsp;'.repeat(6_000) + LATE_REFUSAL)
+      expect(a.body).toContain(ACTIVITY_UNREAD_MARKER)
+      expect(assessReply(a, true).verdict).toBe('unverified')
+      expect(positive([a])).toBe(false)
+    })
+  })
+
   it('a message that was read in full carries no marker and behaves as before', () => {
     const a = mk('Thanks, please send a quote for 500 crates by Friday.')
     expect(a.body).not.toContain(ACTIVITY_UNREAD_MARKER)

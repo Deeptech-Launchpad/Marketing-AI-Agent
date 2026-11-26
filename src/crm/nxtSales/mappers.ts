@@ -188,6 +188,8 @@ function dropBlocks(text: string, open: string, close: string): string {
 
 const NAMED_ENTITIES: Record<string, string> = {
   nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", rsquo: "'", lsquo: "'", ldquo: '"', rdquo: '"', ndash: '-', mdash: '-', hellip: '...', laquo: '"', raquo: '"', copy: '(c)',
+  // invisible characters used as padding or to split a word: they carry no text (the same ones fold() removes when matching)
+  zwnj: '', zwj: '', shy: '',
 }
 /** Common HTML entities, decoded once (never twice: "&amp;lt;" stays "&lt;"). */
 function decodeEntities(text: string): string {
@@ -218,7 +220,7 @@ const MARKUP_LEFTOVER = /<[!?][^<>]{0,500}>/g // <!DOCTYPE ...>, <?xml ...?>
  */
 export function plainBody(v: unknown): string {
   const whole = String(v ?? '')
-  const unread = whole.length > ACTIVITY_BODY_RAW_MAX
+  const rawCut = whole.length > ACTIVITY_BODY_RAW_MAX
   let t = whole.slice(0, ACTIVITY_BODY_RAW_MAX)
   // an embedded image (data: URI) is not text: it must not fill the part of the message that is kept (linear: a bounded character class)
   if (t.includes('data:')) t = t.replace(DATA_URI, ' ')
@@ -235,9 +237,11 @@ export function plainBody(v: unknown): string {
     .replace(/ ?\n ?/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-  // Text beyond the raw cut was never read: say so in the text itself, so a short "UNSUBSCRIBE" followed by a wall of white space can never
-  // look like a complete standalone message (the marker is other content, so the message is not a plain opt-out).
+  // Text beyond EITHER cut (the raw cut above, or the limit on the cleaned text below) was never read: say so in the text itself, so a short
+  // "UNSUBSCRIBE" followed by a wall of white space can never look like a complete standalone message (the marker is other content, so the
+  // message is not a plain opt-out), and so a refusal that sits after the cut can never leave the message looking like interest.
   // room is reserved for the marker, so it can never be cut off by the length limit: a message that was not read in full always says so
+  const unread = rawCut || tidy.length > ACTIVITY_BODY_MAX
   return unread ? `${tidy.slice(0, ACTIVITY_BODY_MAX - ACTIVITY_UNREAD_MARKER.length - 1)}\n${ACTIVITY_UNREAD_MARKER}` : tidy.slice(0, ACTIVITY_BODY_MAX)
 }
 const DATA_URI = /data:[\w/+.-]{1,60};base64,[A-Za-z0-9+/=]{100,}/g

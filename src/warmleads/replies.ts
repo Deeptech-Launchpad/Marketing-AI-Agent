@@ -494,7 +494,19 @@ export function wasTruncated(a: CrmActivity): boolean {
 
 /** Whether the message is mail-system output: by its subject, or - for a short message that neither refuses nor asks for anything - by what it says. */
 export function isAutomatedMessage(a: CrmActivity): boolean {
-  if (isAutomatedEmail(a.subject)) return true
+  if (isAutomatedEmail(a.subject)) {
+    // The subject alone never discards a message whose text was read: customers reply under OUR subject line, and a subject such as
+    // "Re: Out of office furniture crates quote" says nothing about who wrote the body. A person's own explicit refusal in the body wins
+    // (an out-of-office that also says "please unsubscribe me" is a person's reply, as in the text rule below). Only an unambiguous
+    // refusal counts here - not "wrong person" or a declined meeting, which mail systems write themselves ("X no longer works here").
+    // A body that was cut may hold the refusal in the part that was not read, so it is judged as a person's message (never positive:
+    // see assessBase). With NO body at all (the text was not loaded) the subject is all there is.
+    if (a.body === undefined || a.body === null) return true
+    if (wasTruncated(a)) return false
+    const own = ownWords(a.body)
+    const kind = own === '' ? null : refusalKindIn(own, substanceOf(own))
+    return !(kind === 'opt_out' || kind === 'not_interested' || kind === 'product_specific')
+  }
   if (a.body === undefined || a.body === null) return false
   const own = ownWords(a.body)
   if (own.length === 0 || own.length > AUTOMATED_TEXT_MAX || !AUTOMATED_TEXT.test(own)) return false
