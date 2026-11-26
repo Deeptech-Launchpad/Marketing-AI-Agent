@@ -76,6 +76,7 @@ export interface Overview {
     window: { start: string; end: string; timezone: string }
     pilotApprovedAt: string | null
     pilotApprovedBy: string | null
+    activeZone: string | null
     scaleApprovedAt: string | null
     syncEnabled: boolean
     syncApprovedAt: string | null
@@ -172,3 +173,20 @@ export interface CompanyRow {
 }
 
 export type Filter = 'all' | 'pending' | 'in_progress' | 'warm' | 'early_signal' | 'cold' | 'insufficient_data' | 'existing_customer' | 'active_opportunity' | 'do_not_contact' | 'human_review' | 'failed' | 'needs_reevaluation' | 'research_incomplete'
+
+export interface ZoneCount {
+  zone: string
+  label: string
+  total: number
+  pending: number
+  evaluated: number
+  warm: number
+  earlySignal: number
+  humanReview: number
+  needsRetry: number
+}
+
+export interface ZonesView {
+  activeZone: string | null
+  zones: ZoneCount[]
+}

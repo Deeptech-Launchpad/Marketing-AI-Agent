@@ -44,6 +44,7 @@ export async function buildOverview(tenantId: string, now = new Date()) {
       window: win,
       pilotApprovedAt: s.pilotApprovedAt,
       pilotApprovedBy: s.pilotApprovedBy,
+      activeZone: s.activeZone,
       scaleApprovedAt: s.scaleApprovedAt,
       syncEnabled: s.syncEnabled,
       syncApprovedAt: s.syncApprovedAt,

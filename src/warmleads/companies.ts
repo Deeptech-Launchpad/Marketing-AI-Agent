@@ -7,6 +7,7 @@ import { applyOutcome, DEFINITIVE, MAX_AUTO_ATTEMPTS, type CompanyState } from '
 import { allCompanies } from './sample.js'
 import type { ComputedEvaluation } from './service.js'
 import { publicEvaluation } from './reasonsPublic.js'
+import { ZONE_LABELS, ZONES, zoneOf, type Zone } from './zones.js'
 
 // THE PERSISTENT COMPANY LIST (WarmLeadCompany) AND THE WORK QUEUE ON TOP OF IT.
 //
@@ -73,14 +74,15 @@ export async function refreshCompanyList(tenantId: string, listAll: () => Promis
     const names = chunk.map((c) => clean(c.name))
     const domains = chunk.map((c) => clean(c.domain))
     const countries = chunk.map((c) => clean(c.country, 100))
+    const zones = chunk.map((c) => zoneOf(c.country))
     const industries = chunk.map((c) => clean(c.industry, 100))
     const positions = chunk.map((_, j) => i + j)
     await prisma.$executeRaw`
-      INSERT INTO "WarmLeadCompany" ("id", "tenantId", "crmCompanyId", "name", "domain", "country", "industry", "listPosition", "createdAt", "updatedAt", "firstSeenAt", "lastSeenAt")
-      SELECT t.id, ${tenantId}, t.cid, t.name, NULLIF(t.domain, ''), NULLIF(t.country, ''), NULLIF(t.industry, ''), t.pos, NOW(), NOW(), NOW(), NOW()
-      FROM unnest(${ids}::text[], ${cids}::text[], ${names}::text[], ${domains}::text[], ${countries}::text[], ${industries}::text[], ${positions}::int[]) AS t(id, cid, name, domain, country, industry, pos)
+      INSERT INTO "WarmLeadCompany" ("id", "tenantId", "crmCompanyId", "name", "domain", "country", "zone", "industry", "listPosition", "createdAt", "updatedAt", "firstSeenAt", "lastSeenAt")
+      SELECT t.id, ${tenantId}, t.cid, t.name, NULLIF(t.domain, ''), NULLIF(t.country, ''), t.zone, NULLIF(t.industry, ''), t.pos, NOW(), NOW(), NOW(), NOW()
+      FROM unnest(${ids}::text[], ${cids}::text[], ${names}::text[], ${domains}::text[], ${countries}::text[], ${zones}::text[], ${industries}::text[], ${positions}::int[]) AS t(id, cid, name, domain, country, zone, industry, pos)
       ON CONFLICT ("tenantId", "crmCompanyId") DO UPDATE
-      SET "name" = EXCLUDED."name", "domain" = EXCLUDED."domain", "country" = EXCLUDED."country", "industry" = EXCLUDED."industry",
+      SET "name" = EXCLUDED."name", "domain" = EXCLUDED."domain", "country" = EXCLUDED."country", "zone" = EXCLUDED."zone", "industry" = EXCLUDED."industry",
           "listPosition" = EXCLUDED."listPosition", "inCrm" = true, "lastSeenAt" = NOW(), "updatedAt" = NOW()`
   }
 
@@ -132,8 +134,10 @@ type ClaimedRow = { id: string; crmCompanyId: string; attempts: number }
  * Takes the next company of `kind` for `bucket` and starts its evaluation row, or returns null when none is due.
  * Several workers may call this at once: SKIP LOCKED gives each a different company.
  */
-export async function claimNext(tenantId: string, kind: WorkKind, bucket: string, requestedBy: string, now = new Date()): Promise<Claim | null> {
+export async function claimNext(tenantId: string, kind: WorkKind, bucket: string, requestedBy: string, now = new Date(), zone: Zone | null = null): Promise<Claim | null> {
   if (kind === 'pilot') return claimPilot(tenantId, bucket, now)
+  // New companies come only from the zone an admin chose (null = the whole list). Retries of earlier failures are not limited by it.
+  const anyZone = zone === null
 
   const rows =
     kind === 'pending'
@@ -142,6 +146,7 @@ export async function claimNext(tenantId: string, kind: WorkKind, bucket: string
           WHERE "id" = (
             SELECT "id" FROM "WarmLeadCompany"
             WHERE "tenantId" = ${tenantId} AND "inCrm" = true AND "cohort" IS NULL AND "state" = 'pending'
+              AND (${anyZone} OR "zone" = ${zone ?? ''})
             ORDER BY "listPosition", "id" FOR UPDATE SKIP LOCKED LIMIT 1)
           RETURNING "id", "crmCompanyId", "attempts"`
       : await prisma.$queryRaw<ClaimedRow[]>`
@@ -329,6 +334,42 @@ export interface CompanyCounts {
   /** Web research was cut short (never counted as Cold). */
   researchIncomplete: number
   notInCrm: number
+}
+
+export interface ZoneCount {
+  zone: Zone
+  label: string
+  /** Companies of this zone that are in NXT Sales. */
+  total: number
+  /** Not checked yet. */
+  pending: number
+  /** Have a current result (any class). */
+  evaluated: number
+  warm: number
+  earlySignal: number
+  humanReview: number
+  /** Last attempt failed or must be checked again. */
+  needsRetry: number
+}
+
+/** Progress per zone, for choosing which zone to work through next. Reads only this platform's database. */
+export async function zoneCounts(tenantId: string): Promise<ZoneCount[]> {
+  const rows = await prisma.$queryRaw<Array<{ zone: string; total: bigint; pending: bigint; evaluated: bigint; warm: bigint; early: bigint; review: bigint; retry: bigint }>>`
+    SELECT "zone",
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE "state" = 'pending') AS pending,
+      COUNT(*) FILTER (WHERE "classification" IS NOT NULL) AS evaluated,
+      COUNT(*) FILTER (WHERE "classification" = 'warm') AS warm,
+      COUNT(*) FILTER (WHERE "classification" = 'early_signal') AS early,
+      COUNT(*) FILTER (WHERE "classification" = 'human_review') AS review,
+      COUNT(*) FILTER (WHERE "state" IN ('failed', 'needs_reevaluation')) AS retry
+    FROM "WarmLeadCompany" WHERE "tenantId" = ${tenantId} AND "inCrm" = true GROUP BY "zone"`
+  const by = new Map(rows.map((r) => [r.zone, r]))
+  return ZONES.map((zone) => {
+    const r = by.get(zone)
+    const n = (v: bigint | undefined) => Number(v ?? 0)
+    return { zone, label: ZONE_LABELS[zone], total: n(r?.total), pending: n(r?.pending), evaluated: n(r?.evaluated), warm: n(r?.warm), earlySignal: n(r?.early), humanReview: n(r?.review), needsRetry: n(r?.retry) }
+  })
 }
 
 export async function companyCounts(tenantId: string): Promise<CompanyCounts> {

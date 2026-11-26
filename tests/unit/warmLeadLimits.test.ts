@@ -34,10 +34,19 @@ describe('approving a higher level', () => {
   it('needs the approved pilot', () => {
     expect(checkScaleApproval({ ...start, pilotApproved: false }, 50)).toMatchObject({ ok: false })
   })
-  it('offers 25 -> 50 and nothing above: a 100-a-day tier does not exist', () => {
+  it('offers 25 -> 50 -> 100 (owner 2026-11-26) and nothing above; the 100 level keeps the 600-call Gemini ceiling', () => {
     expect(checkScaleApproval(ok, 50)).toEqual({ ok: true, value: { companies: 50, ceiling: 600 } })
-    expect(checkScaleApproval(ok, 100)).toMatchObject({ ok: false })
-    expect(checkScaleApproval({ approvedMaxCompanies: 50, approvedMaxCeiling: 600, pilotApproved: true }, 100)).toMatchObject({ ok: false })
+    expect(checkScaleApproval({ approvedMaxCompanies: 50, approvedMaxCeiling: 600, pilotApproved: true }, 100)).toEqual({ ok: true, value: { companies: 100, ceiling: 600 } })
+    for (const level of [75, 150, 200, 1000, 0, -1]) expect(checkScaleApproval(ok, level), String(level)).toMatchObject({ ok: false })
+    expect(checkScaleApproval({ approvedMaxCompanies: 100, approvedMaxCeiling: 600, pilotApproved: true }, 100)).toMatchObject({ ok: false }) // already approved
+    expect(checkScaleApproval({ approvedMaxCompanies: 50, approvedMaxCeiling: 600, pilotApproved: false }, 100)).toMatchObject({ ok: false }) // needs the pilot
+  })
+  it('after the 100 level a night may take 100 companies, but never more than 600 Gemini calls', () => {
+    const hundred = { approvedMaxCompanies: 100, approvedMaxCeiling: 600 }
+    expect(checkLimitUpdate(hundred, { dailyCompanyLimit: 100, dailyGeminiCeiling: 600 })).toMatchObject({ ok: true })
+    expect(checkLimitUpdate(hundred, { dailyCompanyLimit: 101 })).toMatchObject({ ok: false })
+    expect(checkLimitUpdate(hundred, { dailyGeminiCeiling: 601 })).toMatchObject({ ok: false })
+    expect(checkLimitUpdate(hundred, { dailyGeminiCeiling: 100 })).toMatchObject({ ok: true }) // an admin may always lower it
   })
   it('never allows a daily limit above 50 companies / 600 calls, even after the 50 level is approved', () => {
     const fifty = { approvedMaxCompanies: 50, approvedMaxCeiling: 600 }

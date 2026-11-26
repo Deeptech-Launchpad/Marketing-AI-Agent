@@ -10,6 +10,7 @@ import { CompanyList } from './warmleads/CompanyList'
 import { ControlsPanel } from './warmleads/ControlsPanel'
 import { PilotPanel } from './warmleads/PilotPanel'
 import { UsagePanel } from './warmleads/UsagePanel'
+import { ZonesPanel } from './warmleads/ZonesPanel'
 import { num } from './warmleads/labels'
 import type { Overview } from './warmleads/types'
 import './settings.css'
@@ -124,6 +125,7 @@ export function WarmLeads() {
       </Panel>
 
       <PilotPanel o={o} admin={admin} act={act} busy={busy} refreshKey={refreshKey} />
+      <ZonesPanel admin={admin} act={act} busy={busy} refreshKey={refreshKey} />
       <ControlsPanel o={o} admin={admin} act={act} busy={busy} />
       <UsagePanel o={o} />
       <CompanyList refreshKey={refreshKey} />

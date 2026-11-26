@@ -32,6 +32,7 @@ const overview = (over: Partial<Overview> = {}): Overview => ({
     window: { start: '23:00', end: '06:00', timezone: 'Asia/Kolkata' },
     pilotApprovedAt: '2026-11-02T00:00:00Z',
     pilotApprovedBy: 'u1',
+    activeZone: null,
     scaleApprovedAt: null,
     syncEnabled: false,
     syncApprovedAt: null,
@@ -69,10 +70,21 @@ function stub(o: Overview, items: CompanyRow[] = [company({})]) {
     if (url.includes('/warm-leads/companies')) return json({ total: items.length, page: 1, limit: 25, items })
     if (url.includes('/warm-leads/pilot/results')) return json({ evaluations: [] })
     if (url.includes('/warm-leads/pilot/opt-outs')) return json({ items: [] })
+    if (url.includes('/warm-leads/zone')) return json(zonesView)
     return json({})
   })
   return calls
 }
+
+const zone = (z: string, label: string, total: number, pending: number) => ({ zone: z, label, total, pending, evaluated: total - pending, warm: 0, earlySignal: 0, humanReview: 0, needsRetry: 0 })
+let zonesView: { activeZone: string | null; zones: ReturnType<typeof zone>[] } = { activeZone: null, zones: [] }
+const resetZones = () => {
+  zonesView = {
+    activeZone: null,
+    zones: [zone('india', 'India', 4000, 4000), zone('middle_east', 'Middle East (GCC)', 2500, 2500), zone('europe', 'Europe & UK', 3000, 3000), zone('north_america', 'North America', 3500, 3500), zone('asia_pacific', 'Asia-Pacific', 1000, 1000), zone('rest_of_world', 'Rest of world', 600, 600), zone('unknown', 'Unknown country', 537, 537)],
+  }
+}
+resetZones()
 
 const renderPage = () =>
   rtlRender(
@@ -186,7 +198,7 @@ describe('the controls and their gates', () => {
     const calls = stub(overview())
     const user = userEvent.setup()
     renderPage()
-    const button = await screen.findByRole('button', { name: /allow up to 50 companies a night \(600 Gemini calls\)/i })
+    const button = await screen.findByRole('button', { name: /allow up to 50 companies a night \(Gemini ceiling stays 600 calls\)/i })
     expect(button).toBeDisabled()
     expect(screen.queryByRole('button', { name: /up to 100/i })).toBeNull()
     await user.click(screen.getByRole('checkbox', { name: /reviewed the usage and the accuracy/i }))
@@ -385,7 +397,7 @@ describe('retry, limits and sending: no control that pretends', () => {
     expect(button).toBeDisabled()
     expect(screen.getByText(/Needed: writing to this NXT Sales is allowed on this server/i)).toBeInTheDocument()
     expect(screen.getByText(/WARM_LEADS_ALLOW_LIVE is off/i)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('checkbox', { name: /I approve sending Warm and Early Signal companies/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /I approve sending every checked company/i }))
     expect(button).toBeEnabled()
     await userEvent.click(button)
     expect(calls.find((c) => c.url.includes('/sync/approve'))?.body).toEqual({ confirm: true })
@@ -443,5 +455,81 @@ describe('the screen does not blank or hide failures while it refreshes', () => 
     stub(overview(), [company({ state: 'failed', classification: null, nextAttemptAt: '2026-11-05T00:00:00Z', attempts: 1 })])
     renderPage()
     expect(await screen.findByText(/Failed — will retry/i)).toBeInTheDocument()
+  })
+})
+
+describe('zones: the company list worked through one region at a time', () => {
+  afterEach(() => resetZones())
+
+  it('lists every zone with its progress, and says when no zone is chosen', async () => {
+    stub(overview())
+    renderPage()
+    const table = await screen.findByRole('table', { name: 'Zones' })
+    for (const label of ['India', 'Middle East (GCC)', 'Europe & UK', 'North America', 'Asia-Pacific', 'Rest of world', 'Unknown country']) {
+      expect(within(table).getByText(label)).toBeInTheDocument()
+    }
+    expect(screen.getByText(/No zone chosen/)).toBeInTheDocument()
+  })
+
+  it('an admin chooses a zone: the request carries only the zone', async () => {
+    const calls = stub(overview())
+    const user = userEvent.setup()
+    renderPage()
+    const table = await screen.findByRole('table', { name: 'Zones' })
+    const row = within(table).getByText('India').closest('tr')!
+    await user.click(within(row).getByRole('button', { name: /work on this zone/i }))
+    const put = calls.find((c) => c.method === 'PUT' && c.url.endsWith('/warm-leads/zone'))
+    expect(put?.body).toEqual({ zone: 'india' })
+  })
+
+  it('the active zone is shown, with how many are left, and can be cleared', async () => {
+    zonesView.activeZone = 'europe'
+    const calls = stub(overview())
+    const user = userEvent.setup()
+    renderPage()
+    expect(await screen.findByText(/Working through/)).toBeInTheDocument()
+    expect(screen.getByText(/3,000 of 3,000 still to check/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /use the whole list/i }))
+    expect(calls.find((c) => c.method === 'PUT' && c.url.endsWith('/warm-leads/zone'))?.body).toEqual({ zone: null })
+  })
+
+  it('a finished zone says so', async () => {
+    zonesView.activeZone = 'unknown'
+    zonesView.zones = zonesView.zones.map((z) => (z.zone === 'unknown' ? { ...z, pending: 0, evaluated: 537 } : z))
+    stub(overview())
+    renderPage()
+    expect(await screen.findByText(/This zone is done: choose the next one/)).toBeInTheDocument()
+  })
+
+  it('someone who is not an admin sees the zones but cannot change them', async () => {
+    admin = false
+    stub(overview())
+    renderPage()
+    await screen.findByRole('table', { name: 'Zones' })
+    expect(screen.queryByRole('button', { name: /work on this zone/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('the 100-a-night level keeps the Gemini ceiling', () => {
+  it('after 50 a night is approved, the next level offered is 100, with the ceiling still 600', async () => {
+    const o = overview()
+    o.settings.approvedMaxCompanies = 50
+    o.settings.approvedMaxCeiling = 600
+    const calls = stub(o)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('checkbox', { name: /reviewed the usage/i }))
+    await user.click(screen.getByRole('button', { name: /allow up to 100 companies a night \(Gemini ceiling stays 600 calls\)/i }))
+    expect(calls.find((c) => c.url.endsWith('/warm-leads/scale/approve'))?.body).toEqual({ level: 100, confirm: true })
+  })
+
+  it('nothing above 100 is offered', async () => {
+    const o = overview()
+    o.settings.approvedMaxCompanies = 100
+    o.settings.approvedMaxCeiling = 600
+    stub(o)
+    renderPage()
+    await screen.findByText(/Approved so far/)
+    expect(screen.queryByRole('button', { name: /allow up to/i })).not.toBeInTheDocument()
   })
 })

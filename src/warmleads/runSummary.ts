@@ -30,11 +30,11 @@ export interface RunRow {
 }
 
 /** The classifications NXT Sales accepts for one company (its CLASSIFICATIONS list). Anything else is refused there with a 400. */
-export const NXT_ACCEPTED_CLASSIFICATIONS: readonly string[] = ['warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact']
+export const NXT_ACCEPTED_CLASSIFICATIONS: readonly string[] = ['warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review']
 
 /**
  * The last line of defence before a company result is sent to NXT Sales: only a classification NXT accepts (or null for a failed evaluation) may
- * go. `human_review` - and anything added later - is refused here, whatever the caller believed about the company.
+ * go. `human_review` is accepted since NXT Sales lists it (branch feature/warm-leads-signals); anything added later is refused here, whatever the caller believed.
  */
 export function assertNxtSendable(classification: string | null): void {
   if (classification !== null && !NXT_ACCEPTED_CLASSIFICATIONS.includes(classification)) {

@@ -883,14 +883,13 @@ describe('the NXT Sales run summary and payloads', () => {
     expect(counts.humanReview).toBe(2)
     expect(p).not.toHaveProperty('humanReview')
   })
-  it('no status NXT Sales does not accept can reach it: human_review is neither listed nor in its list; everything listed is accepted', () => {
-    expect(NXT_ACCEPTED_CLASSIFICATIONS).not.toContain('human_review')
+  it('no status NXT Sales does not accept can reach it: everything listed is accepted, and every definitive class (human_review included, since NXT Sales lists it) is listed', () => {
     for (const c of LISTED_IN_CRM) expect(NXT_ACCEPTED_CLASSIFICATIONS).toContain(c)
-    expect([...DEFINITIVE].filter((c) => !NXT_ACCEPTED_CLASSIFICATIONS.includes(c))).toEqual(['human_review'])
-    expect(syncAction({ classification: 'human_review', currentEvaluationId: 'e1', syncedEvaluationId: null })).toBe('none')
+    expect([...DEFINITIVE].filter((c) => !NXT_ACCEPTED_CLASSIFICATIONS.includes(c))).toEqual([])
+    expect(syncAction({ classification: 'human_review', currentEvaluationId: 'e1', syncedEvaluationId: null })).toBe('put')
   })
   it('the last-line guard: only a classification NXT accepts (or null for a failed evaluation) may be sent', () => {
     for (const ok of [...NXT_ACCEPTED_CLASSIFICATIONS, null]) expect(() => assertNxtSendable(ok)).not.toThrow()
-    for (const bad of ['human_review', 'unknown', '', 'WARM']) expect(() => assertNxtSendable(bad), bad).toThrow(/not one NXT Sales accepts/)
+    for (const bad of ['unknown', '', 'WARM', 'Human_Review']) expect(() => assertNxtSendable(bad), bad).toThrow(/not one NXT Sales accepts/)
   })
 })

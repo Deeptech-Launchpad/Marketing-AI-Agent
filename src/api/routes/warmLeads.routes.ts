@@ -1,14 +1,15 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { NotFoundError } from '../../platform/errors.js'
-import { companyDetail, listCompanies, retryFailed } from '../../warmleads/companies.js'
+import { companyDetail, listCompanies, retryFailed, zoneCounts } from '../../warmleads/companies.js'
 import { env } from '../../config/env.js'
 import { approveOptOut, revealOptOutAddress, VERIFICATION_METHODS } from '../../warmleads/optOutApproval.js'
 import { fingerprintKeyConfigured } from '../../warmleads/optOut.js'
 import { optOutReview, pageOfItems, toPublicItem } from '../../warmleads/optOutReview.js'
 import { approvePilot, pilotResults, requestPilot } from '../../warmleads/pilot.js'
 import { runDetail } from '../../warmleads/service.js'
-import { approveScale, approveSync, disableSync, ensureSettings, requestListRefresh, setPaused, updateLimits, updateWindow } from '../../warmleads/settings.js'
+import { approveScale, approveSync, disableSync, ensureSettings, requestListRefresh, setActiveZone, setPaused, updateLimits, updateWindow } from '../../warmleads/settings.js'
+import { ZONES } from '../../warmleads/zones.js'
 import { buildOverview } from '../../warmleads/view.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { requirePermission } from '../middleware/rbac.js'
@@ -171,6 +172,26 @@ warmLeadsRoutes.put(
   }),
 )
 
+warmLeadsRoutes.get(
+  '/zones',
+  requirePermission('view'),
+  asyncHandler(async (req, res) => {
+    const s = await ensureSettings(req.principal!.tenantId)
+    res.json({ activeZone: s.activeZone, zones: await zoneCounts(req.principal!.tenantId) })
+  }),
+)
+
+warmLeadsRoutes.put(
+  '/zone',
+  requirePermission('admin'),
+  validateBody(z.object({ zone: z.enum(ZONES).nullable() }).strict()),
+  asyncHandler(async (req, res) => {
+    await setActiveZone(req.principal!.tenantId, req.principal!.crmUserId, req.body.zone)
+    const s = await ensureSettings(req.principal!.tenantId)
+    res.json({ activeZone: s.activeZone, zones: await zoneCounts(req.principal!.tenantId) })
+  }),
+)
+
 warmLeadsRoutes.post(
   '/refresh-list',
   requirePermission('admin'),
@@ -212,7 +233,7 @@ warmLeadsRoutes.post(
 warmLeadsRoutes.post(
   '/scale/approve',
   requirePermission('admin'),
-  validateBody(z.object({ level: z.literal(50), confirm: z.literal(true) })),
+  validateBody(z.object({ level: z.union([z.literal(50), z.literal(100)]), confirm: z.literal(true) })),
   asyncHandler(async (req, res) => {
     await approveScale(req.principal!.tenantId, req.principal!.crmUserId, req.body.level)
     res.json(await buildOverview(req.principal!.tenantId))

@@ -8,6 +8,7 @@ import { finishRunIfIdle, refreshCompanyList } from './companies.js'
 import { buildSample } from './sample.js'
 import { ensureSettings } from './settings.js'
 import { publicEvaluation } from './reasonsPublic.js'
+import { isZone } from './zones.js'
 
 // THE PILOT: 100 representative companies, evaluated on the REAL NXT Sales data, results kept only
 // in the Marketing database, reviewed by an admin before anything else is processed.
@@ -43,7 +44,7 @@ export async function preparePilot(tenantId: string, build: typeof buildSample =
     // Read fresh: the sample is drawn from the CRM as it is NOW, so every pick must have a row, or the pilot would run short.
     await refresh(tenantId)
 
-    const built = await build({ seed: env.WARM_LEADS_SAMPLE_SEED, size: settings.pilotSize })
+    const built = await build({ seed: env.WARM_LEADS_SAMPLE_SEED, size: settings.pilotSize, zone: isZone(settings.activeZone) ? settings.activeZone : null })
     const picks = built.sample.picks.filter((p) => built.companies.has(p.id))
     if (!picks.length) throw new Error('The sample contains no company that could be read from NXT Sales.')
 

@@ -20,8 +20,11 @@ export type CompanyState = 'pending' | 'queued' | 'running' | 'evaluated' | 'fai
 
 /** Results that settle what a company is. */
 export const DEFINITIVE: ReadonlySet<string> = new Set(['warm', 'early_signal', 'cold', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review'])
-/** The results NXT Sales lists on its Warm Leads tab. */
-export const LISTED_IN_CRM: ReadonlySet<string> = new Set(['warm', 'early_signal'])
+/**
+ * The results sent to NXT Sales, so every evaluated lead shows its signals on its own page there (owner's decision 2026-11-26; until then
+ * only Warm and Early Signal were sent). A `human_review` company is sent too, with its opt-out details left out (reasonsForCrm).
+ */
+export const LISTED_IN_CRM: ReadonlySet<string> = new Set(['warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review'])
 
 /** Automatic attempts after which a failing company waits for an admin to retry it. */
 export const MAX_AUTO_ATTEMPTS = 3
@@ -161,11 +164,12 @@ export type SyncAction = 'put' | 'delete' | 'none'
 
 /**
  * What NXT Sales needs for this company, given what it already holds.
- *   put     the company is Warm / Early Signal and NXT Sales does not hold this evaluation
- *   delete  NXT Sales holds an evaluation of a company that is no longer Warm / Early Signal (e.g. a completed Cold)
+ *   put     the company has a current result and NXT Sales does not hold this evaluation
+ *   delete  NXT Sales holds an evaluation of a company that has no current result any more
  */
-export function syncAction(c: { classification: string | null; currentEvaluationId: string | null; syncedEvaluationId: string | null }): SyncAction {
+export function syncAction(c: { classification: string | null; currentEvaluationId: string | null; syncedEvaluationId: string | null; syncedClassification?: string | null }): SyncAction {
   const listed = c.classification !== null && LISTED_IN_CRM.has(c.classification)
-  if (listed) return c.syncedEvaluationId === c.currentEvaluationId ? 'none' : 'put'
+  // the class is compared too: a refusal can move a company to human review while its evaluation stays the same
+  if (listed) return c.syncedEvaluationId === c.currentEvaluationId && (c.syncedClassification === undefined || c.syncedClassification === c.classification) ? 'none' : 'put'
   return c.syncedEvaluationId ? 'delete' : 'none'
 }

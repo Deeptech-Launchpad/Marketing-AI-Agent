@@ -4,9 +4,14 @@ import { windowProblem, type WindowConfig } from './window.js'
 //
 // Starting point (approved): pilot 100 companies / 1,200 Gemini calls; then daily
 // 25 companies / 300 calls. 50 companies / 600 calls only after usage and accuracy
-// were reviewed. There is NO 100-a-day tier: it needs a separate approval and a code
-// change (owner's decision 2026-11-04). An admin can LOWER any limit at any time;
-// raising one beyond what was approved is refused here, not just on screen.
+// were reviewed. 100 companies a night was approved by the owner on 2026-11-26 (to work
+// through ~15,000 companies zone by zone), with the instruction to keep Gemini cost down:
+// the 100 level keeps the 600-call ceiling of the 50 level, so a night never spends more
+// Gemini than 50 a night already could. Every company gets the free checks (NXT Sales data
+// and its own website, no Gemini); only a promising one gets the paid web research
+// (needsDeepCheck), and a research is not started with fewer than DEEP_RESEARCH_CALL_ESTIMATE
+// calls left. An admin can LOWER any limit at any time; raising one beyond what was
+// approved is refused here, not just on screen.
 
 export const PILOT_SIZE = 100
 export const PILOT_GEMINI_CEILING = 1200
@@ -18,6 +23,7 @@ export const DEEP_RESEARCH_CALL_ESTIMATE = 12
 
 export const SCALE_LEVELS = {
   50: { companies: 50, ceiling: 600 },
+  100: { companies: 100, ceiling: 600 },
 } as const
 export type ScaleLevel = keyof typeof SCALE_LEVELS
 
@@ -60,9 +66,9 @@ export function checkLimitUpdate(approved: ApprovedMax, u: LimitUpdate): Checked
   return { ok: true, value: out }
 }
 
-/** Approving the one higher level (50 a day). Needs the approved pilot. Nothing above 50 exists. */
+/** Approving a higher level (50 or 100 a day). Needs the approved pilot. Nothing above 100 exists. */
 export function checkScaleApproval(state: ApprovedMax & { pilotApproved: boolean }, level: number): Checked<{ companies: number; ceiling: number }> {
-  if (level !== 50) return { ok: false, error: 'The only higher level is 50 companies a day. Anything above needs a separate approval.' }
+  if (level !== 50 && level !== 100) return { ok: false, error: 'The higher levels are 50 and 100 companies a day. Anything above needs a separate approval.' }
   if (!state.pilotApproved) return { ok: false, error: 'The pilot must be approved before any higher level.' }
   const target = SCALE_LEVELS[level]
   if (state.approvedMaxCompanies >= target.companies) return { ok: false, error: `${level} companies a day is already approved.` }

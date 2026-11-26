@@ -28,10 +28,10 @@ describe('a completed evaluation replaces the current result', () => {
     expect(p).toMatchObject({ state: 'evaluated', classification: 'warm', score: 55, currentEvaluationId: 'ev-new', attempts: 0, nextAttemptAt: null, lastError: null, researchIncomplete: false })
   })
 
-  it('a COMPLETED Cold replaces a Warm - the company leaves the Warm Leads list', () => {
+  it('a COMPLETED Cold replaces a Warm - NXT Sales receives the Cold result in its place (every class is sent since 2026-11-26)', () => {
     const p = applyOutcome(warm(), done('cold', { score: 5 }))
     expect(p).toMatchObject({ state: 'evaluated', classification: 'cold', currentEvaluationId: 'ev-new' })
-    expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: 'ev-warm' })).toBe('delete')
+    expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: 'ev-warm', syncedClassification: 'warm' })).toBe('put')
   })
 
   it('every definitive result replaces', () => {
@@ -110,8 +110,14 @@ describe('what NXT Sales must hold', () => {
   it('does nothing when it already holds the current evaluation (idempotent)', () => {
     expect(syncAction(c('warm', 'e1', 'e1'))).toBe('none')
   })
-  it('never sends cold, insufficient, customer, opportunity or do-not-contact', () => {
-    for (const k of ['cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review', null]) expect(syncAction(c(k, 'e1', null))).toBe('none')
+  it('sends EVERY class it does not hold yet (owner 2026-11-26: each lead shows its signals in NXT Sales); a company with no result is not sent', () => {
+    for (const k of ['warm', 'early_signal', 'cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review']) expect(syncAction(c(k, 'e1', null)), k).toBe('put')
+    expect(syncAction(c(null, null, null))).toBe('none')
+    expect(syncAction(c('something_new', 'e1', null))).toBe('none') // only the known classes
+  })
+  it('a class change WITHOUT a new evaluation is sent too (refusal -> human review), and nothing is re-sent once NXT Sales holds the class', () => {
+    expect(syncAction({ classification: 'human_review', currentEvaluationId: 'e1', syncedEvaluationId: 'e1', syncedClassification: 'warm' })).toBe('put')
+    expect(syncAction({ classification: 'human_review', currentEvaluationId: 'e1', syncedEvaluationId: 'e1', syncedClassification: 'human_review' })).toBe('none')
   })
   it('review 2 - a refusal seen by an evaluation that could not finish still pulls a listed Warm / Early Signal company into human review', () => {
     const listed = (c: CompanySnapshot) => ({ classification: 'human_review', currentEvaluationId: c.currentEvaluationId, syncedEvaluationId: c.currentEvaluationId })
@@ -123,7 +129,8 @@ describe('what NXT Sales must hold', () => {
         expect(p, JSON.stringify(o)).toMatchObject({ classification: 'human_review', currentEvaluationId: before.currentEvaluationId, score: before.score })
         expect(p.summary).toMatch(/^Human review required/)
         expect(p.state).toBe('needs_reevaluation') // still due for a re-check
-        expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: before.currentEvaluationId })).toBe('delete')
+        // NXT Sales held the Warm / Early Signal; the class changed with the same evaluation, so it is sent again as human review
+        expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: before.currentEvaluationId, syncedClassification: before.classification })).toBe('put')
         void listed
       }
       // without a refusal the earlier result is kept as it was
@@ -133,16 +140,16 @@ describe('what NXT Sales must hold', () => {
     expect(applyOutcome(none(), { ...failed(), refusal: true })).toMatchObject({ classification: null, state: 'failed' })
   })
 
-  it('a company held for human review is never listed, and one already listed is withdrawn when a refusal puts it there', () => {
+  it('a company held for human review is sent AS human review (not as the earlier Warm) when a refusal puts it there', () => {
     expect(DEFINITIVE.has('human_review')).toBe(true) // it replaces the earlier Warm: the refusal is the newest word
     const p = applyOutcome(warm(), done('human_review'))
     expect(p).toMatchObject({ classification: 'human_review', state: 'evaluated' })
-    expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: 'ev-warm' })).toBe('delete')
-    expect(syncAction(c('human_review', 'e3', null))).toBe('none')
+    expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: 'ev-warm', syncedClassification: 'warm' })).toBe('put')
   })
-  it('withdraws a company that is no longer Warm / Early Signal but is still listed', () => {
-    expect(syncAction(c('cold', 'e3', 'e1'))).toBe('delete')
-    expect(syncAction(c('do_not_contact', 'e3', 'e1'))).toBe('delete')
+  it('a later result of another class replaces the held one; a company that has no current result any more is withdrawn', () => {
+    expect(syncAction(c('cold', 'e3', 'e1'))).toBe('put')
+    expect(syncAction(c('do_not_contact', 'e3', 'e1'))).toBe('put')
+    expect(syncAction(c(null, null, 'e1'))).toBe('delete')
   })
   it('a Warm company whose re-check failed is NOT withdrawn (its result is unchanged)', () => {
     const p = applyOutcome(warm(), failed())
