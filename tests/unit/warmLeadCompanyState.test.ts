@@ -111,7 +111,34 @@ describe('what NXT Sales must hold', () => {
     expect(syncAction(c('warm', 'e1', 'e1'))).toBe('none')
   })
   it('never sends cold, insufficient, customer, opportunity or do-not-contact', () => {
-    for (const k of ['cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', null]) expect(syncAction(c(k, 'e1', null))).toBe('none')
+    for (const k of ['cold', 'insufficient_data', 'existing_customer', 'active_opportunity', 'do_not_contact', 'human_review', null]) expect(syncAction(c(k, 'e1', null))).toBe('none')
+  })
+  it('review 2 - a refusal seen by an evaluation that could not finish still pulls a listed Warm / Early Signal company into human review', () => {
+    const listed = (c: CompanySnapshot) => ({ classification: 'human_review', currentEvaluationId: c.currentEvaluationId, syncedEvaluationId: c.currentEvaluationId })
+    // the website could not be read (failed), research was cut short, or there was too little data: each keeps the earlier result - as human review
+    for (const o of [failed(), done('insufficient_data'), done('cold', { researchIncomplete: true, deferredByCeiling: true })]) {
+      const withRefusal = { ...o, refusal: true } as Outcome
+      for (const before of [warm(), early()]) {
+        const p = applyOutcome(before, withRefusal)
+        expect(p, JSON.stringify(o)).toMatchObject({ classification: 'human_review', currentEvaluationId: before.currentEvaluationId, score: before.score })
+        expect(p.summary).toMatch(/^Human review required/)
+        expect(p.state).toBe('needs_reevaluation') // still due for a re-check
+        expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: before.currentEvaluationId })).toBe('delete')
+        void listed
+      }
+      // without a refusal the earlier result is kept as it was
+      expect(applyOutcome(warm(), o).classification).toBe('warm')
+    }
+    // a company with no earlier Warm / Early Signal is unaffected
+    expect(applyOutcome(none(), { ...failed(), refusal: true })).toMatchObject({ classification: null, state: 'failed' })
+  })
+
+  it('a company held for human review is never listed, and one already listed is withdrawn when a refusal puts it there', () => {
+    expect(DEFINITIVE.has('human_review')).toBe(true) // it replaces the earlier Warm: the refusal is the newest word
+    const p = applyOutcome(warm(), done('human_review'))
+    expect(p).toMatchObject({ classification: 'human_review', state: 'evaluated' })
+    expect(syncAction({ classification: p.classification, currentEvaluationId: p.currentEvaluationId, syncedEvaluationId: 'ev-warm' })).toBe('delete')
+    expect(syncAction(c('human_review', 'e3', null))).toBe('none')
   })
   it('withdraws a company that is no longer Warm / Early Signal but is still listed', () => {
     expect(syncAction(c('cold', 'e3', 'e1'))).toBe('delete')

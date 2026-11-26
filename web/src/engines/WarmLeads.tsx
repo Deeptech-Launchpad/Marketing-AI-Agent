@@ -108,6 +108,7 @@ export function WarmLeads() {
           <Metric label="Pending" value={num(c.pending)} hint="not yet evaluated" />
           <Metric label="Warm" value={num(c.warm)} accent />
           <Metric label="Early signal" value={num(c.earlySignal)} hint="needs review" />
+          <Metric label="Human review" value={num(c.humanReview)} hint="a reply refused: not listed" />
           <Metric label="Cold" value={num(c.cold)} />
           <Metric label="Not enough data" value={num(c.insufficientData)} />
           <Metric label="Research incomplete" value={num(c.researchIncomplete)} hint="never counted as Cold" />

@@ -1,7 +1,6 @@
 import { warmLeadsKeyProblem } from '../llm/gemini/apiKey.js'
 import { warmLeadsWriteTargetAllowed } from '../crmsync/writeGate.js'
 import { env } from '../config/env.js'
-import { prisma } from '../platform/db.js'
 import { companyCounts } from './companies.js'
 import { pilotView } from './pilot.js'
 import { ensureSettings } from './settings.js'
@@ -60,10 +59,4 @@ export async function buildOverview(tenantId: string, now = new Date()) {
     today,
     usage,
   }
-}
-
-/** Evaluations that stand behind the company list's "Review" drawer: most recent first. */
-export async function recentEvaluations(tenantId: string, limit = 50) {
-  const rows = await prisma.warmLeadEvaluation.findMany({ where: { tenantId, status: { in: ['done', 'failed'] } }, orderBy: { evaluatedAt: 'desc' }, take: limit })
-  return rows.map((e) => ({ ...e, costUsd: Number(e.costUsd) }))
 }

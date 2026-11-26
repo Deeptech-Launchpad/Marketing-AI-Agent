@@ -15,6 +15,8 @@ const RECENT_CONTACT_DAYS = 30
 export interface SuppressionDecision {
   suppressed: boolean
   reason?: string
+  /** Saved addresses of the company that are on the opt-out list while the company stays in the audience (person-level suppression). */
+  excludedEmails?: string[]
 }
 
 export interface SuppressionContext {
@@ -80,8 +82,9 @@ export function judge(company: CrmCompany, ctx: SuppressionContext): Suppression
   }
 
   const domain = normaliseDomain(company.domain)
-  const emails = [company.email, ...company.emails].filter(Boolean).map((e) => e!.trim().toLowerCase())
+  const emails = [...new Set([company.email, ...company.emails].map((e) => (e ?? '').trim().toLowerCase()).filter(Boolean))]
 
+  // COMPANY-WIDE restrictions: a company row or a domain row excludes the whole company, as before.
   for (const entry of ctx.entries) {
     if (entry.matchType === 'company' && entry.matchValue === company.id.toLowerCase()) {
       return { suppressed: true, reason: entry.reason }
@@ -89,9 +92,16 @@ export function judge(company: CrmCompany, ctx: SuppressionContext): Suppression
     if (entry.matchType === 'domain' && domain && entry.matchValue === domain) {
       return { suppressed: true, reason: entry.reason }
     }
-    if (entry.matchType === 'email' && emails.includes(entry.matchValue)) {
-      return { suppressed: true, reason: entry.reason }
-    }
+  }
+
+  // PERSON-LEVEL restrictions (decision of 2026-11-06): an email row suppresses that ADDRESS, never the company's other contacts. The
+  // company stays in the audience while at least one of its saved addresses is not suppressed; the suppressed ones are reported as
+  // excluded (and every send still checks the exact destination address). Only when NO saved address is left is the company excluded.
+  const byAddress = new Map<string, string>()
+  for (const entry of ctx.entries) if (entry.matchType === 'email' && emails.includes(entry.matchValue) && !byAddress.has(entry.matchValue)) byAddress.set(entry.matchValue, entry.reason)
+  if (byAddress.size > 0) {
+    if (byAddress.size >= emails.length) return { suppressed: true, reason: `Every saved contact address is on the opt-out list. ${[...byAddress.values()][0]}` }
+    return { suppressed: false, excludedEmails: [...byAddress.keys()] }
   }
 
   return { suppressed: false }

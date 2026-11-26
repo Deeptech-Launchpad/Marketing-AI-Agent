@@ -18,8 +18,8 @@ const emptyUsage = { bucket: 'day:2026-11-04', geminiCalls: 120, geminiCeiling: 
 
 const overview = (over: Partial<Overview> = {}): Overview => ({
   stage: 'daily',
-  counts: { total: 15137, pending: 15000, inProgress: 0, evaluated: 100, warm: 7, earlySignal: 5, cold: 80, insufficientData: 8, existingCustomer: 2, activeOpportunity: 1, doNotContact: 0, failed: 3, needsReevaluation: 2, researchIncomplete: 4, notInCrm: 0 },
-  pilot: { run: { id: 'run1', status: 'completed', total: 100, startedAt: null, finishedAt: null, failureReason: null }, counts: { total: 100, queued: 0, running: 0, done: 97, failed: 3, incomplete: 4, warm: 7, earlySignal: 5, cold: 70, insufficientData: 11, other: 0 }, approvedAt: '2026-11-02T00:00:00Z', approvedBy: 'u1', canApprove: false },
+  counts: { total: 15137, pending: 15000, inProgress: 0, evaluated: 100, warm: 7, earlySignal: 5, cold: 80, insufficientData: 8, existingCustomer: 2, activeOpportunity: 1, doNotContact: 0, humanReview: 1, failed: 3, needsReevaluation: 2, researchIncomplete: 4, notInCrm: 0 },
+  pilot: { run: { id: 'run1', status: 'completed', total: 100, startedAt: null, finishedAt: null, failureReason: null }, counts: { total: 100, queued: 0, running: 0, done: 97, failed: 3, incomplete: 4, warm: 7, earlySignal: 5, cold: 70, insufficientData: 11, humanReview: 1, other: 0 }, approvedAt: '2026-11-02T00:00:00Z', approvedBy: 'u1', canApprove: false },
   settings: {
     paused: true,
     dailyCompanyLimit: 25,
@@ -68,6 +68,7 @@ function stub(o: Overview, items: CompanyRow[] = [company({})]) {
     }
     if (url.includes('/warm-leads/companies')) return json({ total: items.length, page: 1, limit: 25, items })
     if (url.includes('/warm-leads/pilot/results')) return json({ evaluations: [] })
+    if (url.includes('/warm-leads/pilot/opt-outs')) return json({ items: [] })
     return json({})
   })
   return calls

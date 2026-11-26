@@ -233,7 +233,7 @@ describe('warm-lead classification', () => {
       expect(r.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(1)
     }
     // the better-evidenced copy is the one kept, whichever order they arrive in
-    const worse = sig({ signalType: 'public_business_activity', summary: 'same', sourceUrl: url, observedAt: '2026-10-23', confidence: 'medium' })
+    const worse = sig({ signalType: 'public_business_activity', summary: 'ProSafety officially became a CleanSpace service centre for devices', sourceUrl: url, observedAt: '2026-10-23', confidence: 'medium' })
     const kept = classify(input({ deep: { status: 'done', signals: [worse, a] } }))
     expect(kept.reasons.find((x) => x.points > 0 && x.source === 'web_research')!.summary).toBe(a.summary)
   })
@@ -244,6 +244,136 @@ describe('warm-lead classification', () => {
     expect(r.reasons.filter((x) => x.points === 25)).toHaveLength(2) // capped at 60 total, but all three are separate
     expect(r.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(0)
     expect(r.classification).toBe('warm')
+  })
+
+  it('DUPLICATE EVIDENCE: the same page found again without a date, or the same news on two pages the same day, counts once', () => {
+    const url = 'https://prosafety.com/en/blog'
+    const words = 'ProSafety officially became a CleanSpace service center for respiratory devices'
+    const dated = sig({ signalType: 'public_business_activity', summary: `${words}.`, sourceUrl: url, observedAt: '2026-10-23' })
+    const undated = sig({ signalType: 'public_business_activity', summary: `${words} in Germany.`, sourceUrl: `${url}/?utm_source=x`, observedAt: null })
+    const otherPage = sig({ signalType: 'public_business_activity', summary: `ProSafety officially became a CleanSpace service center for respiratory devices, say reports`, sourceUrl: 'https://trade-news.example/prosafety', observedAt: '2026-10-23' })
+    for (const signals of [[dated, undated], [undated, dated], [dated, otherPage], [otherPage, dated], [dated, undated, otherPage], [otherPage, undated, dated]]) {
+      const r = classify(input({ website: site({ commercePlatforms: ['PrestaShop'] }), deep: { status: 'done', signals } }))
+      expect(r.score, `${signals.length} copies of one event`).toBe(35)
+      expect(r.classification).toBe('early_signal')
+      expect(r.reasons.filter((x) => x.points === 25)).toHaveLength(1)
+    }
+    // the copy that can be checked (has a source) is kept over one that cannot
+    const unsourced = sig({ signalType: 'public_business_activity', summary: `${words}.`, sourceUrl: null, observedAt: '2026-10-23', evidence: 'a much longer piece of quoted text than the sourced one has' })
+    const kept = classify(input({ deep: { status: 'done', signals: [unsourced, dated] } }))
+    expect(kept.reasons.find((x) => x.points > 0 && x.source === 'web_research')!.sourceUrl).toBe(url)
+  })
+
+  it('DIFFERENT EVENTS stay separate: the same words long afterwards, another kind, or a different story on the same day', () => {
+    const mk = (type: string, day: string, summary: string, url: string) => sig({ signalType: type, summary, sourceUrl: url, observedAt: day })
+    const a = mk('public_business_activity', '2026-10-23', 'ProSafety officially became a CleanSpace service center for respiratory devices', 'https://a.example/1')
+    const nextDay = mk('public_business_activity', '2026-11-20', 'ProSafety officially became a CleanSpace service center for respiratory devices', 'https://b.example/1')
+    const otherKind = mk('hiring', '2026-10-23', 'ProSafety officially became a CleanSpace service center for respiratory devices', 'https://c.example/1')
+    const otherStory = mk('public_business_activity', '2026-10-23', 'ProSafety opened a second warehouse near Munich to ship orders faster', 'https://d.example/1')
+    const r = classify(input({ deep: { status: 'done', signals: [a, nextDay, otherKind, otherStory] } }))
+    expect(r.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(0)
+    // four separate events: 25 + 25 + 10 hit the public-signal cap of 60 (so the last scores 0 because of the cap, not because it was a repeat)
+    expect(r.reasons.filter((x) => x.source === 'web_research' && x.points > 0)).toHaveLength(3)
+    expect(r.score).toBe(POINTS.publicSignalCap)
+  })
+
+  it('two different announcements by one company on one day (two warehouses) are NOT merged, though they share the company and the verb', () => {
+    const a = sig({ signalType: 'public_business_activity', summary: 'ProSafety opened a new warehouse in Pune', sourceUrl: 'https://a.example/1', observedAt: '2026-10-23' })
+    const b = sig({ signalType: 'public_business_activity', summary: 'ProSafety opened a new warehouse in Delhi', sourceUrl: 'https://b.example/2', observedAt: '2026-10-23' })
+    for (const order of [[a, b], [b, a]]) {
+      const r = classify(input({ deep: { status: 'done', signals: order } }))
+      expect(r.reasons.filter((x) => x.source === 'web_research' && x.points === 25)).toHaveLength(2)
+      expect(r.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(0)
+    }
+  })
+
+  // ── The same announcement republished on another site the next day ────────────────────────────────────────────────────────────
+  // Found in review: counted twice it was worth 25 + 25, which turned an early signal of 35 / 45 into a false Warm of 60 / 70.
+  describe('the same announcement republished on a second URL on the next day', () => {
+    const P = 'ProSafety officially became a CleanSpace service center for respiratory devices'
+    const original = () => sig({ signalType: 'public_business_activity', summary: P + '.', sourceUrl: 'https://prosafety.com/en/blog', observedAt: '2026-10-23' })
+    const republished = (over: Partial<ObservedSignal> = {}) => sig({ signalType: 'public_business_activity', summary: P + ', trade press reports.', sourceUrl: 'https://trade-news.example/prosafety', observedAt: '2026-10-24', ...over })
+    const tech = () => sig({ signalType: 'technology_added', signalCategory: 'technology', summary: 'Moved to Shopify', observedAt: '2026-10-20' })
+    const score = (website: WebsiteObservation, signals: ObservedSignal[]) => classify(input({ website, deep: { status: 'done', signals } }))
+
+    it('counts once, so it can never lift a company over 50: shop fit alone, and shop fit plus a platform change', () => {
+      const fit = site({ hasProductSchema: true })
+      const fitAndPlatform = site({ hasProductSchema: true, commercePlatforms: ['Shopify'] })
+      // one copy
+      expect(score(fit, [original()]).score).toBe(35)
+      expect(score(fitAndPlatform, [original(), tech()]).score).toBe(45)
+      // both copies: the same score, and still an early signal - never Warm
+      for (const order of [[original(), republished()], [republished(), original()]]) {
+        const a = score(fit, order)
+        expect(a.score, 'fit only').toBe(35)
+        expect(a.classification).toBe('early_signal')
+        const b = score(fitAndPlatform, [...order, tech()])
+        expect(b.score, 'fit + platform change').toBe(45)
+        expect(b.classification).toBe('early_signal')
+        expect(b.reasons.filter((x) => x.points === 25)).toHaveLength(1)
+        expect(b.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(1)
+      }
+    })
+
+    it('keeps the ORIGINAL (earliest) copy as the event, so a republication cannot make old news look fresh', () => {
+      const kept = classify(input({ deep: { status: 'done', signals: [republished({ freshness: 'fresh' }), { ...original(), freshness: 'aging' }] } }))
+      const counted = kept.reasons.find((x) => x.source === 'web_research' && x.points > 0)!
+      expect(counted.sourceUrl).toBe('https://prosafety.com/en/blog') // the 23 Oct original
+      expect(counted.observedAt).toBe('2026-10-23')
+    })
+
+    it('holds within a week and stops there: the same words eight days later are a new item', () => {
+      const dayN = (n: number) => '2026-10-' + String(23 + n).padStart(2, '0')
+      const at = (n: number) => score(site({ hasProductSchema: true }), [original(), republished({ observedAt: dayN(n) })])
+      for (const n of [0, 1, 3, 7]) expect(at(n).score, n + ' days later').toBe(35)
+      expect(at(8).score).toBe(60)
+      expect(at(8).classification).toBe('warm')
+    })
+
+    it('a genuinely NEW development is never folded into an older one - another place, company or number, even the next day', () => {
+      const ev = (summary: string, url: string, day: string) => sig({ signalType: 'public_business_activity', summary, sourceUrl: url, observedAt: day })
+      const pairs: Array<[ObservedSignal, ObservedSignal]> = [
+        [ev('ProSafety opened a new warehouse in Pune', 'https://a.example/1', '2026-10-23'), ev('ProSafety opened a new warehouse in Delhi', 'https://b.example/1', '2026-10-24')],
+        [ev('ProSafety Ltd opened a new large warehouse in Pune', 'https://a.example/2', '2026-10-23'), ev('ProSafety Ltd opened a new large warehouse in Delhi', 'https://b.example/2', '2026-10-24')],
+        [ev('ProSafety signed a distribution agreement with Acme Retail for respiratory devices', 'https://a.example/3', '2026-10-23'), ev('ProSafety signed a distribution agreement with Globex Retail for respiratory devices', 'https://b.example/3', '2026-10-24')],
+        [ev('ProSafety is hiring 5 engineers for its respiratory devices division', 'https://a.example/4', '2026-10-23'), ev('ProSafety is hiring 50 engineers for its respiratory devices division', 'https://b.example/4', '2026-10-24')],
+        [ev('Raised a Series A round to expand its catalogue', 'https://a.example/5', '2026-10-23'), ev('Opened a second distribution centre near Munich', 'https://b.example/5', '2026-10-24')],
+      ]
+      for (const [a, b] of pairs) {
+        for (const order of [[a, b], [b, a]]) {
+          const r = score(site({ hasProductSchema: true }), order)
+          expect(r.reasons.filter((x) => /counted once/.test(x.summary)), a.summary).toHaveLength(0)
+          expect(r.reasons.filter((x) => x.source === 'web_research' && x.points === 25), a.summary).toHaveLength(2)
+          expect(r.score).toBe(60)
+        }
+      }
+    })
+
+    it('a vaguer retelling joins the event it retells, but a third copy cannot bridge two different developments', () => {
+      const pune = sig({ signalType: 'public_business_activity', summary: 'ProSafety Ltd opened a new large warehouse in Pune', sourceUrl: 'https://a.example/1', observedAt: '2026-10-23' })
+      const delhi = sig({ signalType: 'public_business_activity', summary: 'ProSafety Ltd opened a new large warehouse in Delhi', sourceUrl: 'https://b.example/1', observedAt: '2026-10-24' })
+      const vague = sig({ signalType: 'public_business_activity', summary: 'ProSafety Ltd opened a new large warehouse', sourceUrl: 'https://c.example/1', observedAt: '2026-10-24' })
+      for (const order of [[pune, delhi, vague], [vague, delhi, pune], [delhi, vague, pune], [pune, vague, delhi]]) {
+        const r = score(site({ hasProductSchema: true }), order)
+        // Pune and Delhi are two developments; the vague copy joins one of them, never both: two events count
+        expect(r.reasons.filter((x) => x.source === 'web_research' && x.points === 25)).toHaveLength(2)
+        expect(r.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(1)
+      }
+    })
+
+    it('the same words as a different kind of signal are not merged', () => {
+      const r = score(site({ hasProductSchema: true }), [original(), republished({ signalType: 'funding_round' })])
+      expect(r.reasons.filter((x) => /counted once/.test(x.summary))).toHaveLength(0)
+      expect(r.score).toBe(60)
+    })
+  })
+
+  it('evaluating again never adds up: the score is worked out afresh from the evidence every time', () => {
+    const e = sig({ signalType: 'public_business_activity', summary: 'ProSafety officially became a CleanSpace service center', sourceUrl: 'https://prosafety.com/en/blog', observedAt: '2026-10-23' })
+    const first = classify(input({ website: site({ commercePlatforms: ['PrestaShop'] }), deep: { status: 'done', signals: [e] } }))
+    const again = classify(input({ website: site({ commercePlatforms: ['PrestaShop'] }), deep: { status: 'done', signals: [e, { ...e }, { ...e }] } }))
+    expect(again.score).toBe(first.score)
+    expect(again.classification).toBe(first.classification)
   })
 
   it('a fresh reply from a person alone (45) is an early signal; an older reply in the window is not fresh, so it is cold; reply + fit is warm', () => {
@@ -260,23 +390,39 @@ describe('warm-lead classification', () => {
   })
 
   it('a score in the early-signal range WITHOUT a verified fresh intent signal is cold: platform detection and fit never qualify', () => {
-    // fit 10 + a platform change 10 + another 10 = 30 (>= 25), and not one of them is an intent signal
+    // fit 10 + a platform change 10 = 20 (the most fit can ever give), plus an AGING verified event (half of 15 = 7): 27 is in the
+    // early-signal range, but nothing is fresh, so it is cold.
     const deep = {
       status: 'done' as const,
       signals: [
         sig({ signalType: 'technology_added', signalCategory: 'technology', summary: 'Moved to Shopify' }),
-        sig({ signalType: 'technology_added', signalCategory: 'technology', summary: 'Added a PIM' }),
+        sig({ signalType: 'expansion', confidence: 'medium', freshness: 'aging' }),
       ],
     }
     const r = classify(input({ website: site({ commercePlatforms: ['Shopify'], hasProductSchema: true }), deep }))
+    expect(r.score).toBe(27)
     expect(r.score).toBeGreaterThanOrEqual(EARLY_SIGNAL_MIN)
     expect(r.score).toBeLessThan(WARM_THRESHOLD)
     expect(r.classification).toBe('cold')
     expect(r.reasons.find((x) => x.signal === 'technology_added')!.summary).toMatch(/platform detection: fit, not a qualifying intent signal/)
-    // and even stacked up to a high score, platform detection never makes a company warm
+    // and no number of platform detections reaches the early-signal range, let alone warm: fit alone is worth at most 20
     const many = { status: 'done' as const, signals: [1, 2, 3, 4, 5, 6].map((i) => sig({ signalType: 'technology_added', signalCategory: 'technology', summary: `platform ${i}` })) }
-    expect(classify(input({ website: site({ commercePlatforms: ['A'] }), deep: many })).classification).not.toBe('warm')
-    expect(classify(input({ website: site({ commercePlatforms: ['A'] }), deep: many })).classification).not.toBe('early_signal')
+    const stacked = classify(input({ website: site({ commercePlatforms: ['A'] }), deep: many }))
+    expect(stacked.score).toBe(POINTS.websiteFit + POINTS.technologyAdded)
+    expect(stacked.classification).toBe('cold')
+  })
+
+  it('PLATFORM DETECTIONS DO NOT STACK: the same fit recorded again is duplicate evidence and earns nothing more', () => {
+    const many = { status: 'done' as const, signals: [1, 2, 3, 4, 5, 6].map((i) => sig({ signalType: 'technology_added', signalCategory: 'technology', summary: `moved to platform ${i}` })) }
+    const r = classify(input({ website: site({ commercePlatforms: ['Shopify'] }), deep: many }))
+    const tech = r.reasons.filter((x) => x.signal === 'technology_added')
+    expect(tech.filter((x) => x.points === POINTS.technologyAdded)).toHaveLength(1)
+    expect(tech.filter((x) => x.points === 0)).toHaveLength(5)
+    expect(tech.filter((x) => x.points === 0).every((x) => /fit points were already counted/.test(x.summary))).toBe(true)
+    // and fit cannot push a weak event over the warm line: one medium event (15) + at most 20 of fit = 35, an early signal at best
+    const withEvent = classify(input({ website: site({ commercePlatforms: ['Shopify'] }), deep: { status: 'done', signals: [...many.signals, sig({ signalType: 'expansion', confidence: 'medium' })] } }))
+    expect(withEvent.score).toBe(10 + 10 + 15)
+    expect(withEvent.classification).toBe('early_signal')
   })
 
   it('an event is verified only with a source address: without one it counts for nothing and qualifies nothing', () => {
@@ -304,10 +450,11 @@ describe('warm-lead classification', () => {
     // 60 points from verified events: warm
     const deep = { status: 'done' as const, signals: [1, 2, 3].map((i) => sig({ signalType: `event${i}` })) }
     expect(classify(input({ website: site({ hasProductSchema: true }), deep })).classification).toBe('warm')
-    // 50+ points but no verified intent signal is impossible from fit alone (max 10 + 6 platform changes), and is never warm
+    // 50+ points but no verified intent signal is never warm: a company whose only points are fit (at most 20) cannot get there, and
+    // a high score from a reply that is NOT interest (declined) or from unverifiable events is not warm either
     const stack = { status: 'done' as const, signals: Array.from({ length: 8 }, (_, i) => sig({ signalType: 'technology_added', signalCategory: 'technology', summary: `p${i}` })) }
     const r = classify(input({ website: site({ commercePlatforms: ['A'] }), deep: stack }))
-    expect(r.score).toBeGreaterThanOrEqual(WARM_THRESHOLD)
+    expect(r.score).toBeLessThan(WARM_THRESHOLD)
     expect(r.classification).toBe('cold')
   })
 

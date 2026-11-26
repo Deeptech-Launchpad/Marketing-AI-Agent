@@ -36,7 +36,8 @@ export interface CrmPort {
   getDealStats(params?: { year?: number; month?: number }): Promise<CrmDealStats>
 
   getEmailSummary(companyId: string): Promise<CrmEmailSummary>
-  listActivities(params: { companyId: string; type?: string }): Promise<CrmActivity[]>
+  /** `withBody` (default false) keeps each email's text in `body`; every other caller gets the same objects as before. */
+  listActivities(params: { companyId: string; type?: string; withBody?: boolean }): Promise<CrmActivity[]>
 
   getDropdownFields(): Promise<CrmDropdownField[]>
   getDropdownOptions(fieldKey: string): Promise<CrmDropdownOption[]>

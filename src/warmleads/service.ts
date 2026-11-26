@@ -15,9 +15,12 @@ import { ConflictError, NotFoundError } from '../platform/errors.js'
 import { logger } from '../platform/logger.js'
 import { buildSample, SAMPLE_SIZE, type SampleResult } from './sample.js'
 import { geminiCallStats, geminiCeilingExhausted } from '../llm/gemini/callCeiling.js'
-import { accessFailureReason, classify, needsDeepCheck, retryReason, ruledOutByCrm, type DeepCheck, type EvaluationResult, type ObservedSignal, type Reason, type WebsiteObservation } from './score.js'
-import { engagementSignal } from './replies.js'
+import { accessFailureReason, classify, COMPANY_LEVEL_REFUSALS, needsDeepCheck, retryReason, ruledOutByCrm, type DeepCheck, type EvaluationResult, type ObservedSignal, type Reason, type WebsiteObservation } from './score.js'
+import { candidateAddresses, optOutSignals, persistedOptOuts, proposeOptOuts, signalsToReasons, type OptOutProposal } from './optOut.js'
+import { engagementSignal, summariseInbound } from './replies.js'
+import { assertNxtSendable, runSummaryPayload } from './runSummary.js'
 import { interpretWebsiteFailure, looksLikeBlockPage, looksLikePlaceholderSite, looksLikeStubPage, researchUnreadable } from './websiteAccess.js'
+import { publicEvaluation, redactReasons } from './reasonsPublic.js'
 
 // WARM LEADS (2026-10-30).
 //
@@ -394,6 +397,12 @@ export interface ComputedEvaluation {
   failure: { message: string; reasons: Reason[] } | null
   /** Set otherwise. */
   result: EvaluationResult | null
+  /** The newest reply asked not to be contacted or said no (read in the CRM step, so known even when the evaluation could not finish). */
+  refusal: boolean
+  /** Opt-out addresses to add to the suppression list - only ever filled when WARM_LEADS_RECORD_OPT_OUTS is on. Written by recordOutcome. */
+  optOuts: OptOutProposal[]
+  /** The opt-out evidence (masked addresses, NXT activity ids, dates, status) as stored reasons - kept on a FAILED evaluation too, where no reasons are otherwise stored. */
+  optOutReasons: Reason[]
 }
 
 /**
@@ -401,8 +410,8 @@ export interface ComputedEvaluation {
  * research only if the screen flagged it AND `deepGate` allows it. Never throws and writes no
  * evaluation row: the caller stores the outcome. Sends no email and changes nothing in the CRM.
  */
-export async function computeEvaluation(input: { tenantId: string; crmCompanyId: string; requestedBy: string; deepGate: DeepGate }): Promise<ComputedEvaluation> {
-  const blank: ComputedEvaluation = { company: null, tier: 'screen', website: null, deep: 'not_needed', enrichmentId: null, intentRunId: null, costUsd: 0, failure: null, result: null }
+export async function computeEvaluation(input: { tenantId: string; crmCompanyId: string; requestedBy: string; deepGate: DeepGate; allowOptOutWrites?: boolean }): Promise<ComputedEvaluation> {
+  const blank: ComputedEvaluation = { company: null, tier: 'screen', website: null, deep: 'not_needed', enrichmentId: null, intentRunId: null, costUsd: 0, failure: null, result: null, refusal: false, optOuts: [], optOutReasons: [] }
   let state = blank
   try {
     const company = await getCrm().getCompany(input.crmCompanyId)
@@ -416,14 +425,32 @@ export async function computeEvaluation(input: { tenantId: string; crmCompanyId:
     // provider's own engagement signal (which counts any inbound message) is replaced by one that does not.
     let activities
     try {
-      activities = await getCrm().listActivities({ companyId: company.id, type: 'email' })
+      // The same read as always; `withBody` keeps each email's text (already in the response) so a refusal written inside a reply
+      // can be told from interest. The text is used in memory only and is not stored, logged or copied into a result.
+      activities = await getCrm().listActivities({ companyId: company.id, type: 'email', withBody: true })
     } catch (err) {
       throw new Error(`The emails of this company could not be read from NXT Sales (${(err as Error).message}). Retry it.`)
     }
-    const engagement = engagementSignal(activities, new Date(), undefined, env.INTENT_FRESH_DAYS)
+    // requireText: a reply whose text is not available is "unverified" - listed, scored 0, never taken as interest.
+    const engagement = engagementSignal(activities, new Date(), undefined, env.INTENT_FRESH_DAYS, { requireText: true })
+    // Marketing permission is separate from buying intent: an explicit opt-out (in a reply, or already on the suppression list) stays in
+    // force whatever a later message says. With WARM_LEADS_RECORD_OPT_OUTS off (the default) the address is only PROPOSED - nothing is written.
+    const record = env.WARM_LEADS_RECORD_OPT_OUTS && input.allowOptOutWrites !== false
+    const { assessed } = summariseInbound(activities, new Date(), undefined, true)
+    const decision = proposeOptOuts(assessed, record)
+    // the refusal in the replies is known BEFORE the suppression list is read: if that read fails, the evaluation fails with the refusal still on record
+    state = { ...state, refusal: engagement ? COMPANY_LEVEL_REFUSALS.has(engagement.signalType) : false }
+    const persisted = await persistedOptOuts(input.tenantId, candidateAddresses(company, activities))
+    const permission = optOutSignals({ assessed, decision, persisted, record })
+    state = {
+      ...state,
+      refusal: state.refusal || permission.some((s) => COMPANY_LEVEL_REFUSALS.has(s.signalType)),
+      optOuts: record ? decision.proposals : [],
+      optOutReasons: signalsToReasons(permission),
+    }
     const crm = {
       ok: true,
-      signals: [...crmResult.signals.filter((d) => d.signalType !== 'inbound_engagement' && d.signalType !== 'recent_outbound_only').map(crmObserved), ...(engagement ? [engagement] : [])],
+      signals: [...crmResult.signals.filter((d) => d.signalType !== 'inbound_engagement' && d.signalType !== 'recent_outbound_only').map(crmObserved), ...(engagement ? [engagement] : []), ...permission],
     }
 
     // 2. The website on record — unless the CRM already rules the company out (an existing customer, an open
@@ -454,12 +481,12 @@ export async function computeEvaluation(input: { tenantId: string; crmCompanyId:
 
     // 4. A website or web research that could not be READ is a failure to retry - never "not enough data" or "cold".
     const retry = retryReason({ crm, website, deep })
-    if (retry) return { ...state, failure: { message: retry.slice(0, 1000), reasons: [accessFailureReason(website, retry)] } }
+    if (retry) return { ...state, failure: { message: retry.slice(0, 1000), reasons: [accessFailureReason(website, retry), ...state.optOutReasons] } }
 
     // 5. The rule.
     return { ...state, result: classify({ crm, website, deep }) }
   } catch (err) {
-    return { ...state, failure: { message: ((err as Error).message ?? String(err)).slice(0, 1000), reasons: [] } }
+    return { ...state, failure: { message: ((err as Error).message ?? String(err)).slice(0, 1000), reasons: state.optOutReasons } }
   }
 }
 
@@ -482,6 +509,7 @@ export async function evaluateCompany(evaluationId: string): Promise<void> {
     tenantId: ev.tenantId,
     crmCompanyId: ev.crmCompanyId,
     requestedBy: ev.run.requestedBy,
+    allowOptOutWrites: false, // this legacy path stores no opt-out: it must not claim one was added
     deepGate: async () => {
       if (geminiCeilingExhausted()) return { allowed: false, reason: 'ceiling' } // no call can be made: not started, and no company slot is spent on it
       return (await reserveDeepCheck(ev.runId)) ? { allowed: true } : { allowed: false, reason: 'cap' }
@@ -542,10 +570,14 @@ export async function finishRunIfDone(runId: string): Promise<void> {
 
 // ── NXT Sales ───────────────────────────────────────────────────────────────
 
-async function syncEvaluation(evaluationId: string): Promise<void> {
+export async function syncEvaluation(evaluationId: string): Promise<void> {
   const e = await prisma.warmLeadEvaluation.findUnique({ where: { id: evaluationId } })
   if (!e || (e.status !== 'done' && e.status !== 'failed')) return
+  // HELD FOR A PERSON: a company that would be Warm / Early Signal but whose newest reply refused is not an actionable lead, so nothing
+  // about it is sent to NXT Sales (it stays "not sent" here, and a company already listed is withdrawn by syncPending).
+  if (e.status === 'done' && e.classification === 'human_review') return
   try {
+    assertNxtSendable(e.status === 'done' ? (e.classification ?? '(none)') : null)
     await crmWarmLeadsPut(`/companies/${encodeURIComponent(e.crmCompanyId)}`, {
       runId: e.runId,
       evaluationId: e.id,
@@ -554,7 +586,7 @@ async function syncEvaluation(evaluationId: string): Promise<void> {
       score: e.score,
       confidence: e.confidence,
       summary: e.summary,
-      reasons: e.reasons ?? [],
+      reasons: redactReasons(e.reasons ?? []), // the server-only fingerprint never goes to NXT Sales
       deepCheck: e.deepCheck,
       error: e.error,
       evaluatedAt: (e.evaluatedAt ?? new Date()).toISOString(),
@@ -575,11 +607,13 @@ export interface Counts {
   existingCustomer: number
   activeOpportunity: number
   doNotContact: number
+  /** Would be Warm / Early Signal but the newest reply refused: held for a person. Not sent to NXT Sales (its run summary has no such field). */
+  humanReview: number
   failed: number
   queued: number
   running: number
 }
-const COUNTER: Record<string, 'warm' | 'earlySignal' | 'cold' | 'insufficient' | 'existingCustomer' | 'activeOpportunity' | 'doNotContact'> = {
+const COUNTER: Record<string, 'warm' | 'earlySignal' | 'cold' | 'insufficient' | 'existingCustomer' | 'activeOpportunity' | 'doNotContact' | 'humanReview'> = {
   warm: 'warm',
   early_signal: 'earlySignal',
   cold: 'cold',
@@ -587,8 +621,9 @@ const COUNTER: Record<string, 'warm' | 'earlySignal' | 'cold' | 'insufficient' |
   existing_customer: 'existingCustomer',
   active_opportunity: 'activeOpportunity',
   do_not_contact: 'doNotContact',
+  human_review: 'humanReview',
 }
-const emptyCounts = (): Counts => ({ processed: 0, warm: 0, earlySignal: 0, cold: 0, insufficient: 0, existingCustomer: 0, activeOpportunity: 0, doNotContact: 0, failed: 0, queued: 0, running: 0 })
+const emptyCounts = (): Counts => ({ processed: 0, warm: 0, earlySignal: 0, cold: 0, insufficient: 0, existingCustomer: 0, activeOpportunity: 0, doNotContact: 0, humanReview: 0, failed: 0, queued: 0, running: 0 })
 
 export async function runCounts(runId: string): Promise<Counts> {
   const rows = await prisma.warmLeadEvaluation.groupBy({ by: ['status', 'classification'], where: { runId }, _count: { _all: true } })
@@ -615,25 +650,7 @@ async function syncRun(runId: string): Promise<void> {
   if (!run) return
   const c = await runCounts(runId)
   try {
-    await crmWarmLeadsPut(`/runs/${encodeURIComponent(runId)}`, {
-      kind: run.kind,
-      status: run.status,
-      requestedBy: run.requestedBy,
-      total: run.total,
-      processed: c.processed,
-      warm: c.warm,
-      cold: c.cold,
-      insufficient: c.insufficient,
-      earlySignal: c.earlySignal,
-      existingCustomer: c.existingCustomer,
-      activeOpportunity: c.activeOpportunity,
-      doNotContact: c.doNotContact,
-      failed: c.failed,
-      approvedAt: run.approvedAt?.toISOString() ?? null,
-      approvedBy: run.approvedBy,
-      startedAt: run.startedAt?.toISOString() ?? null,
-      finishedAt: run.finishedAt?.toISOString() ?? null,
-    })
+    await crmWarmLeadsPut(`/runs/${encodeURIComponent(runId)}`, runSummaryPayload(run, c))
   } catch (err) {
     log.warn({ runId, message: (err as Error).message }, 'warm-lead run summary not sent to NXT Sales')
   }
@@ -642,7 +659,7 @@ async function syncRun(runId: string): Promise<void> {
 /** Re-sends results NXT Sales has not acknowledged (e.g. it was down, or syncing was switched on later). */
 export async function resyncPending(tenantId: string, max = 200): Promise<{ attempted: number; synced: number }> {
   const rows = await prisma.warmLeadEvaluation.findMany({
-    where: { tenantId, status: { in: ['done', 'failed'] }, crmSyncedAt: null },
+    where: { tenantId, status: { in: ['done', 'failed'] }, crmSyncedAt: null, OR: [{ classification: null }, { classification: { not: 'human_review' } }] },
     orderBy: { evaluatedAt: 'asc' },
     take: max,
     select: { id: true },
@@ -668,7 +685,7 @@ export async function overview(tenantId: string) {
     select: { crmCompanyId: true, status: true, classification: true, deepCheck: true, crmSyncedAt: true },
   })
   const seen = new Set<string>()
-  const totals = { evaluated: 0, warm: 0, earlySignal: 0, cold: 0, insufficient: 0, existingCustomer: 0, activeOpportunity: 0, doNotContact: 0, failed: 0, needsReview: 0, notSynced: 0 }
+  const totals = { evaluated: 0, warm: 0, earlySignal: 0, cold: 0, insufficient: 0, existingCustomer: 0, activeOpportunity: 0, doNotContact: 0, humanReview: 0, failed: 0, needsReview: 0, notSynced: 0 }
   for (const r of rows) {
     if (seen.has(r.crmCompanyId)) continue
     seen.add(r.crmCompanyId)
@@ -713,6 +730,6 @@ export async function runDetail(tenantId: string, runId: string) {
   const evaluations = await prisma.warmLeadEvaluation.findMany({ where: { runId }, orderBy: { createdAt: 'asc' } })
   return {
     run: { ...run, costUsd: Number(run.costUsd), counts: await runCounts(runId) },
-    evaluations: evaluations.map((e) => ({ ...e, costUsd: Number(e.costUsd) })),
+    evaluations: evaluations.map((e) => publicEvaluation({ ...e, costUsd: Number(e.costUsd) })), // reasons without the server-only fingerprint
   }
 }

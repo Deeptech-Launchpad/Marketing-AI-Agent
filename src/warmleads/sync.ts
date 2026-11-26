@@ -3,6 +3,8 @@ import { crmWarmLeadsDelete, crmWarmLeadsPut } from '../crm/nxtSales/httpClient.
 import { prisma } from '../platform/db.js'
 import { logger } from '../platform/logger.js'
 import { syncAction } from './companyState.js'
+import { assertNxtSendable } from './runSummary.js'
+import { redactReasons } from './reasonsPublic.js'
 
 // SENDING THE CURRENT WARM / EARLY SIGNAL LIST TO NXT SALES - built, and OFF.
 //
@@ -60,6 +62,7 @@ export async function syncPending(tenantId: string, max = 50): Promise<SyncResul
       if (action === 'put') {
         const e = await prisma.warmLeadEvaluation.findUnique({ where: { id: c.currentEvaluationId! } })
         if (!e || e.status !== 'done' || !e.classification) throw new Error('The evaluation to send could not be found.')
+        assertNxtSendable(e.classification) // defence in depth: the company is Warm / Early Signal, but what is SENT must be a status NXT Sales accepts
         await crmWarmLeadsPut(`/companies/${encodeURIComponent(c.crmCompanyId)}`, {
           runId: e.runId,
           evaluationId: e.id,
@@ -68,7 +71,7 @@ export async function syncPending(tenantId: string, max = 50): Promise<SyncResul
           score: e.score,
           confidence: e.confidence,
           summary: e.summary,
-          reasons: e.reasons ?? [],
+          reasons: redactReasons(e.reasons ?? []), // the server-only fingerprint never goes to NXT Sales
           deepCheck: e.deepCheck,
           error: null,
           evaluatedAt: (e.evaluatedAt ?? new Date()).toISOString(),

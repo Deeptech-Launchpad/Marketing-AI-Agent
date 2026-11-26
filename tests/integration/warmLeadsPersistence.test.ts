@@ -63,6 +63,7 @@ afterAll(async () => {
     await prisma.warmLeadSettings.deleteMany({ where: { tenantId: t } })
   }
   await prisma.warmLeadRun.deleteMany({ where: { tenantId: { in: [T, T2] } } })
+  await prisma.auditEvent.deleteMany({ where: { tenantId: { in: [T, T2] } } })
   await prisma.warmLeadCompany.deleteMany({ where: { tenantId: T } })
   await prisma.warmLeadUsage.deleteMany({ where: { tenantId: T } })
   await prisma.warmLeadSettings.deleteMany({ where: { tenantId: T } })
@@ -204,6 +205,8 @@ describeIfDb('what an outcome does to a company', () => {
       enrichmentId: null,
       intentRunId: null,
       costUsd: 0,
+      refusal: false,
+      optOuts: [],
       failure: classification ? null : { message: 'The website could not be read.', reasons: [] },
       result: classification ? { classification, score: classification === 'warm' ? 60 : 5, confidence: 'high', summary: `is ${classification}`, reasons: [] } : null,
       ...over,
