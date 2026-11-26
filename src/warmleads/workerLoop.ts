@@ -11,6 +11,7 @@ import { parseMemAvailableMb } from './isolatedTestSafety.js'
 import { preparePilot } from './pilot.js'
 import { runCycle, deepResearchAllowed, type CycleDeps, type CycleSettings, type CycleResult } from './scheduler.js'
 import { tenantsWithSettings } from './settings.js'
+import { isZone } from './zones.js'
 import { computeEvaluation } from './service.js'
 import { syncPending } from './sync.js'
 import { dbUsageStore } from './usageStore.js'
@@ -53,7 +54,11 @@ export function productionDeps(tenantId: string): CycleDeps {
     },
     usage: dbUsageStore,
     recoverStale: (now) => recoverStale(tenantId, now),
-    claim: (kind, bucket, now) => claimNext(tenantId, kind, bucket, SYSTEM_USER, now),
+    claim: async (kind, bucket, now) => {
+      // Read at every claim, so a zone an admin chooses applies from the next company on.
+      const s = await prisma.warmLeadSettings.findUnique({ where: { tenantId }, select: { activeZone: true } })
+      return claimNext(tenantId, kind, bucket, SYSTEM_USER, now, isZone(s?.activeZone) ? s.activeZone : null)
+    },
     evaluate: async (claim, ctx) => {
       const tally = newTally()
       const budget = bucketBudget(dbUsageStore, tenantId, ctx.bucket, ctx.ceiling, tally)

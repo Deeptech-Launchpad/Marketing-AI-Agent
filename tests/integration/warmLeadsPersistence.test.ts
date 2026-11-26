@@ -344,3 +344,47 @@ describeIfDb('syncing to NXT Sales is gated', () => {
     expect(await syncGate(T)).toMatch(/switched off|not been approved/)
   })
 })
+
+describeIfDb('zones: the company list worked through one region at a time (owner 2026-11-26)', () => {
+  const T3 = `${T}-z`
+  const zoned = (i: number, country: string | null) => ({ ...crmCompany(i), id: `zone-${i}-${T3}`, country })
+  afterAll(async () => {
+    await prisma.warmLeadEvaluation.deleteMany({ where: { tenantId: T3 } })
+    await prisma.warmLeadRun.deleteMany({ where: { tenantId: T3 } })
+    await prisma.warmLeadCompany.deleteMany({ where: { tenantId: T3 } })
+    await prisma.warmLeadSettings.deleteMany({ where: { tenantId: T3 } })
+    await prisma.auditEvent.deleteMany({ where: { tenantId: T3 } })
+  })
+
+  it('a list read stores each company’s zone from its NXT Sales country; a corrected country moves it on the next read', async () => {
+    const read = (countries: Array<string | null>) => async () => ({ items: countries.map((c, i) => zoned(i, c)), truncated: false })
+    await companies.refreshCompanyList(T3, read(['India', 'UAE', 'Germany', 'USA', 'Singapore', 'Brazil', null, 'Mumbai, India']))
+    const zoneOf = async (i: number) => (await prisma.warmLeadCompany.findUniqueOrThrow({ where: { tenantId_crmCompanyId: { tenantId: T3, crmCompanyId: zoned(i, null).id } } })).zone
+    expect(await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map(zoneOf))).toEqual(['india', 'middle_east', 'europe', 'north_america', 'asia_pacific', 'rest_of_world', 'unknown', 'india'])
+    await companies.refreshCompanyList(T3, read(['India', 'UAE', 'Germany', 'USA', 'Singapore', 'Brazil', 'Canada', 'Mumbai, India']))
+    expect(await zoneOf(6)).toBe('north_america')
+  })
+
+  it('zone counts add up per zone', async () => {
+    const counts = await companies.zoneCounts(T3)
+    expect(counts.map((z) => z.zone)).toEqual(['india', 'middle_east', 'europe', 'north_america', 'asia_pacific', 'rest_of_world', 'unknown'])
+    expect(counts.find((z) => z.zone === 'india')).toMatchObject({ total: 2, pending: 2, evaluated: 0 })
+    expect(counts.find((z) => z.zone === 'north_america')).toMatchObject({ total: 2, pending: 2 })
+    expect(counts.find((z) => z.zone === 'unknown')).toMatchObject({ total: 0 })
+  })
+
+  it('with a zone chosen, new work comes ONLY from that zone; when it is used up nothing else is taken; no zone = the whole list again', async () => {
+    const india: string[] = []
+    for (;;) {
+      const c = await companies.claimNext(T3, 'pending', 'day:zones', 'tester', new Date(), 'india')
+      if (!c) break
+      india.push(c.crmCompanyId)
+    }
+    expect(india.sort()).toEqual([zoned(0, null).id, zoned(7, null).id].sort())
+    // every other zone still has pending companies, and none of them was taken
+    expect(await prisma.warmLeadCompany.count({ where: { tenantId: T3, state: 'pending' } })).toBe(6)
+    const any = await companies.claimNext(T3, 'pending', 'day:zones', 'tester', new Date(), null)
+    expect(any).not.toBeNull()
+    expect(india).not.toContain(any!.crmCompanyId)
+  })
+})

@@ -5,6 +5,7 @@ import type { CrmCompany } from '../crm/types.js'
 import { RECENT_ACTIVITY_DAYS } from '../intent/providers/crmProvider.js'
 import { hasRecentReply } from './replies.js'
 import { logger } from '../platform/logger.js'
+import { ZONE_LABELS, zoneOf, type Zone } from './zones.js'
 
 // WARM LEADS — THE REPRESENTATIVE TEST SAMPLE (2026-10-31).
 //
@@ -245,7 +246,7 @@ export function dedupeById(items: CrmCompany[]): CrmCompany[] {
   return [...best.values()]
 }
 
-export async function buildSample(opts: { seed: number; size?: number }): Promise<{ sample: SampleResult; companies: Map<string, CrmCompany> }> {
+export async function buildSample(opts: { seed: number; size?: number; zone?: Zone | null }): Promise<{ sample: SampleResult; companies: Map<string, CrmCompany> }> {
   const crm = getCrm()
   const read = await allCompanies()
   // Paging a live CRM by offset can return the same company twice. One copy is kept, chosen by a rule that does not depend on
@@ -305,7 +306,8 @@ export async function buildSample(opts: { seed: number; size?: number }): Promis
     }),
   )
 
-  const candidates: SampleCandidate[] = listed.items
+  // With a zone chosen, the pilot is drawn only from that zone's companies (the deal and reply reads above stay whole-CRM).
+  const candidates: SampleCandidate[] = (opts.zone ? listed.items.filter((c) => zoneOf(c.country) === opts.zone) : listed.items)
     .filter((c) => c.name?.trim())
     .map((c) => {
       const src = resolveCompanySource(c)
@@ -323,6 +325,7 @@ export async function buildSample(opts: { seed: number; size?: number }): Promis
     })
 
   const picked = selectSample(candidates, { seed: opts.seed, size: opts.size })
+  if (opts.zone) picked.notes.push(`Drawn only from the ${ZONE_LABELS[opts.zone]} zone.`)
   if (listed.truncated) {
     picked.notes.push(`The company list was cut off after ${listed.items.length.toLocaleString()} companies, so only those could be sampled. The pilot is not drawn from the whole CRM.`)
   }

@@ -41,12 +41,28 @@ restart them.
 
 ## Limits (enforced in the database, atomically)
 
-| | Pilot | Start | After your review |
-|---|---|---|---|
-| companies | 100 total | 25 / night | 50 / night |
-| Gemini calls | 1,200 total | 300 / night | 600 / night |
+| | Pilot | Start | After your review | After a second review |
+|---|---|---|---|---|
+| companies | 100 total | 25 / night | 50 / night | 100 / night |
+| Gemini calls | 1,200 total | 300 / night | 600 / night | **600 / night (unchanged)** |
 
-There is **no 100-companies-a-day tier** (owner's decision, 2026-11-04). It is not in the code or on the screen; it needs a separate approval and a code change.
+The **100-a-night level** was approved by the owner on 2026-11-26 to work through the ~15,000 NXT Sales companies zone by zone,
+with the instruction to keep Gemini cost down. It keeps the 600-call ceiling: a night never spends more Gemini than 50 a night
+already could. Every company gets the free checks (its NXT Sales data and its own website - no Gemini); only a promising one gets
+the paid web research, and a research is not started with fewer than 12 calls left. If the ceiling is reached, the remaining
+promising companies are "research incomplete" (never Cold) and are checked again next night. The Usage panel shows each night's
+calls and priced cost. Nothing above 100 exists. An admin may lower any limit at any time.
+
+## Zones (owner's decision 2026-11-26)
+
+The company list is split by country into **India · Middle East (GCC) · Europe & UK · North America · Asia-Pacific · Rest of world**,
+plus **Unknown country** (empty or unrecognised country - never guessed). A company's zone is taken from its NXT Sales country on
+every list read (`src/warmleads/zones.ts`), so correcting the country in NXT Sales moves it on the next read. On the Warm Leads
+screen the **Zones** panel shows each zone's progress (companies, to check, checked, Warm, Early signal, needs review, to retry), and an
+admin chooses the zone to work on. New companies are then taken **only from that zone**; retries of earlier failures are not limited
+by it. When a zone is done the panel says so and nothing new is taken until the next zone is chosen (no automatic spending). The pilot,
+when requested, is drawn from the chosen zone. Routes: `GET /api/v1/warm-leads/zones` (view), `PUT /api/v1/warm-leads/zone` (admin,
+body `{ "zone": "india" | ... | null }`, audited).
 
 Window: 23:00–06:00 Asia/Kolkata (admin-configurable). A night that crosses midnight is one night.
 Retries get at most 20 % of a night's companies. Memory: a night starts only with ≥ 4 GB available and
@@ -54,6 +70,9 @@ stops below 3 GB (`WARM_LEADS_MIN_AVAILABLE_MB`). One company at a time; DB pool
 unless `connection_limit` is set in `MARKETING_DATABASE_URL` for the worker.
 
 ## Migration
+
+`prisma/migrations/20261126100000_warm_leads_zones` - additive: `WarmLeadCompany.zone` (default 'unknown') with an index,
+`WarmLeadCompany.syncedClassification`, `WarmLeadSettings.activeZone`. Existing rows get their zone on the next list read.
 
 `prisma/migrations/20261104100000_warm_leads_permanent` — **additive only**: 3 new tables
 (`WarmLeadSettings`, `WarmLeadCompany`, `WarmLeadUsage`) and 5 new nullable/defaulted columns on two Warm
@@ -228,8 +247,13 @@ table of another feature is touched.
     opt-out; the approval needs the email to be inside the 90-day window and an activity tied by NXT Sales to exactly the submitted company
     (a missing company id is refused); meeting cancellations are recognised only in calendar-system wording ("Declined:", "has declined this invitation"), not
     in a person's own words; a row of any other source on one of a company's addresses is enforced but does not by itself hold the company.
-- **NXT Sales run summary.** NXT Sales has no field for `human_review` and is not changed: companies held for review are not counted as
-  `processed` in the summary sent there, so its categories add up. The count stays on the Marketing screens.
+- **What NXT Sales receives (owner's decision 2026-11-26): every company's current result, whatever its class**, so each lead shows
+  its signals on its own page there ("Marketing Agent Signals" button, NXT Sales branch `feature/warm-leads-signals`). A
+  `human_review` company is sent as human review with the opt-out details left out (`reasonsForCrm`): NXT Sales only learns that
+  a contact asked not to receive marketing email - no address, activity id, approval state or fingerprint. A class change without a
+  new evaluation (a refusal that moves a Warm company to human review) is sent too (`syncedClassification`).
+- **NXT Sales run summary.** It has no counter for `human_review` (that needs a column there): companies held for review are not
+  counted as `processed` in the run summary sent there, so its categories add up. The count stays on the Marketing screens.
 - A failed, unreadable or incomplete evaluation never replaces a company's current result: Warm / Early signal stay, marked
   "re-check due". Incomplete research (Gemini ceiling or cap) is never Cold.
 - Existing customers, open deals and suppression-list companies are recognised first and their websites are never read.
@@ -251,10 +275,12 @@ memory and the window. No Gemini call, no write, nothing requested or started. E
 2. Set `WARM_LEADS_WORKER_ENABLED=true`, restart only `nxt-marketing-warmleads`. On the screen: read the
    company list (read-only), prepare the pilot, press Start. It runs inside the window.
 3. Review the 100 results on the screen; approve (or send back).
-4. Daily mode at 25 companies / 300 calls. Review usage and accuracy; approve 50 / 600. Nothing above that without a new approval.
-5. NXT Sales: deploy the NXT Sales change (one new service-only `DELETE` route; its own approval and its
-   own rules — never without approval), then set `WARM_LEADS_SYNC_ENABLED=true` and approve sending on the
-   screen.
+4. Daily mode at 25 companies / 300 calls, one zone at a time. Review usage and accuracy; approve 50 / 600, then 100 / 600.
+5. NXT Sales: deploy the NXT Sales change FIRST (branches `feature/warm-leads` + `feature/warm-leads-signals`: the
+   service-only routes, `human_review` accepted, the read route `GET /api/companies/:id/lead-evaluation` and the "Marketing
+   Agent Signals" button; its own approval and its own rules — never without approval). Until it is deployed NXT Sales refuses
+   `human_review` and those companies show a sync error and are retried. Then set `WARM_LEADS_SYNC_ENABLED=true` and approve
+   sending on the screen.
 
 ## Rollback
 

@@ -75,7 +75,7 @@ describe('every API output of stored reasons is redacted', () => {
     const svc = read('service.ts')
     expect(svc).toMatch(/evaluations\.map\(\(e\) => publicEvaluation\(/) // runDetail (GET /runs/:id)
     expect(svc).toMatch(/reasons: redactReasons\(e\.reasons \?\? \[\]\)/) // syncEvaluation -> NXT Sales
-    expect(read('sync.ts')).toMatch(/reasons: redactReasons\(e\.reasons \?\? \[\]\)/) // syncPending -> NXT Sales
+    expect(read('sync.ts')).toMatch(/reasons: reasonsForCrm\(e\.reasons \?\? \[\]\)/) // syncPending -> NXT Sales (redacted, and without the opt-out details)
     // and nothing else in the module returns a raw `reasons` column to a caller or a transport
     for (const f of fs.readdirSync(path.resolve('src/warmleads')).filter((x) => x.endsWith('.ts'))) {
       const src = read(f)

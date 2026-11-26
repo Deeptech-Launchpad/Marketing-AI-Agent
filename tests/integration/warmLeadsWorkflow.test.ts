@@ -545,11 +545,11 @@ describeIfDb('what would be sent to NXT Sales (a recording transport: nothing le
     expect(world.syncCalls).toEqual([])
   })
 
-  it('with every gate opened (in this test only): only Warm and Early Signal companies are sent; a company held for human review is not, and one already listed is withdrawn', async () => {
+  it('with every gate opened (in this test only): EVERY company with a result is sent (owner 2026-11-26); one held for human review is sent AS human review, without opt-out details', async () => {
     const { syncPending } = await import('../../src/warmleads/sync.js')
     const review = await row(S.humanReview)
     // pretend it had been listed earlier (before the refusal arrived)
-    await prisma.warmLeadCompany.update({ where: { id: review.id }, data: { syncedEvaluationId: review.currentEvaluationId, syncedAt: new Date() } })
+    await prisma.warmLeadCompany.update({ where: { id: review.id }, data: { syncedEvaluationId: review.currentEvaluationId, syncedClassification: 'warm', syncedAt: new Date() } })
     try {
       env.WARM_LEADS_SYNC_ENABLED = true
       await prisma.warmLeadSettings.update({ where: { tenantId: T }, data: { syncEnabled: true, syncApprovedAt: new Date(), syncApprovedBy: 'tester' } })
@@ -558,14 +558,25 @@ describeIfDb('what would be sent to NXT Sales (a recording transport: nothing le
       const last = (c: { path: string }) => decodeURIComponent(c.path.split('/').pop()!)
       const puts = world.syncCalls.filter((c) => c.method === 'PUT')
       const ids = puts.map(last).sort()
-      const listed = await prisma.warmLeadCompany.findMany({ where: { tenantId: T, classification: { in: ['warm', 'early_signal'] } }, select: { crmCompanyId: true } })
-      expect(ids).toEqual(listed.map((c) => c.crmCompanyId).sort())
+      const withResult = await prisma.warmLeadCompany.findMany({ where: { tenantId: T, inCrm: true, classification: { not: null } }, select: { crmCompanyId: true } })
+      expect(ids).toEqual(withResult.map((c) => c.crmCompanyId).sort())
       expect(ids).toContain(S.warmEvents)
-      expect(ids).not.toContain(S.humanReview) // held for a person: never sent as a lead
-      expect(ids).not.toContain(S.declined)
-      expect(puts.every((c) => ['warm', 'early_signal'].includes((c.body as { classification: string }).classification))).toBe(true)
-      // the company that is now held for review is withdrawn from NXT Sales' list
-      expect(world.syncCalls.filter((c) => c.method === 'DELETE').map(last)).toEqual([S.humanReview])
+      expect(ids).toContain(S.declined) // a refusal is shown on the lead too, so Sales sees it
+      // the company that is now held for review is sent AS human review (it was listed as Warm before), not withdrawn
+      const reviewPut = puts.find((c) => last(c) === S.humanReview)!
+      expect((reviewPut.body as { classification: string }).classification).toBe('human_review')
+      expect(world.syncCalls.filter((c) => c.method === 'DELETE')).toEqual([])
+      // every class sent is one NXT Sales accepts
+      const { NXT_ACCEPTED_CLASSIFICATIONS } = await import('../../src/warmleads/runSummary.js')
+      expect(puts.every((c) => NXT_ACCEPTED_CLASSIFICATIONS.includes((c.body as { classification: string }).classification))).toBe(true)
+      // no opt-out proposal details reach NXT Sales
+      const reasons = puts.flatMap((c) => ((c.body as { reasons?: Array<{ signal?: string }> }).reasons ?? []).map((r) => r.signal))
+      for (const priv of ['opt_out_proposal', 'opt_out_not_recorded', 'opt_out_omitted', 'reconsent_candidate']) expect(reasons).not.toContain(priv)
+      expect(JSON.stringify(puts)).not.toMatch(/ · fp [0-9a-f]{16}| · key [0-9a-f]{8}/)
+      // a second pass sends nothing again (idempotent)
+      const before = world.syncCalls.length
+      expect(await syncPending(T, 100)).toMatchObject({ put: 0, withdrawn: 0 })
+      expect(world.syncCalls.length).toBe(before)
       // and nothing a customer wrote, and no raw phrase, is in anything that would have been sent
       const payload = JSON.stringify(world.syncCalls)
       expect(payload).not.toContain(MARK)
@@ -573,7 +584,7 @@ describeIfDb('what would be sent to NXT Sales (a recording transport: nothing le
     } finally {
       env.WARM_LEADS_SYNC_ENABLED = false
       await prisma.warmLeadSettings.update({ where: { tenantId: T }, data: { syncEnabled: false, syncApprovedAt: null, syncApprovedBy: null } })
-      await prisma.warmLeadCompany.updateMany({ where: { tenantId: T }, data: { syncedEvaluationId: null, syncedAt: null, syncError: null } })
+      await prisma.warmLeadCompany.updateMany({ where: { tenantId: T }, data: { syncedEvaluationId: null, syncedClassification: null, syncedAt: null, syncError: null } })
       world.syncCalls.length = 0
     }
   })
@@ -627,7 +638,8 @@ describeIfDb('afterwards: re-checks, failures and the Gemini ceiling', () => {
     expect(held.summary).toMatch(/^Human review required/)
     expect(held.state).toBe('needs_reevaluation')
     const { syncAction } = await import('../../src/warmleads/companyState.js')
-    expect(syncAction({ classification: held.classification, currentEvaluationId: held.currentEvaluationId, syncedEvaluationId: events.currentEvaluationId })).toBe('delete')
+    // NXT Sales held it as Warm: the class changed with the same evaluation, so it is sent again - as human review
+    expect(syncAction({ classification: held.classification, currentEvaluationId: held.currentEvaluationId, syncedEvaluationId: events.currentEvaluationId, syncedClassification: 'warm' })).toBe('put')
 
     const fixed = await row(S.blocked)
     expect(fixed.state).toBe('evaluated') // the retry worked once the site could be read

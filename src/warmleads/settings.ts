@@ -6,6 +6,7 @@ import { prisma } from '../platform/db.js'
 import { BadRequestError, ConflictError } from '../platform/errors.js'
 import { checkLimitUpdate, checkScaleApproval, checkWindow, type LimitUpdate } from './limits.js'
 import { bucketDay, windowChangeProblem } from './window.js'
+import { ZONE_LABELS, type Zone } from './zones.js'
 
 // THE CONTROLS - every gate is enforced here, in the service, and not only by the screen.
 //
@@ -13,8 +14,14 @@ import { bucketDay, windowChangeProblem } from './window.js'
 //   limits            raised only up to what an admin approved after review (limits.ts)
 //   window            23:00-06:00 Asia/Kolkata by default; an admin may change it
 //   pilot approval    required before daily processing (pilot.ts)
-//   scale approval    25 -> 50 a day, after review (nothing above 50 exists)
+//   scale approval    25 -> 50 -> 100 a day, after review (Gemini ceiling stays 600; nothing above 100 exists)
+//   zone              which region's companies are taken for new evaluations (null = the whole list)
 //   NXT Sales sync    its own approval, and the server's WARM_LEADS_SYNC_ENABLED must also be on
+
+/** Chooses the zone whose companies are taken for new evaluations (null = the whole list). Applies from the next company; never interrupts one. */
+export async function setActiveZone(tenantId: string, by: string, zone: Zone | null): Promise<WarmLeadSettings> {
+  return change(tenantId, by, { activeZone: zone }, 'zone_set', zone ? `New evaluations now come only from the ${ZONE_LABELS[zone]} zone.` : 'New evaluations now come from the whole company list (no zone chosen).')
+}
 
 export async function ensureSettings(tenantId: string): Promise<WarmLeadSettings> {
   return prisma.warmLeadSettings.upsert({ where: { tenantId }, create: { tenantId }, update: {} })
@@ -82,12 +89,12 @@ export async function approveScale(tenantId: string, by: string, level: number):
   )
 }
 
-/** Approves sending Warm / Early Signal results to NXT Sales. Needs the approved pilot; the server switch must also be on. */
+/** Approves sending every company's current result to NXT Sales (opt-out details stay here). Needs the approved pilot; the server switch must also be on. */
 export async function approveSync(tenantId: string, by: string): Promise<WarmLeadSettings> {
   const s = await ensureSettings(tenantId)
   if (!s.pilotApprovedAt) throw new ConflictError('The pilot must be approved before anything is sent to NXT Sales.')
   if (!env.WARM_LEADS_SYNC_ENABLED) throw new ConflictError('Sending to NXT Sales is switched off on this server (WARM_LEADS_SYNC_ENABLED). It must be enabled there first.')
-  return change(tenantId, by, { syncEnabled: true, syncApprovedAt: new Date(), syncApprovedBy: by }, 'sync_approved', 'Sending Warm and Early Signal results to NXT Sales approved and switched on.')
+  return change(tenantId, by, { syncEnabled: true, syncApprovedAt: new Date(), syncApprovedBy: by }, 'sync_approved', 'Sending every checked company’s result (with its signals; opt-out details stay here) to NXT Sales approved and switched on.')
 }
 
 export async function disableSync(tenantId: string, by: string): Promise<WarmLeadSettings> {

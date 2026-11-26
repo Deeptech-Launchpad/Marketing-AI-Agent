@@ -47,8 +47,8 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
   const limitsFilled = [companies, ceiling, retryShare].every((v) => v.trim() !== '' && Number.isFinite(Number(v)))
   const limitsChanged = companies !== String(s.dailyCompanyLimit) || ceiling !== String(s.dailyGeminiCeiling) || retryShare !== String(s.retryShare)
   const windowChanged = win.start !== s.window.start || win.end !== s.window.end || win.timezone !== s.window.timezone
-  // There is exactly one higher level (50 a day). Nothing above it is offered.
-  const nextLevel = s.approvedMaxCompanies < 50 ? 50 : null
+  // The higher levels are 50 and then 100 a night, one step at a time; both keep the 600-call Gemini ceiling. Nothing above 100 is offered.
+  const nextLevel = s.approvedMaxCompanies < 50 ? 50 : s.approvedMaxCompanies < 100 ? 100 : null
   const refreshing = o.listRefresh.state === 'requested' || o.listRefresh.state === 'running'
 
   return (
@@ -116,7 +116,7 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
             <span>I reviewed the usage and the accuracy of the results so far and approve raising the allowed level.</span>
           </label>
           <Button disabled={!scaleOk} busy={busy === 'scale'} onClick={() => act('scale', async () => { await api.post('/warm-leads/scale/approve', { level: nextLevel, confirm: true }); setScaleOk(false) })}>
-            Allow up to {nextLevel} companies a night (600 Gemini calls)
+            Allow up to {nextLevel} companies a night (Gemini ceiling stays 600 calls)
           </Button>
         </div>
       )}
@@ -183,7 +183,7 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
       <h3 style={{ margin: 'var(--s4) 0 var(--s2)' }}>Sending results to NXT Sales</h3>
       <p className="note">
         {s.syncEnabled
-          ? `On since ${fmt(s.syncApprovedAt)}: Warm and Early Signal companies are sent to NXT Sales; a company that stops being Warm or Early Signal is taken off its list. Nothing else in the CRM is changed.`
+          ? `On since ${fmt(s.syncApprovedAt)}: every checked company’s result and signals are sent to NXT Sales, where each lead shows them under “Marketing Agent Signals” (opt-out details stay here). Nothing else in the CRM is changed.`
           : 'Off. Results are kept in this application only. Nothing is written to NXT Sales.'}
         {!o.server.syncSwitchOn && ' The server’s own switch for sending (WARM_LEADS_SYNC_ENABLED) is off, so NOTHING is being sent even if it is approved here.'}
         {o.server.syncSwitchOn && !o.server.syncLiveAllowed && ' This server is connected to the live NXT Sales and writing to it is not allowed here (WARM_LEADS_ALLOW_LIVE is off), so nothing can be sent.'}
@@ -204,7 +204,7 @@ export function ControlsPanel({ o, admin, act, busy }: { o: Overview; admin: boo
             <>
               <label className="check" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                 <input type="checkbox" checked={syncOk} disabled={!s.pilotApprovedAt || !o.server.syncSwitchOn} onChange={(e) => setSyncOk(e.target.checked)} />
-                <span>I approve sending Warm and Early Signal companies to NXT Sales. Only their evaluation is written; no company detail, owner or status is changed.</span>
+                <span>I approve sending every checked company’s result and signals to NXT Sales. Only the evaluation is written; no company detail, owner or status is changed.</span>
               </label>
               <Button
                 icon={Send}

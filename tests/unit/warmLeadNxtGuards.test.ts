@@ -123,15 +123,47 @@ describe('the company sync (sync.ts syncPending): defence in depth', () => {
     h.settings = { pilotApprovedAt: new Date(), syncEnabled: true, syncApprovedAt: new Date() }
   }
   const company = (id: string, over: Record<string, any> = {}) => ({ id, crmCompanyId: 'c-' + id, classification: 'warm', currentEvaluationId: 'e-' + id, syncedEvaluationId: null, ...over })
-  it('a Warm company whose evaluation row is (impossibly) human_review is NOT sent: the guard refuses it, and the error is recorded', async () => {
+  it('a class NXT Sales does not accept is NOT sent: it is not even a candidate (assertNxtSendable stays the last-line guard, tested in warmLeadOptOut)', async () => {
     open()
     h.queue = [{ id: 'k1' }]
-    h.companies.set('k1', company('k1'))
-    h.evaluations.set('e-k1', ev('e-k1', { classification: 'human_review' }))
+    h.companies.set('k1', company('k1', { classification: 'something_new' }))
+    h.evaluations.set('e-k1', ev('e-k1'))
     const r = await syncPending('t1')
     expect(h.puts).toEqual([])
-    expect(r.failed).toBe(1)
-    expect(h.companyUpdates[0]!.data.syncError).toMatch(/not one NXT Sales accepts/)
+    expect(r).toMatchObject({ put: 0, failed: 0 })
+  })
+  it('a human-review company is sent as human review, with the opt-out details left out and no address', async () => {
+    open()
+    h.queue = [{ id: 'k3' }]
+    h.companies.set('k3', company('k3', { classification: 'human_review', summary: 'Human review required: a contact opted out.' }))
+    h.evaluations.set('e-k3', ev('e-k3', {
+      classification: 'warm',
+      reasons: [
+        { signal: 'contact_opt_out', summary: 'A contact of this company has opted out', evidence: '1 opt-out message(s); r***@acme.example' },
+        { signal: 'opt_out_proposal', summary: 'r***@acme.example is PROPOSED', evidence: 'status: awaiting_approval · NXT activity act_1 · fp 0123456789abcdef · key 89abcdef' },
+        { signal: 'opt_out_not_recorded', summary: 'x', evidence: 'status: needs_person · NXT activity act_2' },
+        { signal: 'reconsent_candidate', summary: 'y', evidence: 'z' },
+        { signal: 'news', summary: 'Opened a new warehouse', evidence: 'press release', sourceUrl: 'https://news.example/a' },
+      ],
+    }))
+    const r = await syncPending('t1')
+    expect(r.put).toBe(1)
+    const body = h.puts[0]!.body
+    expect(body.classification).toBe('human_review')
+    expect(body.summary).toBe('Human review required: a contact opted out.')
+    expect(body.reasons.map((x: any) => x.signal)).toEqual(['contact_opt_out', 'news'])
+    const text = JSON.stringify(body)
+    for (const secret of ['@acme.example', 'act_1', 'act_2', '0123456789abcdef', '89abcdef', 'awaiting_approval']) expect(text, secret).not.toContain(secret)
+    expect(h.companyUpdates.at(-1)!.data).toMatchObject({ syncedClassification: 'human_review' })
+  })
+  it('a Cold company is sent too (every class goes to NXT Sales)', async () => {
+    open()
+    h.queue = [{ id: 'k4' }]
+    h.companies.set('k4', company('k4', { classification: 'cold' }))
+    h.evaluations.set('e-k4', ev('e-k4', { classification: 'cold' }))
+    const r = await syncPending('t1')
+    expect(r.put).toBe(1)
+    expect(h.puts[0]!.body.classification).toBe('cold')
   })
   it('a normal Warm company is sent', async () => {
     open()

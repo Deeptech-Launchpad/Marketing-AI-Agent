@@ -3058,6 +3058,9 @@ model WarmLeadSettings {
   approvedMaxCeiling   Int       @default(300)
   // Percent of the night's companies that may be retries of earlier failures.
   retryShare           Int       @default(20)
+  // The zone (region) being worked through: only its companies are taken for new evaluations (retries of earlier failures
+  // are not limited by it). null = no zone chosen = the whole list in NXT Sales order. Set by an admin.
+  activeZone           String?
   windowStart          String    @default("23:00")
   windowEnd            String    @default("06:00")
   timezone             String    @default("Asia/Kolkata")
@@ -3090,6 +3093,8 @@ model WarmLeadCompany {
   name                String
   domain              String?
   country             String?
+  // Region derived from country on every list read (src/warmleads/zones.ts): india | middle_east | europe | north_america | asia_pacific | rest_of_world | unknown
+  zone                String    @default("unknown")
   industry            String?
   // Position in NXT Sales' own list order when last read (pinned first, then newest): the order pending companies are taken.
   listPosition        Int       @default(0)
@@ -3111,6 +3116,8 @@ model WarmLeadCompany {
   evaluatedAt         DateTime?
   // NXT Sales: which evaluation it holds, if any.
   syncedEvaluationId  String?
+  // The class NXT Sales holds for it: a class change without a new evaluation (refusal -> human review) is sent too.
+  syncedClassification String?
   syncedAt            DateTime?
   syncError           String?
   firstSeenAt         DateTime  @default(now())
@@ -3123,6 +3130,7 @@ model WarmLeadCompany {
   @@index([tenantId, state, nextAttemptAt])
   @@index([tenantId, classification])
   @@index([tenantId, cohort, state])
+  @@index([tenantId, zone, state, listPosition])
 }
 
 // What one bucket (the pilot, or one night) may spend, and has spent. The ceilings
